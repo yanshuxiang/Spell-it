@@ -331,54 +331,136 @@ void HomePageWidget::setCounts(int learningCount,
 
 MappingPageWidget::MappingPageWidget(QWidget *parent)
     : QWidget(parent) {
+    const int leftLabelWidth = 150;
+
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(18, 16, 18, 18);
-    root->setSpacing(8);
+    root->setContentsMargins(24, 20, 24, 20);
+    root->setSpacing(14);
 
     auto *title = new QLabel(QStringLiteral("CSV 列映射"), this);
-    title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
+    title->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+
+    auto *fileKeyLabel = new QLabel(QStringLiteral("文件："), this);
+    fileKeyLabel->setFixedWidth(leftLabelWidth);
+    fileKeyLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    fileKeyLabel->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 600; color: #4b5563;"));
 
     filePathLabel_ = new QLabel(this);
     filePathLabel_->setWordWrap(true);
-    filePathLabel_->setStyleSheet(QStringLiteral("font-size: 9px; color: #6b7280;"));
+    filePathLabel_->setStyleSheet(QStringLiteral("font-size: 15px; color: #6b7280;"));
+
+    auto *pathRow = new QHBoxLayout();
+    pathRow->setSpacing(10);
+    pathRow->setContentsMargins(0, 0, 0, 0);
+    pathRow->addWidget(fileKeyLabel);
+    pathRow->addWidget(filePathLabel_, 1);
 
     wordCombo_ = new QComboBox(this);
     translationCombo_ = new QComboBox(this);
     phoneticCombo_ = new QComboBox(this);
+    const QString comboStyle = QStringLiteral(
+        "QComboBox {"
+        "  min-height: 44px;"
+        "  padding: 0 14px;"
+        "  font-size: 16px;"
+        "  border: 1px solid #d7dce3;"
+        "  border-radius: 12px;"
+        "  background: #ffffff;"
+        "}"
+        "QComboBox:focus { border: 1px solid #111827; }");
+    wordCombo_->setStyleSheet(comboStyle);
+    translationCombo_->setStyleSheet(comboStyle);
+    phoneticCombo_->setStyleSheet(comboStyle);
+    wordCombo_->setMinimumWidth(260);
+    translationCombo_->setMinimumWidth(260);
+    phoneticCombo_->setMinimumWidth(260);
 
-    auto *form = new QFormLayout();
-    form->setHorizontalSpacing(8);
-    form->setVerticalSpacing(8);
-    form->addRow(QStringLiteral("单词列"), wordCombo_);
-    form->addRow(QStringLiteral("释义列"), translationCombo_);
-    form->addRow(QStringLiteral("音标列(可选)"), phoneticCombo_);
+    auto *mappingRows = new QVBoxLayout();
+    mappingRows->setSpacing(12);
+    mappingRows->setContentsMargins(0, 4, 0, 4);
+
+    auto makeRow = [this, leftLabelWidth](const QString &text, QWidget *field) {
+        auto *row = new QHBoxLayout();
+        row->setSpacing(10);
+        row->setContentsMargins(0, 0, 0, 0);
+
+        auto *label = new QLabel(text, this);
+        label->setFixedWidth(leftLabelWidth);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        label->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+
+        row->addWidget(label);
+        row->addWidget(field, 1);
+        return row;
+    };
+    mappingRows->addLayout(makeRow(QStringLiteral("单词列"), wordCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("释义列"), translationCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("音标列(可选)"), phoneticCombo_));
 
     auto *previewTitle = new QLabel(QStringLiteral("CSV 样例预览"), this);
-    previewTitle->setStyleSheet(QStringLiteral("font-size: 10px; color: #4b5563;"));
+    previewTitle->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: #374151;"));
 
     previewTable_ = new QTableWidget(this);
     previewTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     previewTable_->setSelectionMode(QAbstractItemView::NoSelection);
     previewTable_->setAlternatingRowColors(true);
-    previewTable_->horizontalHeader()->setStretchLastSection(true);
+    previewTable_->setShowGrid(false);
+    previewTable_->setWordWrap(false);
+    previewTable_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    previewTable_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    previewTable_->horizontalHeader()->setStretchLastSection(false);
+    previewTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    previewTable_->horizontalHeader()->setMinimumSectionSize(96);
+    previewTable_->horizontalHeader()->setDefaultSectionSize(200);
+    previewTable_->horizontalHeader()->setHighlightSections(false);
+    previewTable_->horizontalHeader()->setFixedHeight(42);
+    previewTable_->verticalHeader()->setDefaultSectionSize(44);
     previewTable_->verticalHeader()->setVisible(false);
+    previewTable_->setStyleSheet(QStringLiteral(
+        "QTableWidget {"
+        "  border: 1px solid #e7ebf0;"
+        "  border-radius: 14px;"
+        "  background: #ffffff;"
+        "  alternate-background-color: #fafbfc;"
+        "  gridline-color: #eef2f6;"
+        "  font-size: 14px;"
+        "}"
+        "QHeaderView::section {"
+        "  background: #f7f8fa;"
+        "  color: #374151;"
+        "  border: none;"
+        "  border-bottom: 1px solid #e7ebf0;"
+        "  padding: 8px 10px;"
+        "  font-size: 14px;"
+        "  font-weight: 600;"
+        "}"));
 
     auto *buttons = new QHBoxLayout();
-    buttons->setSpacing(12);
+    buttons->setSpacing(16);
 
     auto *cancelButton = new QPushButton(QStringLiteral("返回首页"), this);
     auto *importButton = new QPushButton(QStringLiteral("导入词库"), this);
-    importButton->setStyleSheet(QStringLiteral("background: #111827; color: #ffffff;"));
+    cancelButton->setFixedSize(200, 62);
+    importButton->setFixedSize(200, 62);
+    cancelButton->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 600; border-radius: 20px;"
+        "background: rgba(17,24,39,0.06); color: #111827;"));
+    importButton->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 700; border-radius: 20px;"
+        "background: #111827; color: #ffffff;"));
 
     buttons->addStretch();
     buttons->addWidget(cancelButton);
     buttons->addWidget(importButton);
+    buttons->addStretch();
 
     root->addWidget(title);
-    root->addWidget(filePathLabel_);
-    root->addLayout(form);
+    root->addLayout(pathRow);
+    root->addLayout(mappingRows);
+    root->addSpacing(6);
     root->addWidget(previewTitle);
     root->addWidget(previewTable_, 1);
+    root->addSpacing(8);
     root->addLayout(buttons);
 
     connect(cancelButton, &QPushButton::clicked, this, &MappingPageWidget::cancelled);
@@ -401,7 +483,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
 void MappingPageWidget::setCsvData(const QString &csvPath,
                                    const QStringList &headers,
                                    const QVector<QStringList> &previewRows) {
-    filePathLabel_->setText(QStringLiteral("文件：%1").arg(csvPath));
+    filePathLabel_->setText(csvPath);
 
     wordCombo_->clear();
     translationCombo_->clear();
@@ -451,11 +533,14 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
         const QStringList &values = previewRows.at(row);
         for (int col = 0; col < headers.size(); ++col) {
             auto *item = new QTableWidgetItem(col < values.size() ? values.at(col) : QString());
+            item->setToolTip(item->text());
             previewTable_->setItem(row, col, item);
         }
     }
 
-    previewTable_->resizeColumnsToContents();
+    for (int col = 0; col < headers.size(); ++col) {
+        previewTable_->setColumnWidth(col, 200);
+    }
 }
 
 SpellingPageWidget::SpellingPageWidget(QWidget *parent)
