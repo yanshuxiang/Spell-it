@@ -1,6 +1,7 @@
 #include "database_manager.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -14,6 +15,14 @@ constexpr const char *kDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
 
 QVector<int> reviewLadder() {
     return {1, 2, 4, 7, 15, 30};
+}
+
+QString trimmedBookNameFromFilePath(const QString &csvPath) {
+    QString name = QFileInfo(csvPath).completeBaseName().trimmed();
+    if (name.isEmpty()) {
+        name = QStringLiteral("词书");
+    }
+    return name.left(8);
 }
 
 QString joinWordIds(const QVector<WordItem> &words) {
@@ -153,6 +162,72 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    const QString createBooksSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS word_books ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "name TEXT NOT NULL UNIQUE,"
+        "is_active INTEGER NOT NULL DEFAULT 0,"
+        "created_at TEXT"
+        ")");
+    if (!query.exec(createBooksSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    bool hasBookIdColumn = false;
+    QSqlQuery tableInfo(database());
+    if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
+        lastError_ = tableInfo.lastError().text();
+        return false;
+    }
+    while (tableInfo.next()) {
+        if (tableInfo.value(1).toString() == QStringLiteral("book_id")) {
+            hasBookIdColumn = true;
+            break;
+        }
+    }
+    if (!hasBookIdColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN book_id INTEGER"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+
+    if (!query.exec(QStringLiteral(
+            "INSERT INTO word_books(name, is_active, created_at) "
+            "SELECT '默认词书', 1, datetime('now','localtime') "
+            "WHERE NOT EXISTS (SELECT 1 FROM word_books)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "UPDATE word_books "
+            "SET is_active = 1 "
+            "WHERE id = (SELECT id FROM word_books ORDER BY is_active DESC, id ASC LIMIT 1) "
+            "AND NOT EXISTS (SELECT 1 FROM word_books WHERE is_active = 1)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const int activeBookId = activeWordBookIdInternal();
+    if (activeBookId > 0) {
+        QSqlQuery fillBookId(database());
+        fillBookId.prepare(QStringLiteral(
+            "UPDATE words SET book_id = ? "
+            "WHERE book_id IS NULL OR book_id <= 0"));
+        fillBookId.bindValue(0, activeBookId);
+        if (!fillBookId.exec()) {
+            lastError_ = fillBookId.lastError().text();
+            return false;
+        }
+    }
+
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_book ON words(book_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     const QString createSessionSql = QStringLiteral(
         "CREATE TABLE IF NOT EXISTS session_progress ("
         "mode TEXT PRIMARY KEY,"
@@ -259,11 +334,52 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         return false;
     }
 
+    const QString baseName = trimmedBookNameFromFilePath(csvPath);
+    QString bookName = baseName;
+    int suffix = 2;
+    while (true) {
+        QSqlQuery existsQuery(db);
+        existsQuery.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE name = ?"));
+        existsQuery.bindValue(0, bookName);
+        if (!existsQuery.exec() || !existsQuery.next()) {
+            db.rollback();
+            lastError_ = existsQuery.lastError().text();
+            return false;
+        }
+        if (existsQuery.value(0).toInt() == 0) {
+            break;
+        }
+        const QString suffixText = QString::number(suffix++);
+        int keepCount = 8 - suffixText.size();
+        if (keepCount < 1) {
+            keepCount = 1;
+        }
+        bookName = baseName.left(keepCount) + suffixText;
+    }
+
+    QSqlQuery updateActiveQuery(db);
+    if (!updateActiveQuery.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
+        db.rollback();
+        lastError_ = updateActiveQuery.lastError().text();
+        return false;
+    }
+
+    QSqlQuery createBookQuery(db);
+    createBookQuery.prepare(QStringLiteral(
+        "INSERT INTO word_books(name, is_active, created_at) VALUES(?, 1, datetime('now','localtime'))"));
+    createBookQuery.bindValue(0, bookName);
+    if (!createBookQuery.exec()) {
+        db.rollback();
+        lastError_ = createBookQuery.lastError().text();
+        return false;
+    }
+    const int bookId = createBookQuery.lastInsertId().toInt();
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO words "
-        "(word, phonetic, translation, ease_factor, interval, next_review, status) "
-        "VALUES (?, ?, ?, 2.5, 0, NULL, 0)"));
+        "(word, phonetic, translation, ease_factor, interval, next_review, status, book_id) "
+        "VALUES (?, ?, ?, 2.5, 0, NULL, 0, ?)"));
 
     while (true) {
         const QString record = readCsvRecord(in);
@@ -292,6 +408,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         query.bindValue(0, word);
         query.bindValue(1, phonetic);
         query.bindValue(2, translation);
+        query.bindValue(3, bookId);
 
         if (!query.exec()) {
             db.rollback();
@@ -312,13 +429,181 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     return true;
 }
 
+QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
+    QVector<WordBookItem> books;
+    if (!ensureDatabaseOpen()) {
+        return books;
+    }
+
+    QSqlQuery query(database());
+    if (!query.exec(QStringLiteral(
+            "SELECT b.id, b.name, b.is_active, COUNT(w.id) AS word_count "
+            "FROM word_books b "
+            "LEFT JOIN words w ON w.book_id = b.id "
+            "GROUP BY b.id, b.name, b.is_active "
+            "ORDER BY b.is_active DESC, b.id ASC"))) {
+        lastError_ = query.lastError().text();
+        return books;
+    }
+
+    while (query.next()) {
+        WordBookItem item;
+        item.id = query.value(0).toInt();
+        item.name = query.value(1).toString();
+        item.isActive = query.value(2).toInt() == 1;
+        item.wordCount = query.value(3).toInt();
+        books.push_back(item);
+    }
+
+    return books;
+}
+
+bool DatabaseManager::setActiveWordBook(int bookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec() || !query.next()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (query.value(0).toInt() <= 0) {
+        db.rollback();
+        lastError_ = QStringLiteral("词书不存在");
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral("UPDATE word_books SET is_active = 1 WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::deleteWordBook(int bookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec() || !query.next()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (query.value(0).toInt() <= 0) {
+        db.rollback();
+        lastError_ = QStringLiteral("词书不存在");
+        return false;
+    }
+
+    query.prepare(QStringLiteral("DELETE FROM words WHERE book_id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral("DELETE FROM word_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    int fallbackActiveId = -1;
+    if (!query.exec(QStringLiteral("SELECT id FROM word_books WHERE is_active = 1 ORDER BY id ASC LIMIT 1"))) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (query.next()) {
+        fallbackActiveId = query.value(0).toInt();
+    }
+    if (fallbackActiveId <= 0) {
+        if (!query.exec(QStringLiteral("SELECT id FROM word_books ORDER BY id ASC LIMIT 1"))) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        if (query.next()) {
+            fallbackActiveId = query.value(0).toInt();
+        }
+    }
+    if (fallbackActiveId > 0) {
+        if (!query.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        query.prepare(QStringLiteral("UPDATE word_books SET is_active = 1 WHERE id = ?"));
+        query.bindValue(0, fallbackActiveId);
+        if (!query.exec()) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+int DatabaseManager::activeWordBookId() const {
+    return activeWordBookIdInternal();
+}
+
 int DatabaseManager::unlearnedCount() const {
     if (!ensureDatabaseOpen()) {
         return 0;
     }
 
+    const int activeBookId = activeWordBookIdInternal();
+    if (activeBookId <= 0) {
+        return 0;
+    }
+
     QSqlQuery query(database());
-    if (!query.exec(QStringLiteral("SELECT COUNT(*) FROM words WHERE status = 0"))) {
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM words WHERE status = 0 AND book_id = ?"));
+    query.bindValue(0, activeBookId);
+    if (!query.exec()) {
         lastError_ = query.lastError().text();
         return 0;
     }
@@ -334,11 +619,17 @@ int DatabaseManager::dueReviewCount(const QDateTime &now) const {
         return 0;
     }
 
+    const int activeBookId = activeWordBookIdInternal();
+    if (activeBookId <= 0) {
+        return 0;
+    }
+
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ?"));
+        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ? AND book_id = ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
+    query.bindValue(1, activeBookId);
 
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -357,11 +648,17 @@ QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
         return items;
     }
 
+    const int activeBookId = activeWordBookIdInternal();
+    if (activeBookId <= 0) {
+        return items;
+    }
+
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
-        "FROM words WHERE status = 0 ORDER BY id LIMIT ?"));
-    query.bindValue(0, qMax(1, limit));
+        "FROM words WHERE status = 0 AND book_id = ? ORDER BY id LIMIT ?"));
+    query.bindValue(0, activeBookId);
+    query.bindValue(1, qMax(1, limit));
 
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -381,14 +678,20 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
         return items;
     }
 
+    const int activeBookId = activeWordBookIdInternal();
+    if (activeBookId <= 0) {
+        return items;
+    }
+
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
         "FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ? "
+        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ? AND book_id = ? "
         "ORDER BY next_review ASC, id ASC LIMIT ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
-    query.bindValue(1, qMax(1, limit));
+    query.bindValue(1, activeBookId);
+    query.bindValue(2, qMax(1, limit));
 
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -740,6 +1043,23 @@ bool DatabaseManager::reconcileFirstDayDailyLog(const QDate &date) {
 
 QString DatabaseManager::lastError() const {
     return lastError_;
+}
+
+int DatabaseManager::activeWordBookIdInternal() const {
+    if (!ensureDatabaseOpen()) {
+        return -1;
+    }
+
+    QSqlQuery query(database());
+    if (!query.exec(QStringLiteral(
+            "SELECT id FROM word_books ORDER BY is_active DESC, id ASC LIMIT 1"))) {
+        lastError_ = query.lastError().text();
+        return -1;
+    }
+    if (!query.next()) {
+        return -1;
+    }
+    return query.value(0).toInt();
 }
 
 bool DatabaseManager::ensureDatabaseOpen() const {

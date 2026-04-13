@@ -13,12 +13,14 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QColor>
+#include <QIcon>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPainterPath>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
@@ -84,6 +86,81 @@ QColor summaryRightColor(const PracticeRecord &record, bool reviewMode) {
         return QColor(QStringLiteral("#0f766e"));
     }
     return QColor(QStringLiteral("#6b7280"));
+}
+
+QString coverColorForBook(int bookId) {
+    static const QStringList colors = {
+        QStringLiteral("#ef4444"),
+        QStringLiteral("#10b981"),
+        QStringLiteral("#84cc16"),
+        QStringLiteral("#f59e0b"),
+        QStringLiteral("#3b82f6"),
+        QStringLiteral("#8b5cf6")
+    };
+    if (bookId < 0) {
+        return colors.first();
+    }
+    return colors.at(bookId % colors.size());
+}
+
+QIcon createBooksLineIcon() {
+    QPixmap pix(28, 28);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor("#111827"));
+    pen.setWidthF(1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    painter.drawRoundedRect(QRectF(7, 5, 14, 9), 2, 2);
+    painter.drawLine(QPointF(7, 9.5), QPointF(21, 9.5));
+    painter.drawRoundedRect(QRectF(5, 13, 14, 9), 2, 2);
+    painter.drawLine(QPointF(5, 17.5), QPointF(19, 17.5));
+    return QIcon(pix);
+}
+
+QIcon createArchiveLineIcon() {
+    QPixmap pix(28, 28);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor("#111827"));
+    pen.setWidthF(1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    painter.drawRoundedRect(QRectF(5, 8, 18, 14), 2.5, 2.5);
+    painter.drawLine(QPointF(9, 8), QPointF(12, 5));
+    painter.drawLine(QPointF(19, 8), QPointF(16, 5));
+    painter.drawLine(QPointF(9, 15), QPointF(19, 15));
+    return QIcon(pix);
+}
+
+QIcon createChartLineIcon() {
+    QPixmap pix(28, 28);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor("#111827"));
+    pen.setWidthF(1.8);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    painter.drawRoundedRect(QRectF(5, 5, 18, 18), 3, 3);
+    painter.drawLine(QPointF(8, 18), QPointF(12, 14));
+    painter.drawLine(QPointF(12, 14), QPointF(15, 16));
+    painter.drawLine(QPointF(15, 16), QPointF(20, 10));
+    return QIcon(pix);
 }
 
 QWidget *createSummaryRow(const PracticeRecord &record, bool reviewMode) {
@@ -240,7 +317,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     root->setContentsMargins(18, 16, 18, 40);
     root->setSpacing(8);
 
-    auto *title = new QLabel(QStringLiteral("VibeSpeller"), this);
+    auto *title = new QLabel(QStringLiteral("Spell it"), this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; letter-spacing: 0.2px;"));
 
@@ -278,16 +355,27 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     auto *navLayout = new QHBoxLayout();
     navLayout->setContentsMargins(0, 0, 0, 0);
 
-    auto *navBtn1 = new QPushButton(QStringLiteral("📚"), this);
-    auto *navBtn2 = new QPushButton(QStringLiteral("🗃️"), this);
-    auto *navBtn3 = new QPushButton(QStringLiteral("📈"), this);
+    auto *navBtn1 = new QPushButton(this);
+    auto *navBtn2 = new QPushButton(this);
+    auto *navBtn3 = new QPushButton(this);
+    navBtn1->setToolTip(QStringLiteral("词书"));
+    navBtn2->setToolTip(QStringLiteral("导入"));
+    navBtn3->setToolTip(QStringLiteral("统计"));
+    navBtn1->setIcon(createBooksLineIcon());
+    navBtn2->setIcon(createArchiveLineIcon());
+    navBtn3->setIcon(createChartLineIcon());
+    navBtn1->setIconSize(QSize(24, 24));
+    navBtn2->setIconSize(QSize(24, 24));
+    navBtn3->setIconSize(QSize(24, 24));
+    navBtn1->setFixedSize(46, 46);
+    navBtn2->setFixedSize(46, 46);
+    navBtn3->setFixedSize(46, 46);
 
     const QString navBtnStyle = QStringLiteral(
         "QPushButton {"
         "  background: transparent;"
         "  border: none;"
-        "  font-size: 24px;"
-        "  padding: 8px;"
+        "  padding: 0;"
         "}"
         "QPushButton:hover { background: #f3f4f6; border-radius: 12px; }");
 
@@ -315,6 +403,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
 
     connect(learningButton_, &QPushButton::clicked, this, &HomePageWidget::startLearningClicked);
     connect(reviewButton_, &QPushButton::clicked, this, &HomePageWidget::startReviewClicked);
+    connect(navBtn1, &QPushButton::clicked, this, &HomePageWidget::booksClicked);
     connect(navBtn3, &QPushButton::clicked, this, &HomePageWidget::statsClicked);
 }
 
@@ -326,7 +415,7 @@ void HomePageWidget::setCounts(int learningCount,
     reviewButton_->setText(QStringLiteral("复习\n%1").arg(reviewCount));
     learningCountLabel_->setText(
         QStringLiteral("今日已学 %1 词 · 今日复习 %2 词").arg(todayLearningCount).arg(todayReviewCount));
-    reviewCountLabel_->setText(QStringLiteral("下一组仍按 20 词推进"));
+    reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));
 }
 
 MappingPageWidget::MappingPageWidget(QWidget *parent)
@@ -919,6 +1008,143 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     }
 }
 
+WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(20, 16, 20, 20);
+    root->setSpacing(12);
+
+    auto *header = new QHBoxLayout();
+    backButton_ = new QPushButton(QStringLiteral("返回"), this);
+    backButton_->setFixedHeight(42);
+    backButton_->setStyleSheet(QStringLiteral(
+        "font-size: 14px; border-radius: 12px; background: rgba(17,24,39,0.06);"));
+
+    auto *title = new QLabel(QStringLiteral("词书"), this);
+    title->setStyleSheet(QStringLiteral("font-size: 28px; font-weight: 700;"));
+
+    header->addWidget(backButton_);
+    header->addSpacing(12);
+    header->addWidget(title);
+    header->addStretch(1);
+
+    booksList_ = new QListWidget(this);
+    booksList_->setSpacing(10);
+    booksList_->setFrameShape(QFrame::NoFrame);
+    booksList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    booksList_->setStyleSheet(QStringLiteral(
+        "QListWidget { border: none; background: transparent; }"
+        "QListWidget::item { border: none; }"));
+
+    addBookButton_ = new QPushButton(QStringLiteral("添加词书"), this);
+    addBookButton_->setFixedHeight(60);
+    addBookButton_->setStyleSheet(QStringLiteral(
+        "font-size: 18px; font-weight: 700; border-radius: 18px;"
+        "background: #111827; color: #ffffff;"));
+
+    root->addLayout(header);
+    root->addWidget(booksList_, 1);
+    root->addWidget(addBookButton_);
+
+    connect(backButton_, &QPushButton::clicked, this, &WordBooksPageWidget::backClicked);
+    connect(addBookButton_, &QPushButton::clicked, this, &WordBooksPageWidget::addBookClicked);
+    connect(booksList_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        if (!item) {
+            return;
+        }
+        const int bookId = item->data(Qt::UserRole).toInt();
+        emit wordBookSelected(bookId);
+    });
+}
+
+void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int activeBookId) {
+    books_ = books;
+    activeBookId_ = activeBookId;
+    rebuildList();
+}
+
+void WordBooksPageWidget::rebuildList() {
+    booksList_->clear();
+    booksList_->setUpdatesEnabled(false);
+
+    for (const WordBookItem &book : books_) {
+        auto *item = new QListWidgetItem(booksList_);
+        item->setData(Qt::UserRole, book.id);
+        item->setSizeHint(QSize(0, 110));
+        booksList_->addItem(item);
+
+        auto *row = new QWidget(booksList_);
+        row->setObjectName(QStringLiteral("bookRow"));
+        row->setStyleSheet(book.id == activeBookId_
+                               ? QStringLiteral(
+                                     "QWidget#bookRow {"
+                                     "  background: #fff7ed;"
+                                     "  border: 1px solid #fdba74;"
+                                     "  border-radius: 18px;"
+                                     "}")
+                               : QStringLiteral(
+                                     "QWidget#bookRow {"
+                                     "  background: #ffffff;"
+                                     "  border: 1px solid #eef2f7;"
+                                     "  border-radius: 18px;"
+                                     "}"));
+
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(14, 12, 14, 12);
+        layout->setSpacing(12);
+
+        auto *cover = new QLabel(QStringLiteral("BOOK"), row);
+        cover->setAlignment(Qt::AlignCenter);
+        cover->setFixedSize(64, 82);
+        cover->setStyleSheet(QStringLiteral(
+            "font-size: 12px; font-weight: 700; color: #ffffff; border-radius: 12px; background: %1;")
+                                .arg(coverColorForBook(book.id)));
+
+        auto *title = new QLabel(book.name, row);
+        title->setStyleSheet(
+            QStringLiteral("font-size: 20px; font-weight: 700; color: #111827; border: none; background: transparent;"));
+        title->setWordWrap(true);
+
+        auto *count = new QLabel(QStringLiteral("%1 词").arg(book.wordCount), row);
+        count->setStyleSheet(QStringLiteral("font-size: 15px; color: #9ca3af; border: none; background: transparent;"));
+
+        auto *textLayout = new QVBoxLayout();
+        textLayout->setSpacing(6);
+        textLayout->addWidget(title);
+        textLayout->addWidget(count);
+        textLayout->addStretch(1);
+
+        auto *status = new QLabel(book.id == activeBookId_ ? QStringLiteral("正在学习") : QString(), row);
+        status->setStyleSheet(
+            QStringLiteral("font-size: 18px; font-weight: 700; color: #f97316; border: none; background: transparent;"));
+        status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        auto *deleteButton = new QPushButton(QStringLiteral("删除"), row);
+        deleteButton->setFixedSize(92, 38);
+        deleteButton->setStyleSheet(QStringLiteral(
+            "font-size: 14px; font-weight: 600; border-radius: 10px;"
+            "padding: 0 12px;"
+            "background: rgba(239,68,68,0.10); color: #dc2626;"));
+        connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
+            emit wordBookDeleteRequested(book.id);
+        });
+
+        auto *rightLayout = new QVBoxLayout();
+        rightLayout->setSpacing(8);
+        rightLayout->addWidget(status, 0, Qt::AlignRight);
+        rightLayout->addWidget(deleteButton, 0, Qt::AlignRight);
+        rightLayout->addStretch(1);
+
+        layout->addWidget(cover);
+        layout->addLayout(textLayout, 1);
+        layout->addLayout(rightLayout);
+
+        booksList_->setItemWidget(item, row);
+    }
+
+    booksList_->setUpdatesEnabled(true);
+}
+
 VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     : QWidget(parent) {
     setWindowTitle(QStringLiteral("VibeSpeller"));
@@ -953,12 +1179,14 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     spellingPage_ = new SpellingPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
+    wordBooksPage_ = new WordBooksPageWidget(this);
 
     stack_->addWidget(homePage_);
     stack_->addWidget(mappingPage_);
     stack_->addWidget(spellingPage_);
     stack_->addWidget(summaryPage_);
     stack_->addWidget(statisticsPage_);
+    stack_->addWidget(wordBooksPage_);
     stack_->setCurrentWidget(homePage_);
 
     auto *layout = new QVBoxLayout(this);
@@ -967,6 +1195,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(homePage_, &HomePageWidget::startLearningClicked, this, &VibeSpellerWindow::onStartLearning);
     connect(homePage_, &HomePageWidget::startReviewClicked, this, &VibeSpellerWindow::onStartReview);
+    connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
         statisticsPage_->setLogs(db_.fetchWeeklyLogs());
         stack_->setCurrentWidget(statisticsPage_);
@@ -977,7 +1206,13 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
 
     connect(mappingPage_, &MappingPageWidget::cancelled, this, [this]() {
-        stack_->setCurrentWidget(homePage_);
+        if (returnToWordBooksAfterImport_) {
+            refreshWordBooks();
+            stack_->setCurrentWidget(wordBooksPage_);
+        } else {
+            stack_->setCurrentWidget(homePage_);
+        }
+        returnToWordBooksAfterImport_ = false;
     });
 
     connect(mappingPage_, &MappingPageWidget::importConfirmed, this,
@@ -1004,7 +1239,13 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
                 pendingCsvPath_.clear();
                 refreshHomeCounts();
-                stack_->setCurrentWidget(homePage_);
+                refreshWordBooks();
+                if (returnToWordBooksAfterImport_) {
+                    stack_->setCurrentWidget(wordBooksPage_);
+                } else {
+                    stack_->setCurrentWidget(homePage_);
+                }
+                returnToWordBooksAfterImport_ = false;
             });
 
     connect(spellingPage_, &SpellingPageWidget::submitted, this, &VibeSpellerWindow::onSubmitAnswer);
@@ -1016,14 +1257,24 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
         stack_->setCurrentWidget(homePage_);
     });
     connect(summaryPage_, &SummaryPageWidget::nextGroupClicked, this, &VibeSpellerWindow::continueNextGroup);
+    connect(wordBooksPage_, &WordBooksPageWidget::backClicked, this, [this]() {
+        refreshHomeCounts();
+        stack_->setCurrentWidget(homePage_);
+    });
+    connect(wordBooksPage_, &WordBooksPageWidget::addBookClicked, this, [this]() {
+        pickCsvAndShowMapping(true);
+    });
+    connect(wordBooksPage_, &WordBooksPageWidget::wordBookSelected, this, &VibeSpellerWindow::onSelectWordBook);
+    connect(wordBooksPage_, &WordBooksPageWidget::wordBookDeleteRequested, this, &VibeSpellerWindow::onDeleteWordBook);
 
     auto *importShortcut = new QShortcut(QKeySequence::Open, this);
     connect(importShortcut, &QShortcut::activated, this, [this]() {
-        pickCsvAndShowMapping();
+        pickCsvAndShowMapping(false);
     });
 
     initializeDatabase();
     refreshHomeCounts();
+    refreshWordBooks();
 
     // 启动后若词库为空，提示导入 CSV。
     QTimer::singleShot(0, this, &VibeSpellerWindow::requestCsvImportIfNeeded);
@@ -1040,7 +1291,7 @@ void VibeSpellerWindow::onStartLearning() {
                                                QStringLiteral("暂无学习任务"),
                                                QStringLiteral("当前没有未学习单词。现在导入 CSV 吗？"));
         if (answer) {
-            pickCsvAndShowMapping();
+            pickCsvAndShowMapping(false);
         }
         return;
     }
@@ -1144,6 +1395,77 @@ void VibeSpellerWindow::onExitSession() {
     stack_->setCurrentWidget(homePage_);
 }
 
+void VibeSpellerWindow::onOpenWordBooks() {
+    refreshWordBooks();
+    stack_->setCurrentWidget(wordBooksPage_);
+}
+
+void VibeSpellerWindow::onSelectWordBook(int bookId) {
+    if (bookId <= 0) {
+        return;
+    }
+
+    if (!db_.setActiveWordBook(bookId)) {
+        showWarningPrompt(this,
+                          QStringLiteral("切换失败"),
+                          QStringLiteral("切换当前词书失败：%1").arg(db_.lastError()));
+        return;
+    }
+
+    clearSessionForMode(SessionMode::Learning);
+    clearSessionForMode(SessionMode::Review);
+    refreshHomeCounts();
+    refreshWordBooks();
+}
+
+void VibeSpellerWindow::onDeleteWordBook(int bookId) {
+    if (bookId <= 0) {
+        return;
+    }
+
+    QString bookName;
+    int wordCount = 0;
+    const QVector<WordBookItem> books = db_.fetchWordBooks();
+    for (const WordBookItem &book : books) {
+        if (book.id == bookId) {
+            bookName = book.name;
+            wordCount = book.wordCount;
+            break;
+        }
+    }
+    if (bookName.isEmpty()) {
+        return;
+    }
+
+    const bool firstConfirm = showQuestionPrompt(
+        this,
+        QStringLiteral("删除词书"),
+        QStringLiteral("将删除词书“%1”（%2 词）。是否继续？").arg(bookName).arg(wordCount));
+    if (!firstConfirm) {
+        return;
+    }
+
+    const bool secondConfirm = showQuestionPrompt(
+        this,
+        QStringLiteral("再次确认"),
+        QStringLiteral("删除后无法恢复，确定删除“%1”吗？").arg(bookName));
+    if (!secondConfirm) {
+        return;
+    }
+
+    if (!db_.deleteWordBook(bookId)) {
+        showWarningPrompt(this,
+                          QStringLiteral("删除失败"),
+                          QStringLiteral("删除词书失败：%1").arg(db_.lastError()));
+        return;
+    }
+
+    clearSessionForMode(SessionMode::Learning);
+    clearSessionForMode(SessionMode::Review);
+    refreshHomeCounts();
+    refreshWordBooks();
+}
+
 void VibeSpellerWindow::initializeDatabase() {
     const QString dbPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/vibespeller.db");
 
@@ -1187,6 +1509,10 @@ void VibeSpellerWindow::refreshHomeCounts() {
     homePage_->setCounts(learning, review, todayLearning, todayReview);
 }
 
+void VibeSpellerWindow::refreshWordBooks() {
+    wordBooksPage_->setWordBooks(db_.fetchWordBooks(), db_.activeWordBookId());
+}
+
 void VibeSpellerWindow::requestCsvImportIfNeeded() {
     const int totalWords = db_.unlearnedCount() + db_.dueReviewCount(QDateTime::currentDateTime());
     if (totalWords > 0) {
@@ -1197,11 +1523,11 @@ void VibeSpellerWindow::requestCsvImportIfNeeded() {
                                            QStringLiteral("导入词库"),
                                            QStringLiteral("首次使用需要导入 CSV 词库。现在导入吗？"));
     if (answer) {
-        pickCsvAndShowMapping();
+        pickCsvAndShowMapping(false);
     }
 }
 
-bool VibeSpellerWindow::pickCsvAndShowMapping() {
+bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
     const QString csvPath = QFileDialog::getOpenFileName(this,
                                                           QStringLiteral("选择 CSV 词库"),
                                                           QDir::homePath(),
@@ -1220,6 +1546,7 @@ bool VibeSpellerWindow::pickCsvAndShowMapping() {
     }
 
     pendingCsvPath_ = csvPath;
+    returnToWordBooksAfterImport_ = returnToWordBooks;
     mappingPage_->setCsvData(csvPath, headers, previewRows);
     stack_->setCurrentWidget(mappingPage_);
     return true;

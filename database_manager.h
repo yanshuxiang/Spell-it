@@ -21,6 +21,13 @@ struct WordItem {
     int status = 0;
 };
 
+struct WordBookItem {
+    int id = -1;
+    QString name;
+    int wordCount = 0;
+    bool isActive = false;
+};
+
 enum class SpellingResult {
     Mastered,
     Blurry,
@@ -47,6 +54,11 @@ public:
                        int translationColumn,
                        int phoneticColumn,
                        int &importedCount);
+
+    QVector<WordBookItem> fetchWordBooks() const;
+    bool setActiveWordBook(int bookId);
+    bool deleteWordBook(int bookId);
+    int activeWordBookId() const;
 
     int unlearnedCount() const;
     int dueReviewCount(const QDateTime &now = QDateTime::currentDateTime()) const;
@@ -95,6 +107,7 @@ private:
     int nextIntervalForUnfamiliar() const;
 
     bool queryWordById(int wordId, WordItem &item) const;
+    int activeWordBookIdInternal() const;
 };
 
 #endif // DATABASE_MANAGER_H

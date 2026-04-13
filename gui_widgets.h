@@ -9,6 +9,7 @@ class QLabel;
 class QComboBox;
 class QLineEdit;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
@@ -33,6 +34,7 @@ public:
 signals:
     void startLearningClicked();
     void startReviewClicked();
+    void booksClicked();
     void statsClicked();
 
 private:
@@ -128,6 +130,29 @@ private:
     QVector<DatabaseManager::DailyLog> logs_;
 };
 
+class WordBooksPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit WordBooksPageWidget(QWidget *parent = nullptr);
+
+    void setWordBooks(const QVector<WordBookItem> &books, int activeBookId);
+
+signals:
+    void backClicked();
+    void addBookClicked();
+    void wordBookSelected(int bookId);
+    void wordBookDeleteRequested(int bookId);
+
+private:
+    void rebuildList();
+
+    QVector<WordBookItem> books_;
+    int activeBookId_ = -1;
+    QListWidget *booksList_ = nullptr;
+    QPushButton *backButton_ = nullptr;
+    QPushButton *addBookButton_ = nullptr;
+};
+
 class VibeSpellerWindow : public QWidget {
     Q_OBJECT
 public:
@@ -139,6 +164,9 @@ private slots:
     void onSubmitAnswer(const QString &text);
     void onSkipWord();
     void onExitSession();
+    void onOpenWordBooks();
+    void onSelectWordBook(int bookId);
+    void onDeleteWordBook(int bookId);
 
 private:
     enum class SessionMode {
@@ -148,8 +176,9 @@ private:
 
     void initializeDatabase();
     void refreshHomeCounts();
+    void refreshWordBooks();
     void requestCsvImportIfNeeded();
-    bool pickCsvAndShowMapping();
+    bool pickCsvAndShowMapping(bool returnToWordBooks = false);
     bool tryResumeSession(SessionMode mode);
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
@@ -172,8 +201,10 @@ private:
     SpellingPageWidget *spellingPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
     StatisticsPageWidget *statisticsPage_ = nullptr;
+    WordBooksPageWidget *wordBooksPage_ = nullptr;
 
     QString pendingCsvPath_;
+    bool returnToWordBooksAfterImport_ = false;
     QVector<WordItem> currentWords_;
     QVector<PracticeRecord> records_;
     int currentIndex_ = 0;
