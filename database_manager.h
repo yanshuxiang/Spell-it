@@ -74,6 +74,7 @@ public:
         int reviewCount = 0;
     };
     QVector<DailyLog> fetchWeeklyLogs(const QDate &endDate = QDate::currentDate()) const;
+    bool reconcileFirstDayDailyLog(const QDate &date = QDate::currentDate());
 
     QString lastError() const;
 

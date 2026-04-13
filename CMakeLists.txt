@@ -19,3 +19,5 @@ add_executable(VibeSpeller
 )
 
 target_link_libraries(VibeSpeller PRIVATE Qt6::Widgets Qt6::Sql)
+target_compile_definitions(VibeSpeller PRIVATE
+    VIBESPELLER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

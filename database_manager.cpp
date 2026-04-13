@@ -636,6 +636,71 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
     return logs;
 }
 
+bool DatabaseManager::reconcileFirstDayDailyLog(const QDate &date) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    const QString dateStr = date.toString(Qt::ISODate);
+    QSqlQuery query(database());
+
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(learning_count + review_count), 0) "
+        "FROM learning_logs WHERE log_date < ?"));
+    query.bindValue(0, dateStr);
+    if (!query.exec() || !query.next()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    // 仅在首日使用修正，避免影响已有多日数据。
+    const int historicalTotal = query.value(0).toInt();
+    if (historicalTotal > 0) {
+        return true;
+    }
+
+    query.prepare(QStringLiteral("INSERT OR IGNORE INTO learning_logs (log_date) VALUES (?)"));
+    query.bindValue(0, dateStr);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral("SELECT learning_count, review_count FROM learning_logs WHERE log_date = ?"));
+    query.bindValue(0, dateStr);
+    if (!query.exec() || !query.next()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const int todayLearning = query.value(0).toInt();
+    const int todayReview = query.value(1).toInt();
+    if (todayReview > 0) {
+        return true;
+    }
+
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM words WHERE status != 0"));
+    if (!query.exec() || !query.next()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const int reviewedTotal = query.value(0).toInt();
+    if (reviewedTotal <= todayLearning) {
+        return true;
+    }
+
+    query.prepare(QStringLiteral("UPDATE learning_logs SET learning_count = ? WHERE log_date = ?"));
+    query.bindValue(0, reviewedTotal);
+    query.bindValue(1, dateStr);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
 QString DatabaseManager::lastError() const {
     return lastError_;
 }

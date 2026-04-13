@@ -19,7 +19,6 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
-#include <QStandardPaths>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
@@ -307,11 +306,11 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     root->addWidget(learningCountLabel_);
     root->addStretch(1);
     root->addWidget(title);
-    root->addStretch(3);
-    root->addLayout(cardsLayout);
-    root->addSpacing(22);
+    root->addStretch(6);
     root->addWidget(reviewCountLabel_);
-    root->addStretch(2);
+    root->addSpacing(4);
+    root->addLayout(cardsLayout);
+    root->addSpacing(6);
     root->addLayout(navLayout);
 
     connect(learningButton_, &QPushButton::clicked, this, &HomePageWidget::startLearningClicked);
@@ -319,11 +318,15 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     connect(navBtn3, &QPushButton::clicked, this, &HomePageWidget::statsClicked);
 }
 
-void HomePageWidget::setCounts(int learningCount, int reviewCount) {
+void HomePageWidget::setCounts(int learningCount,
+                               int reviewCount,
+                               int todayLearningCount,
+                               int todayReviewCount) {
     learningButton_->setText(QStringLiteral("学习\n%1").arg(learningCount));
     reviewButton_->setText(QStringLiteral("复习\n%1").arg(reviewCount));
-    learningCountLabel_->setText(QStringLiteral("今日任务（每组 20 词）"));
-    reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));
+    learningCountLabel_->setText(
+        QStringLiteral("今日已学 %1 词 · 今日复习 %2 词").arg(todayLearningCount).arg(todayReviewCount));
+    reviewCountLabel_->setText(QStringLiteral("下一组仍按 20 词推进"));
 }
 
 MappingPageWidget::MappingPageWidget(QWidget *parent)
@@ -1019,6 +1022,9 @@ void VibeSpellerWindow::onSkipWord() {
         showWarningPrompt(this,
                           QStringLiteral("更新失败"),
                           QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+    } else {
+        // 跳过也代表完成了一次练习尝试，应计入当日学习/复习统计。
+        db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
     }
 
     PracticeRecord record;
@@ -1054,13 +1060,7 @@ void VibeSpellerWindow::onExitSession() {
 }
 
 void VibeSpellerWindow::initializeDatabase() {
-    QString dbDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (dbDir.isEmpty()) {
-        dbDir = QDir::homePath() + QStringLiteral("/.vibespeller");
-    }
-
-    QDir().mkpath(dbDir);
-    const QString dbPath = dbDir + QStringLiteral("/vibespeller.db");
+    const QString dbPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/vibespeller.db");
 
     if (!db_.open(dbPath)) {
         showErrorPrompt(this,
@@ -1077,8 +1077,18 @@ void VibeSpellerWindow::initializeDatabase() {
 }
 
 void VibeSpellerWindow::refreshHomeCounts() {
+    db_.reconcileFirstDayDailyLog();
+
     int learning = qMin(20, db_.unlearnedCount());
     int review = qMin(20, db_.dueReviewCount(QDateTime::currentDateTime()));
+
+    int todayLearning = 0;
+    int todayReview = 0;
+    const QVector<DatabaseManager::DailyLog> logs = db_.fetchWeeklyLogs();
+    if (!logs.isEmpty()) {
+        todayLearning = logs.last().learningCount;
+        todayReview = logs.last().reviewCount;
+    }
 
     QVector<WordItem> savedWords;
     int savedIndex = 0;
@@ -1089,7 +1099,7 @@ void VibeSpellerWindow::refreshHomeCounts() {
         review = qMax(0, savedWords.size() - savedIndex);
     }
 
-    homePage_->setCounts(learning, review);
+    homePage_->setCounts(learning, review, todayLearning, todayReview);
 }
 
 void VibeSpellerWindow::requestCsvImportIfNeeded() {

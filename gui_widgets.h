@@ -25,7 +25,10 @@ class HomePageWidget : public QWidget {
 public:
     explicit HomePageWidget(QWidget *parent = nullptr);
 
-    void setCounts(int learningCount, int reviewCount);
+    void setCounts(int learningCount,
+                   int reviewCount,
+                   int todayLearningCount,
+                   int todayReviewCount);
 
 signals:
     void startLearningClicked();
@@ -121,6 +124,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
+    QPushButton *backButton_ = nullptr;
     QVector<DatabaseManager::DailyLog> logs_;
 };
 
