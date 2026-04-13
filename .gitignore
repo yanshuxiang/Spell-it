@@ -1,0 +1,33 @@
+# CMake / build output
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Qt / moc generated files
+moc_*/
+ui_*/
+qrc_*/
+*.moc
+*.obj
+*.o
+*.d
+
+# IDE
+.idea/
+.vscode/
+*.user
+*.user.*
+*.autosave
+
+# OS
+.DS_Store
+Thumbs.db
+
+# App runtime data
+*.db
+*.sqlite
+*.sqlite3
