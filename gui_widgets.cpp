@@ -13,6 +13,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QColor>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
@@ -273,6 +276,34 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     cardsLayout->addWidget(learningButton_, 1);
     cardsLayout->addWidget(reviewButton_, 1);
 
+    auto *navLayout = new QHBoxLayout();
+    navLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto *navBtn1 = new QPushButton(QStringLiteral("📚"), this);
+    auto *navBtn2 = new QPushButton(QStringLiteral("🗃️"), this);
+    auto *navBtn3 = new QPushButton(QStringLiteral("📈"), this);
+
+    const QString navBtnStyle = QStringLiteral(
+        "QPushButton {"
+        "  background: transparent;"
+        "  border: none;"
+        "  font-size: 24px;"
+        "  padding: 8px;"
+        "}"
+        "QPushButton:hover { background: #f3f4f6; border-radius: 12px; }");
+
+    navBtn1->setStyleSheet(navBtnStyle);
+    navBtn2->setStyleSheet(navBtnStyle);
+    navBtn3->setStyleSheet(navBtnStyle);
+
+    navLayout->addStretch(1);
+    navLayout->addWidget(navBtn1);
+    navLayout->addStretch(2);
+    navLayout->addWidget(navBtn2);
+    navLayout->addStretch(2);
+    navLayout->addWidget(navBtn3);
+    navLayout->addStretch(1);
+
     root->addWidget(learningCountLabel_);
     root->addStretch(1);
     root->addWidget(title);
@@ -280,9 +311,12 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     root->addLayout(cardsLayout);
     root->addSpacing(22);
     root->addWidget(reviewCountLabel_);
+    root->addStretch(2);
+    root->addLayout(navLayout);
 
     connect(learningButton_, &QPushButton::clicked, this, &HomePageWidget::startLearningClicked);
     connect(reviewButton_, &QPushButton::clicked, this, &HomePageWidget::startReviewClicked);
+    connect(navBtn3, &QPushButton::clicked, this, &HomePageWidget::statsClicked);
 }
 
 void HomePageWidget::setCounts(int learningCount, int reviewCount) {
@@ -667,6 +701,136 @@ void SummaryPageWidget::setSummary(const QVector<PracticeRecord> &records, bool 
     nextGroupButton_->setText(QStringLiteral("继续下一组"));
 }
 
+StatisticsPageWidget::StatisticsPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(18, 16, 18, 18);
+    root->setSpacing(16);
+
+    auto *header = new QHBoxLayout();
+    backButton_ = new QPushButton(QStringLiteral("返回"), this);
+    backButton_->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background: transparent;"
+        "  font-size: 16px;"
+        "  color: #4b5563;"
+        "  padding: 8px;"
+        "}"
+        "QPushButton:hover { color: #111827; }"));
+    
+    auto *title = new QLabel(QStringLiteral("学习统计"), this);
+    title->setAlignment(Qt::AlignCenter);
+    title->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700;"));
+
+    header->addWidget(backButton_);
+    header->addStretch(1);
+    header->addWidget(title);
+    header->addStretch(1);
+    header->addSpacing(backButton_->sizeHint().width()); // balance title
+
+    root->addLayout(header);
+    root->addStretch(1);
+
+    connect(backButton_, &QPushButton::clicked, this, &StatisticsPageWidget::backClicked);
+}
+
+void StatisticsPageWidget::setLogs(const QVector<DatabaseManager::DailyLog> &logs) {
+    logs_ = logs;
+    update();
+}
+
+void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
+    QWidget::paintEvent(event);
+    if (logs_.isEmpty()) {
+        return;
+    }
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const int marginX = 40;
+    const int marginBottom = 120;
+    const int marginTop = 80;
+    const int width = this->width() - 2 * marginX;
+    const int height = this->height() - marginTop - marginBottom;
+
+    int maxCount = 10; // minimum scale
+    for (const auto &log : logs_) {
+        maxCount = qMax(maxCount, log.learningCount + log.reviewCount);
+    }
+
+    const int barSpacing = width / (logs_.size() + 1);
+    const int barWidth = qMax(12, qMin(24, barSpacing / 2));
+
+    for (int i = 0; i < logs_.size(); ++i) {
+        const auto &log = logs_[i];
+        const int total = log.learningCount + log.reviewCount;
+        
+        const int centerX = marginX + (i + 1) * barSpacing;
+        const int barHeight = static_cast<int>((static_cast<double>(total) / maxCount) * height);
+        
+        const int learningHeight = total > 0 ? static_cast<int>((static_cast<double>(log.learningCount) / total) * barHeight) : 0;
+        const int reviewHeight = barHeight - learningHeight;
+
+        // Draw Review Part (top, purple)
+        if (reviewHeight > 0) {
+            QRect reviewRect(centerX - barWidth / 2, marginTop + height - barHeight, barWidth, reviewHeight);
+            painter.setBrush(QColor("#a855f7")); // Purple
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(reviewRect, barWidth / 2, barWidth / 2);
+        }
+
+        // Draw Learning Part (bottom, orange)
+        if (learningHeight > 0) {
+            QRect learningRect(centerX - barWidth / 2, marginTop + height - learningHeight, barWidth, learningHeight);
+            painter.setBrush(QColor("#f97316")); // Orange
+            painter.setPen(Qt::NoPen);
+            painter.drawRoundedRect(learningRect, barWidth / 2, barWidth / 2);
+        }
+
+        // Draw Date Label
+        painter.setPen(QColor("#6b7280"));
+        painter.setFont(QFont(font().family(), 9));
+        QString dateStr = log.date.right(5); // MM-DD
+        if (i == logs_.size() - 1) {
+            dateStr = QStringLiteral("今日");
+        }
+        painter.drawText(QRect(centerX - 30, marginTop + height + 10, 60, 20), Qt::AlignCenter, dateStr);
+
+        // Draw Total Label (only for today or if > 0)
+        if (i == logs_.size() - 1 || total > 0) {
+            painter.drawText(QRect(centerX - 30, marginTop + height - barHeight - 25, 60, 20), Qt::AlignCenter, QString::number(total));
+        }
+    }
+
+    // Draw Legend
+    int legendY = marginTop - 30;
+    int legendX = this->width() - marginX - 100;
+    
+    painter.setBrush(QColor("#f97316"));
+    painter.drawEllipse(legendX, legendY, 8, 8);
+    painter.setPen(QColor("#4b5563"));
+    painter.drawText(legendX + 14, legendY + 9, QStringLiteral("学习"));
+
+    painter.setBrush(QColor("#a855f7"));
+    painter.drawEllipse(legendX + 50, legendY, 8, 8);
+    painter.drawText(legendX + 64, legendY + 9, QStringLiteral("复习"));
+
+    // Draw today's summary at bottom
+    if (!logs_.isEmpty()) {
+        const auto &today = logs_.last();
+        painter.setPen(QColor("#111827"));
+        painter.setFont(QFont(font().family(), 12, QFont::Bold));
+        
+        painter.drawText(QRect(marginX, marginTop + height + 50, width / 2, 20), Qt::AlignCenter, QStringLiteral("当日学习"));
+        painter.drawText(QRect(marginX + width / 2, marginTop + height + 50, width / 2, 20), Qt::AlignCenter, QStringLiteral("当日复习"));
+
+        painter.setFont(QFont(font().family(), 24, QFont::Bold));
+        painter.drawText(QRect(marginX, marginTop + height + 80, width / 2, 30), Qt::AlignCenter, QString::number(today.learningCount));
+        painter.drawText(QRect(marginX + width / 2, marginTop + height + 80, width / 2, 30), Qt::AlignCenter, QString::number(today.reviewCount));
+    }
+}
+
 VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     : QWidget(parent) {
     setWindowTitle(QStringLiteral("VibeSpeller"));
@@ -700,11 +864,13 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     mappingPage_ = new MappingPageWidget(this);
     spellingPage_ = new SpellingPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
+    statisticsPage_ = new StatisticsPageWidget(this);
 
     stack_->addWidget(homePage_);
     stack_->addWidget(mappingPage_);
     stack_->addWidget(spellingPage_);
     stack_->addWidget(summaryPage_);
+    stack_->addWidget(statisticsPage_);
     stack_->setCurrentWidget(homePage_);
 
     auto *layout = new QVBoxLayout(this);
@@ -713,6 +879,14 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(homePage_, &HomePageWidget::startLearningClicked, this, &VibeSpellerWindow::onStartLearning);
     connect(homePage_, &HomePageWidget::startReviewClicked, this, &VibeSpellerWindow::onStartReview);
+    connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
+        statisticsPage_->setLogs(db_.fetchWeeklyLogs());
+        stack_->setCurrentWidget(statisticsPage_);
+    });
+
+    connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, [this]() {
+        stack_->setCurrentWidget(homePage_);
+    });
 
     connect(mappingPage_, &MappingPageWidget::cancelled, this, [this]() {
         stack_->setCurrentWidget(homePage_);
@@ -815,6 +989,8 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
         showWarningPrompt(this,
                           QStringLiteral("更新失败"),
                           QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+    } else {
+        db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
     }
 
     PracticeRecord record;

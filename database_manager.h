@@ -2,6 +2,7 @@
 #define DATABASE_MANAGER_H
 
 #include <QDateTime>
+#include <QDate>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -64,6 +65,15 @@ public:
                            SpellingResult result,
                            bool skipped,
                            const QDateTime &now = QDateTime::currentDateTime());
+
+    bool incrementDailyCount(bool isLearning, const QDate &date = QDate::currentDate());
+
+    struct DailyLog {
+        QString date;
+        int learningCount = 0;
+        int reviewCount = 0;
+    };
+    QVector<DailyLog> fetchWeeklyLogs(const QDate &endDate = QDate::currentDate()) const;
 
     QString lastError() const;
 

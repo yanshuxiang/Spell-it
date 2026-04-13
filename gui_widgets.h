@@ -30,6 +30,7 @@ public:
 signals:
     void startLearningClicked();
     void startReviewClicked();
+    void statsClicked();
 
 private:
     QLabel *learningCountLabel_ = nullptr;
@@ -106,6 +107,23 @@ private:
     bool reviewMode_ = false;
 };
 
+class StatisticsPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit StatisticsPageWidget(QWidget *parent = nullptr);
+
+    void setLogs(const QVector<DatabaseManager::DailyLog> &logs);
+
+signals:
+    void backClicked();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    QVector<DatabaseManager::DailyLog> logs_;
+};
+
 class VibeSpellerWindow : public QWidget {
     Q_OBJECT
 public:
@@ -149,6 +167,7 @@ private:
     MappingPageWidget *mappingPage_ = nullptr;
     SpellingPageWidget *spellingPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
+    StatisticsPageWidget *statisticsPage_ = nullptr;
 
     QString pendingCsvPath_;
     QVector<WordItem> currentWords_;

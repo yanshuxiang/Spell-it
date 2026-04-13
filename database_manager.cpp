@@ -134,6 +134,17 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    const QString createLogsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS learning_logs ("
+        "log_date TEXT PRIMARY KEY,"
+        "learning_count INTEGER DEFAULT 0,"
+        "review_count INTEGER DEFAULT 0"
+        ")");
+    if (!query.exec(createLogsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     return true;
 }
 
@@ -550,8 +561,79 @@ bool DatabaseManager::applyReviewResult(int wordId,
         lastError_ = query.lastError().text();
         return false;
     }
-
     return true;
+}
+
+bool DatabaseManager::incrementDailyCount(bool isLearning, const QDate &date) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    const QString dateStr = date.toString(Qt::ISODate);
+    QSqlQuery query(database());
+
+    query.prepare(QStringLiteral("INSERT OR IGNORE INTO learning_logs (log_date) VALUES (?)"));
+    query.bindValue(0, dateStr);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (isLearning) {
+        query.prepare(QStringLiteral("UPDATE learning_logs SET learning_count = learning_count + 1 WHERE log_date = ?"));
+    } else {
+        query.prepare(QStringLiteral("UPDATE learning_logs SET review_count = review_count + 1 WHERE log_date = ?"));
+    }
+    query.bindValue(0, dateStr);
+
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate &endDate) const {
+    QVector<DailyLog> logs;
+    if (!ensureDatabaseOpen()) {
+        return logs;
+    }
+
+    const QDate startDate = endDate.addDays(-6);
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT log_date, learning_count, review_count "
+        "FROM learning_logs "
+        "WHERE log_date >= ? AND log_date <= ? "
+        "ORDER BY log_date ASC"));
+    query.bindValue(0, startDate.toString(Qt::ISODate));
+    query.bindValue(1, endDate.toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return logs;
+    }
+
+    QMap<QString, DailyLog> logMap;
+    while (query.next()) {
+        DailyLog log;
+        log.date = query.value(0).toString();
+        log.learningCount = query.value(1).toInt();
+        log.reviewCount = query.value(2).toInt();
+        logMap.insert(log.date, log);
+    }
+
+    for (int i = 0; i < 7; ++i) {
+        const QDate d = startDate.addDays(i);
+        const QString dStr = d.toString(Qt::ISODate);
+        if (logMap.contains(dStr)) {
+            logs.push_back(logMap.value(dStr));
+        } else {
+            logs.push_back({dStr, 0, 0});
+        }
+    }
+
+    return logs;
 }
 
 QString DatabaseManager::lastError() const {
