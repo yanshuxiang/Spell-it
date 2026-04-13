@@ -55,6 +55,37 @@ WordItem readWordFromQuery(const QSqlQuery &query) {
     }
     return item;
 }
+
+// 判断一段 CSV 文本中是否存在未闭合的引号，用于支持跨行字段。
+bool csvRecordHasUnclosedQuote(const QString &text) {
+    bool inQuotes = false;
+    for (int i = 0; i < text.size(); ++i) {
+        if (text.at(i) != QChar('"')) {
+            continue;
+        }
+
+        if (inQuotes && i + 1 < text.size() && text.at(i + 1) == QChar('"')) {
+            ++i; // 跳过转义双引号 ""
+            continue;
+        }
+        inQuotes = !inQuotes;
+    }
+    return inQuotes;
+}
+
+// 读取一条完整 CSV 记录：若字段被引号包裹且包含换行，则会自动拼接后续行。
+QString readCsvRecord(QTextStream &in) {
+    if (in.atEnd()) {
+        return QString();
+    }
+
+    QString record = in.readLine();
+    while (csvRecordHasUnclosedQuote(record) && !in.atEnd()) {
+        record += QChar('\n');
+        record += in.readLine();
+    }
+    return record;
+}
 } // namespace
 
 DatabaseManager::DatabaseManager() {
@@ -169,18 +200,21 @@ bool DatabaseManager::readCsvPreview(const QString &csvPath,
         return false;
     }
 
-    headers = parseCsvLine(in.readLine());
+    headers = parseCsvLine(readCsvRecord(in));
     if (!headers.isEmpty()) {
         headers[0].remove(QChar(0xFEFF)); // 去除 UTF-8 BOM
     }
 
     int count = 0;
-    while (!in.atEnd() && count < sampleCount) {
-        const QString line = in.readLine();
-        if (line.trimmed().isEmpty()) {
+    while (count < sampleCount) {
+        const QString record = readCsvRecord(in);
+        if (record.isNull()) {
+            break;
+        }
+        if (record.trimmed().isEmpty()) {
             continue;
         }
-        previewRows.push_back(parseCsvLine(line));
+        previewRows.push_back(parseCsvLine(record));
         ++count;
     }
 
@@ -217,7 +251,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     }
 
     // 跳过首行表头
-    parseCsvLine(in.readLine());
+    parseCsvLine(readCsvRecord(in));
 
     QSqlDatabase db = database();
     if (!db.transaction()) {
@@ -231,13 +265,16 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         "(word, phonetic, translation, ease_factor, interval, next_review, status) "
         "VALUES (?, ?, ?, 2.5, 0, NULL, 0)"));
 
-    while (!in.atEnd()) {
-        const QString line = in.readLine();
-        if (line.trimmed().isEmpty()) {
+    while (true) {
+        const QString record = readCsvRecord(in);
+        if (record.isNull()) {
+            break;
+        }
+        if (record.trimmed().isEmpty()) {
             continue;
         }
 
-        const QStringList columns = parseCsvLine(line);
+        const QStringList columns = parseCsvLine(record);
         if (wordColumn >= columns.size() || translationColumn >= columns.size()) {
             continue;
         }
@@ -729,6 +766,13 @@ QStringList DatabaseManager::parseCsvLine(const QString &line) {
     QString current;
     bool inQuotes = false;
 
+    auto pushField = [&values](QString field) {
+        if (field.endsWith(QChar('\r'))) {
+            field.chop(1);
+        }
+        values.push_back(field);
+    };
+
     for (int i = 0; i < line.size(); ++i) {
         const QChar ch = line.at(i);
 
@@ -744,7 +788,7 @@ QStringList DatabaseManager::parseCsvLine(const QString &line) {
         }
 
         if (ch == ',' && !inQuotes) {
-            values.push_back(current);
+            pushField(current);
             current.clear();
             continue;
         }
@@ -752,7 +796,7 @@ QStringList DatabaseManager::parseCsvLine(const QString &line) {
         current.append(ch);
     }
 
-    values.push_back(current);
+    pushField(current);
     return values;
 }
 
