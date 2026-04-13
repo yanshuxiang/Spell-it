@@ -627,7 +627,8 @@ int DatabaseManager::dueReviewCount(const QDateTime &now) const {
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ? AND book_id = ?"));
+        "WHERE status != 0 AND next_review IS NOT NULL "
+        "AND date(next_review) <= date(?) AND book_id = ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
     query.bindValue(1, activeBookId);
 
@@ -687,7 +688,8 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
     query.prepare(QStringLiteral(
         "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
         "FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL AND next_review <= ? AND book_id = ? "
+        "WHERE status != 0 AND next_review IS NOT NULL "
+        "AND date(next_review) <= date(?) AND book_id = ? "
         "ORDER BY next_review ASC, id ASC LIMIT ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
     query.bindValue(1, activeBookId);

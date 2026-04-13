@@ -69,16 +69,50 @@ QString briefResult(SpellingResult result) {
     return QStringLiteral("不熟悉");
 }
 
-QString summaryRightText(const PracticeRecord &record, bool reviewMode) {
-    switch (record.result) {
-    case SpellingResult::Mastered:
-        return reviewMode ? QStringLiteral("复习完成") : QStringLiteral("1天后复习");
-    case SpellingResult::Blurry:
-        return QStringLiteral("1天后复习");
-    case SpellingResult::Unfamiliar:
-        return record.skipped ? QStringLiteral("跳过") : QStringLiteral("1天后复习");
+int nextReviewDaysForSummary(const PracticeRecord &record) {
+    const QVector<int> ladder = {1, 2, 4, 7, 15, 30};
+    const int currentInterval = record.word.interval;
+
+    if (record.skipped || record.result == SpellingResult::Unfamiliar) {
+        return 1;
     }
-    return QStringLiteral("1天后复习");
+
+    if (record.result == SpellingResult::Blurry) {
+        if (currentInterval <= ladder.first()) {
+            return ladder.first();
+        }
+        for (int i = 0; i < ladder.size(); ++i) {
+            if (ladder[i] == currentInterval) {
+                return ladder[qMax(0, i - 1)];
+            }
+            if (ladder[i] > currentInterval) {
+                return ladder[qMax(0, i - 1)];
+            }
+        }
+        return ladder[ladder.size() - 2];
+    }
+
+    // Mastered: move to the next ladder step.
+    if (currentInterval <= 0) {
+        return ladder.first();
+    }
+    for (int i = 0; i < ladder.size(); ++i) {
+        if (ladder[i] == currentInterval) {
+            if (i + 1 < ladder.size()) {
+                return ladder[i + 1];
+            }
+            return ladder.last();
+        }
+        if (ladder[i] > currentInterval) {
+            return ladder[i];
+        }
+    }
+    return ladder.last();
+}
+
+QString summaryRightText(const PracticeRecord &record, bool reviewMode) {
+    Q_UNUSED(reviewMode);
+    return QStringLiteral("%1天后复习").arg(nextReviewDaysForSummary(record));
 }
 
 QColor summaryRightColor(const PracticeRecord &record, bool reviewMode) {
