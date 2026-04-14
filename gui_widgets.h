@@ -10,9 +10,12 @@ class QComboBox;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
+class QCloseEvent;
+class QEvent;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
+class QTimer;
 
 struct PracticeRecord {
     WordItem word;
@@ -79,6 +82,7 @@ signals:
     void submitted(const QString &text);
     void skipped();
     void exitRequested();
+    void userActivity();
 
 private:
     QLabel *modeLabel_ = nullptr;
@@ -148,6 +152,7 @@ private:
 
     QVector<WordBookItem> books_;
     int activeBookId_ = -1;
+    QLabel *metaLabel_ = nullptr;
     QListWidget *booksList_ = nullptr;
     QPushButton *backButton_ = nullptr;
     QPushButton *addBookButton_ = nullptr;
@@ -168,6 +173,10 @@ private slots:
     void onSelectWordBook(int bookId);
     void onDeleteWordBook(int bookId);
 
+protected:
+    void changeEvent(QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+
 private:
     enum class SessionMode {
         Learning,
@@ -177,6 +186,11 @@ private:
     void initializeDatabase();
     void refreshHomeCounts();
     void refreshWordBooks();
+    void updateStudyTimeTracking();
+    void flushStudyTimeTracking();
+    void markStudyUserActivity();
+    QDateTime effectiveStudyTrackingEndTime(const QDateTime &now) const;
+    void accumulateStudyDuration(const QDateTime &start, const QDateTime &end);
     void requestCsvImportIfNeeded();
     bool pickCsvAndShowMapping(bool returnToWordBooks = false);
     bool tryResumeSession(SessionMode mode);
@@ -209,6 +223,10 @@ private:
     QVector<PracticeRecord> records_;
     int currentIndex_ = 0;
     SessionMode currentMode_ = SessionMode::Learning;
+    bool isStudyTrackingActive_ = false;
+    QDateTime studyTrackingStartTime_;
+    QDateTime lastStudyUserActionTime_;
+    QTimer *studyIdleTimer_ = nullptr;
 };
 
 #endif // GUI_WIDGETS_H

@@ -79,11 +79,13 @@ public:
                            const QDateTime &now = QDateTime::currentDateTime());
 
     bool incrementDailyCount(bool isLearning, const QDate &date = QDate::currentDate());
+    bool addDailyStudySeconds(int seconds, const QDate &date = QDate::currentDate());
 
     struct DailyLog {
         QString date;
         int learningCount = 0;
         int reviewCount = 0;
+        int studyMinutes = 0;
     };
     QVector<DailyLog> fetchWeeklyLogs(const QDate &endDate = QDate::currentDate()) const;
     bool reconcileFirstDayDailyLog(const QDate &date = QDate::currentDate());

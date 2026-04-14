@@ -1,9 +1,11 @@
 #include "gui_widgets.h"
 
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QDialog>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -23,6 +25,7 @@
 #include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -35,6 +38,8 @@ enum class PromptType {
     Error,
     Question,
 };
+
+constexpr int kStudyIdleCutoffSeconds = 120;
 
 QString findBestColumn(const QStringList &headers, const QStringList &keywords) {
     for (const QString &keyword : keywords) {
@@ -735,11 +740,19 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     root->addStretch(2);
     root->addLayout(bottom);
 
+    connect(inputEdit_, &QLineEdit::textEdited, this, &SpellingPageWidget::userActivity);
     connect(inputEdit_, &QLineEdit::returnPressed, this, [this]() {
+        emit userActivity();
         emit submitted(inputEdit_->text());
     });
-    connect(skipButton_, &QPushButton::clicked, this, &SpellingPageWidget::skipped);
-    connect(exitButton_, &QPushButton::clicked, this, &SpellingPageWidget::exitRequested);
+    connect(skipButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit skipped();
+    });
+    connect(exitButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit exitRequested();
+    });
 }
 
 void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
@@ -959,122 +972,231 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
-    const int marginX = 40;
-    const int marginBottom = 120;
-    const int marginTop = 80;
-    const int width = this->width() - 2 * marginX;
-    const int height = this->height() - marginTop - marginBottom;
+    const QColor learningColor("#d38945"); // keep orange hue, lower saturation
+    const QColor reviewColor("#9c73cf");   // keep purple hue, lower saturation
+    const QColor accentColor("#d38945");
+    const QColor textPrimary("#111827");
+    const QColor textMuted("#6b7280");
+    const QColor gridColor("#e6e9ee");
+    const QColor lineColor("#c6c9cf");
+    const QColor cardBg("#fbfcfd");
+    const QColor cardBorder("#e7ebf0");
 
-    int maxCount = 10; // minimum scale
+    const int marginX = 28;
+    const int marginTop = 86;
+    const int marginBottom = 28;
+    const int sectionGap = 18;
+    const int contentWidth = this->width() - marginX * 2;
+    const int contentHeight = this->height() - marginTop - marginBottom;
+    const int topHeight = (contentHeight - sectionGap) / 2;
+
+    QRect topRect(marginX, marginTop, contentWidth, topHeight);
+    QRect bottomRect(marginX, marginTop + topHeight + sectionGap, contentWidth, contentHeight - topHeight - sectionGap);
+
+    painter.setPen(QPen(cardBorder, 1));
+    painter.setBrush(cardBg);
+    painter.drawRoundedRect(topRect, 18, 18);
+    painter.drawRoundedRect(bottomRect, 18, 18);
+
+    const QRect topCard = topRect.adjusted(14, 12, -14, -12);
+    const QRect bottomCard = bottomRect.adjusted(14, 12, -14, -12);
+
+    // Top section: learning/review count bars.
+    painter.setPen(textPrimary);
+    painter.setFont(QFont(font().family(), 12, QFont::Bold));
+    painter.drawText(QRect(topCard.left(), topCard.top(), topCard.width(), 20),
+                     Qt::AlignCenter,
+                     QStringLiteral("单词数量"));
+
+    const QRect topPlot = topCard.adjusted(8, 34, -8, -66);
+    int maxCount = 10;
     for (const auto &log : logs_) {
         maxCount = qMax(maxCount, log.learningCount + log.reviewCount);
     }
 
-    const int barSpacing = width / (logs_.size() + 1);
-    const int barWidth = qMax(12, qMin(24, barSpacing / 2));
+    const int barWidth = qMax(4, qMin(10, topPlot.width() / (logs_.size() * 4)));
+    for (int i = 0; i < logs_.size(); ++i) {
+        const DatabaseManager::DailyLog &log = logs_[i];
+        const int total = log.learningCount + log.reviewCount;
+        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
+        const int centerX = topPlot.left() + static_cast<int>(xRatio * topPlot.width());
+        const int fullHeight = static_cast<int>((static_cast<double>(total) / maxCount) * topPlot.height());
+        const int learningHeight = total > 0
+                                       ? static_cast<int>((static_cast<double>(log.learningCount) / total) * fullHeight)
+                                       : 0;
+        const int reviewHeight = fullHeight - learningHeight;
+        const int baseY = topPlot.bottom();
+
+        if (reviewHeight > 0) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(reviewColor);
+            painter.drawRoundedRect(QRect(centerX - barWidth / 2, baseY - fullHeight, barWidth, reviewHeight), 4, 4);
+        }
+        if (learningHeight > 0) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(learningColor);
+            painter.drawRoundedRect(QRect(centerX - barWidth / 2, baseY - learningHeight, barWidth, learningHeight), 4, 4);
+        }
+
+        painter.setPen(textMuted);
+        painter.setFont(QFont(font().family(), 9));
+        QString dateStr = (i == logs_.size() - 1) ? QStringLiteral("今日") : log.date.right(5);
+        painter.drawText(QRect(centerX - 30, topPlot.bottom() + 6, 60, 18), Qt::AlignCenter, dateStr);
+    }
+
+    const DatabaseManager::DailyLog &today = logs_.last();
+    painter.setPen(textMuted);
+    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+    painter.drawText(QRect(topCard.left(), topCard.bottom() - 34, topCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("当日学习"));
+    painter.drawText(QRect(topCard.center().x(), topCard.bottom() - 34, topCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("当日复习"));
+    painter.setPen(textPrimary);
+    painter.setFont(QFont(font().family(), 20, QFont::Bold));
+    painter.drawText(QRect(topCard.left(), topCard.bottom() - 16, topCard.width() / 2, 22), Qt::AlignCenter, QString::number(today.learningCount));
+    painter.drawText(QRect(topCard.center().x(), topCard.bottom() - 16, topCard.width() / 2, 22), Qt::AlignCenter, QString::number(today.reviewCount));
+
+    // Top-right legend (muted colors).
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(learningColor);
+    painter.drawEllipse(QRect(topCard.right() - 112, topCard.top() + 4, 10, 10));
+    painter.setBrush(reviewColor);
+    painter.drawEllipse(QRect(topCard.right() - 50, topCard.top() + 4, 10, 10));
+    painter.setPen(textMuted);
+    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+    painter.drawText(QRect(topCard.right() - 96, topCard.top() + 2, 38, 14), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("学习"));
+    painter.drawText(QRect(topCard.right() - 34, topCard.top() + 2, 38, 14), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("复习"));
+
+    // Bottom section: study time line chart (minutes).
+    painter.setPen(textPrimary);
+    painter.setFont(QFont(font().family(), 12, QFont::Bold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.top(), bottomCard.width(), 20),
+                     Qt::AlignCenter,
+                     QStringLiteral("学习时长（分钟）"));
+
+    const QRect linePlot = bottomCard.adjusted(8, 34, -8, -76);
+    int maxMinutes = 10;
+    int weeklyMinutes = 0;
+    QVector<QPointF> points;
+    points.reserve(logs_.size());
+    for (int i = 0; i < logs_.size(); ++i) {
+        const int minutes = logs_[i].studyMinutes;
+        maxMinutes = qMax(maxMinutes, minutes);
+        weeklyMinutes += minutes;
+    }
+
+    painter.setPen(QPen(gridColor, 1));
+    for (int i = 0; i < logs_.size(); ++i) {
+        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
+        const int x = linePlot.left() + static_cast<int>(xRatio * linePlot.width());
+        painter.drawLine(x, linePlot.top(), x, linePlot.bottom());
+    }
 
     for (int i = 0; i < logs_.size(); ++i) {
-        const auto &log = logs_[i];
-        const int total = log.learningCount + log.reviewCount;
-        
-        const int centerX = marginX + (i + 1) * barSpacing;
-        const int barHeight = static_cast<int>((static_cast<double>(total) / maxCount) * height);
-        
-        const int learningHeight = total > 0 ? static_cast<int>((static_cast<double>(log.learningCount) / total) * barHeight) : 0;
-        const int reviewHeight = barHeight - learningHeight;
-
-        // Draw Review Part (top, purple)
-        if (reviewHeight > 0) {
-            QRect reviewRect(centerX - barWidth / 2, marginTop + height - barHeight, barWidth, reviewHeight);
-            painter.setBrush(QColor("#a855f7")); // Purple
-            painter.setPen(Qt::NoPen);
-            painter.drawRoundedRect(reviewRect, barWidth / 2, barWidth / 2);
-        }
-
-        // Draw Learning Part (bottom, orange)
-        if (learningHeight > 0) {
-            QRect learningRect(centerX - barWidth / 2, marginTop + height - learningHeight, barWidth, learningHeight);
-            painter.setBrush(QColor("#f97316")); // Orange
-            painter.setPen(Qt::NoPen);
-            painter.drawRoundedRect(learningRect, barWidth / 2, barWidth / 2);
-        }
-
-        // Draw Date Label
-        painter.setPen(QColor("#6b7280"));
-        painter.setFont(QFont(font().family(), 9));
-        QString dateStr = log.date.right(5); // MM-DD
-        if (i == logs_.size() - 1) {
-            dateStr = QStringLiteral("今日");
-        }
-        painter.drawText(QRect(centerX - 30, marginTop + height + 10, 60, 20), Qt::AlignCenter, dateStr);
-
-        // Draw Total Label (only for today or if > 0)
-        if (i == logs_.size() - 1 || total > 0) {
-            painter.drawText(QRect(centerX - 30, marginTop + height - barHeight - 25, 60, 20), Qt::AlignCenter, QString::number(total));
-        }
+        const int minutes = logs_[i].studyMinutes;
+        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
+        const int x = linePlot.left() + static_cast<int>(xRatio * linePlot.width());
+        const int y = linePlot.bottom() - static_cast<int>((static_cast<double>(minutes) / maxMinutes) * linePlot.height());
+        points.push_back(QPointF(x, y));
     }
 
-    // Draw Legend
-    int legendY = marginTop - 30;
-    int legendX = this->width() - marginX - 100;
-    
-    painter.setBrush(QColor("#f97316"));
-    painter.drawEllipse(legendX, legendY, 8, 8);
-    painter.setPen(QColor("#4b5563"));
-    painter.drawText(legendX + 14, legendY + 9, QStringLiteral("学习"));
-
-    painter.setBrush(QColor("#a855f7"));
-    painter.drawEllipse(legendX + 50, legendY, 8, 8);
-    painter.drawText(legendX + 64, legendY + 9, QStringLiteral("复习"));
-
-    // Draw today's summary at bottom
-    if (!logs_.isEmpty()) {
-        const auto &today = logs_.last();
-        painter.setPen(QColor("#111827"));
-        painter.setFont(QFont(font().family(), 12, QFont::Bold));
-        
-        painter.drawText(QRect(marginX, marginTop + height + 50, width / 2, 20), Qt::AlignCenter, QStringLiteral("当日学习"));
-        painter.drawText(QRect(marginX + width / 2, marginTop + height + 50, width / 2, 20), Qt::AlignCenter, QStringLiteral("当日复习"));
-
-        painter.setFont(QFont(font().family(), 24, QFont::Bold));
-        painter.drawText(QRect(marginX, marginTop + height + 80, width / 2, 30), Qt::AlignCenter, QString::number(today.learningCount));
-        painter.drawText(QRect(marginX + width / 2, marginTop + height + 80, width / 2, 30), Qt::AlignCenter, QString::number(today.reviewCount));
+    painter.setPen(QPen(lineColor, 2.2));
+    painter.setBrush(Qt::NoBrush);
+    if (points.size() >= 2) {
+        painter.drawPolyline(points.data(), points.size());
     }
+
+    painter.setFont(QFont(font().family(), 9, QFont::DemiBold));
+    for (int i = 0; i < points.size(); ++i) {
+        const bool isToday = (i == points.size() - 1);
+        const QColor pointColor = isToday ? accentColor : QColor("#cfd3d8");
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(pointColor);
+        painter.drawEllipse(points[i], 5, 5);
+
+        painter.setPen(isToday ? accentColor : textMuted);
+        painter.drawText(QRect(static_cast<int>(points[i].x()) - 22,
+                               static_cast<int>(points[i].y()) - 22,
+                               44,
+                               16),
+                         Qt::AlignCenter,
+                         QString::number(logs_[i].studyMinutes));
+    }
+
+    painter.setPen(textMuted);
+    painter.setFont(QFont(font().family(), 9));
+    for (int i = 0; i < points.size(); ++i) {
+        QString dateStr = (i == points.size() - 1) ? QStringLiteral("今日") : logs_[i].date.right(5);
+        painter.drawText(QRect(static_cast<int>(points[i].x()) - 24, linePlot.bottom() + 8, 48, 16),
+                         Qt::AlignCenter,
+                         dateStr);
+    }
+
+    painter.setPen(textMuted);
+    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 46, bottomCard.width() / 2, 18),
+                     Qt::AlignCenter,
+                     QStringLiteral("当日学习时长"));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 46, bottomCard.width() / 2, 18),
+                     Qt::AlignCenter,
+                     QStringLiteral("近7天总时长"));
+
+    painter.setPen(textPrimary);
+    painter.setFont(QFont(font().family(), 18, QFont::Bold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 24, bottomCard.width() / 2, 22),
+                     Qt::AlignCenter,
+                     QStringLiteral("%1 分钟").arg(today.studyMinutes));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 24, bottomCard.width() / 2, 22),
+                     Qt::AlignCenter,
+                     QStringLiteral("%1 分钟").arg(weeklyMinutes));
 }
 
 WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 20);
-    root->setSpacing(12);
+    root->setContentsMargins(24, 18, 24, 22);
+    root->setSpacing(14);
 
     auto *header = new QHBoxLayout();
+    header->setSpacing(14);
     backButton_ = new QPushButton(QStringLiteral("返回"), this);
-    backButton_->setFixedHeight(42);
+    backButton_->setFixedSize(94, 46);
     backButton_->setStyleSheet(QStringLiteral(
-        "font-size: 14px; border-radius: 12px; background: rgba(17,24,39,0.06);"));
+        "font-size: 16px; font-weight: 600; border-radius: 14px;"
+        "background: #f3f4f6; color: #374151;"
+        "QPushButton:hover { background: #e9ebef; }"));
 
     auto *title = new QLabel(QStringLiteral("词书"), this);
-    title->setStyleSheet(QStringLiteral("font-size: 28px; font-weight: 700;"));
+    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a;"));
 
-    header->addWidget(backButton_);
-    header->addSpacing(12);
-    header->addWidget(title);
+    metaLabel_ = new QLabel(QStringLiteral("管理词书与当前学习进度"), this);
+    metaLabel_->setStyleSheet(QStringLiteral("font-size: 15px; color: #6b7280;"));
+
+    auto *titleCol = new QVBoxLayout();
+    titleCol->setContentsMargins(0, 0, 0, 0);
+    titleCol->setSpacing(4);
+    titleCol->addWidget(title);
+    titleCol->addWidget(metaLabel_);
+
+    header->addWidget(backButton_, 0, Qt::AlignTop);
+    header->addLayout(titleCol, 1);
     header->addStretch(1);
 
     booksList_ = new QListWidget(this);
-    booksList_->setSpacing(10);
+    booksList_->setSpacing(12);
     booksList_->setFrameShape(QFrame::NoFrame);
     booksList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     booksList_->setStyleSheet(QStringLiteral(
-        "QListWidget { border: none; background: transparent; }"
-        "QListWidget::item { border: none; }"));
+        "QListWidget { border: none; background: transparent; outline: none; }"
+        "QListWidget::item { border: none; padding: 0; margin: 0; }"
+        "QScrollBar:vertical { background: transparent; width: 8px; margin: 4px 0; }"
+        "QScrollBar::handle:vertical { background: rgba(148,163,184,0.35); border-radius: 4px; min-height: 30px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
 
     addBookButton_ = new QPushButton(QStringLiteral("添加词书"), this);
-    addBookButton_->setFixedHeight(60);
+    addBookButton_->setFixedHeight(64);
     addBookButton_->setStyleSheet(QStringLiteral(
-        "font-size: 18px; font-weight: 700; border-radius: 18px;"
-        "background: #111827; color: #ffffff;"));
+        "font-size: 24px; font-weight: 700; border-radius: 20px;"
+        "background: #0f1b3d; color: #ffffff;"
+        "QPushButton:hover { background: #13224b; }"));
 
     root->addLayout(header);
     root->addWidget(booksList_, 1);
@@ -1094,6 +1216,13 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
 void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int activeBookId) {
     books_ = books;
     activeBookId_ = activeBookId;
+    int totalWords = 0;
+    for (const WordBookItem &book : books_) {
+        totalWords += book.wordCount;
+    }
+    if (metaLabel_) {
+        metaLabel_->setText(QStringLiteral("共 %1 本词书 · %2 词").arg(books_.size()).arg(totalWords));
+    }
     rebuildList();
 }
 
@@ -1104,76 +1233,110 @@ void WordBooksPageWidget::rebuildList() {
     for (const WordBookItem &book : books_) {
         auto *item = new QListWidgetItem(booksList_);
         item->setData(Qt::UserRole, book.id);
-        item->setSizeHint(QSize(0, 110));
+        item->setSizeHint(QSize(0, 126));
         booksList_->addItem(item);
 
         auto *row = new QWidget(booksList_);
         row->setObjectName(QStringLiteral("bookRow"));
-        row->setStyleSheet(book.id == activeBookId_
-                               ? QStringLiteral(
-                                     "QWidget#bookRow {"
-                                     "  background: #fff7ed;"
-                                     "  border: 1px solid #fdba74;"
-                                     "  border-radius: 18px;"
-                                     "}")
-                               : QStringLiteral(
-                                     "QWidget#bookRow {"
-                                     "  background: #ffffff;"
-                                     "  border: 1px solid #eef2f7;"
-                                     "  border-radius: 18px;"
-                                     "}"));
+        row->setStyleSheet(QStringLiteral(
+            "QWidget#bookRow {"
+            "  background: %1;"
+            "  border: 1px solid %2;"
+            "  border-radius: 20px;"
+            "}").arg(book.id == activeBookId_ ? QStringLiteral("#f8fafc") : QStringLiteral("#ffffff"),
+                     book.id == activeBookId_ ? QStringLiteral("#dbe4ef") : QStringLiteral("#e9eef5")));
 
         auto *layout = new QHBoxLayout(row);
-        layout->setContentsMargins(14, 12, 14, 12);
-        layout->setSpacing(12);
+        layout->setContentsMargins(16, 14, 16, 14);
+        layout->setSpacing(14);
+
+        const QColor baseColor(coverColorForBook(book.id));
+        const QString coverTop = baseColor.lighter(120).name();
+        const QString coverBottom = baseColor.darker(105).name();
 
         auto *cover = new QLabel(QStringLiteral("BOOK"), row);
         cover->setAlignment(Qt::AlignCenter);
-        cover->setFixedSize(64, 82);
+        cover->setFixedSize(72, 92);
         cover->setStyleSheet(QStringLiteral(
-            "font-size: 12px; font-weight: 700; color: #ffffff; border-radius: 12px; background: %1;")
-                                .arg(coverColorForBook(book.id)));
+            "font-size: 12px; letter-spacing: 0.5px; font-weight: 700; color: rgba(255,255,255,0.92);"
+            "border-radius: 16px;"
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 %1, stop:1 %2);")
+                                .arg(coverTop, coverBottom));
 
         auto *title = new QLabel(book.name, row);
         title->setStyleSheet(
-            QStringLiteral("font-size: 20px; font-weight: 700; color: #111827; border: none; background: transparent;"));
+            QStringLiteral("font-size: 20px; font-weight: 700; color: #0f172a; border: none; background: transparent;"));
         title->setWordWrap(true);
 
         auto *count = new QLabel(QStringLiteral("%1 词").arg(book.wordCount), row);
-        count->setStyleSheet(QStringLiteral("font-size: 15px; color: #9ca3af; border: none; background: transparent;"));
+        count->setStyleSheet(QStringLiteral("font-size: 15px; color: #94a3b8; border: none; background: transparent;"));
 
         auto *textLayout = new QVBoxLayout();
-        textLayout->setSpacing(6);
+        textLayout->setContentsMargins(0, 4, 0, 4);
+        textLayout->setSpacing(4);
         textLayout->addWidget(title);
         textLayout->addWidget(count);
         textLayout->addStretch(1);
 
         auto *status = new QLabel(book.id == activeBookId_ ? QStringLiteral("正在学习") : QString(), row);
         status->setStyleSheet(
-            QStringLiteral("font-size: 18px; font-weight: 700; color: #f97316; border: none; background: transparent;"));
+            book.id == activeBookId_
+                ? QStringLiteral(
+                      "font-size: 16px; font-weight: 700; color: #ea580c;"
+                      "padding: 6px 10px; border-radius: 10px;"
+                      "border: 1px solid rgba(251,146,60,0.35);"
+                      "background: rgba(251,146,60,0.12);")
+                : QStringLiteral(
+                      "font-size: 14px; font-weight: 600; color: #9ca3af;"
+                      "padding: 0; border: none; background: transparent;"));
+        if (book.id != activeBookId_) {
+            status->setText(QStringLiteral("点击切换"));
+        }
         status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
         auto *deleteButton = new QPushButton(QStringLiteral("删除"), row);
-        deleteButton->setFixedSize(92, 38);
+        deleteButton->setMinimumSize(76, 34);
         deleteButton->setStyleSheet(QStringLiteral(
             "font-size: 14px; font-weight: 600; border-radius: 10px;"
-            "padding: 0 12px;"
-            "background: rgba(239,68,68,0.10); color: #dc2626;"));
+            "padding: 4px 12px; border: none;"
+            "background: rgba(239,68,68,0.08); color: #b91c1c;"
+            "QPushButton:hover { background: rgba(239,68,68,0.14); }"));
         connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
             emit wordBookDeleteRequested(book.id);
         });
 
         auto *rightLayout = new QVBoxLayout();
+        rightLayout->setContentsMargins(0, 2, 0, 2);
         rightLayout->setSpacing(8);
         rightLayout->addWidget(status, 0, Qt::AlignRight);
         rightLayout->addWidget(deleteButton, 0, Qt::AlignRight);
-        rightLayout->addStretch(1);
+        rightLayout->addStretch();
 
         layout->addWidget(cover);
         layout->addLayout(textLayout, 1);
         layout->addLayout(rightLayout);
 
         booksList_->setItemWidget(item, row);
+    }
+
+    if (books_.isEmpty()) {
+        auto *item = new QListWidgetItem(booksList_);
+        item->setSizeHint(QSize(0, 120));
+        booksList_->addItem(item);
+
+        auto *emptyWidget = new QWidget(booksList_);
+        emptyWidget->setStyleSheet(QStringLiteral(
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
+        auto *emptyLayout = new QVBoxLayout(emptyWidget);
+        emptyLayout->setContentsMargins(16, 12, 16, 12);
+        auto *emptyTitle = new QLabel(QStringLiteral("还没有词书"), emptyWidget);
+        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
+        auto *emptyDesc = new QLabel(QStringLiteral("点击底部“添加词书”导入 CSV 开始练习"), emptyWidget);
+        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+        emptyLayout->addWidget(emptyTitle);
+        emptyLayout->addWidget(emptyDesc);
+        emptyLayout->addStretch();
+        booksList_->setItemWidget(item, emptyWidget);
     }
 
     booksList_->setUpdatesEnabled(true);
@@ -1226,6 +1389,14 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(stack_);
+
+    connect(stack_, &QStackedWidget::currentChanged, this, [this](int) {
+        updateStudyTimeTracking();
+    });
+    studyIdleTimer_ = new QTimer(this);
+    studyIdleTimer_->setInterval(5000);
+    connect(studyIdleTimer_, &QTimer::timeout, this, &VibeSpellerWindow::updateStudyTimeTracking);
+    studyIdleTimer_->start();
 
     connect(homePage_, &HomePageWidget::startLearningClicked, this, &VibeSpellerWindow::onStartLearning);
     connect(homePage_, &HomePageWidget::startReviewClicked, this, &VibeSpellerWindow::onStartReview);
@@ -1285,6 +1456,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(spellingPage_, &SpellingPageWidget::submitted, this, &VibeSpellerWindow::onSubmitAnswer);
     connect(spellingPage_, &SpellingPageWidget::skipped, this, &VibeSpellerWindow::onSkipWord);
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
+    connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -1312,6 +1484,18 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     // 启动后若词库为空，提示导入 CSV。
     QTimer::singleShot(0, this, &VibeSpellerWindow::requestCsvImportIfNeeded);
+}
+
+void VibeSpellerWindow::changeEvent(QEvent *event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange) {
+        updateStudyTimeTracking();
+    }
+}
+
+void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
+    flushStudyTimeTracking();
+    QWidget::closeEvent(event);
 }
 
 void VibeSpellerWindow::onStartLearning() {
@@ -1498,6 +1682,95 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     clearSessionForMode(SessionMode::Review);
     refreshHomeCounts();
     refreshWordBooks();
+}
+
+void VibeSpellerWindow::updateStudyTimeTracking() {
+    const bool shouldTrack = stack_ != nullptr
+                             && stack_->currentWidget() == spellingPage_
+                             && isActiveWindow();
+    const QDateTime now = QDateTime::currentDateTime();
+
+    if (shouldTrack) {
+        if (!isStudyTrackingActive_) {
+            // 超时停表后，不应自动重启；必须有新的输入事件才重启。
+            if (!lastStudyUserActionTime_.isValid()
+                || lastStudyUserActionTime_.secsTo(now) <= kStudyIdleCutoffSeconds) {
+                isStudyTrackingActive_ = true;
+                studyTrackingStartTime_ = now;
+                if (!lastStudyUserActionTime_.isValid()) {
+                    lastStudyUserActionTime_ = now;
+                }
+            }
+        } else {
+            const QDateTime effectiveEnd = effectiveStudyTrackingEndTime(now);
+            if (effectiveEnd < now) {
+                // 已经超过无输入阈值：停止计时，并扣除这段等待时间。
+                accumulateStudyDuration(studyTrackingStartTime_, effectiveEnd);
+                isStudyTrackingActive_ = false;
+            }
+        }
+        return;
+    }
+
+    if (isStudyTrackingActive_) {
+        accumulateStudyDuration(studyTrackingStartTime_, effectiveStudyTrackingEndTime(now));
+        isStudyTrackingActive_ = false;
+    }
+}
+
+void VibeSpellerWindow::flushStudyTimeTracking() {
+    if (!isStudyTrackingActive_) {
+        return;
+    }
+    accumulateStudyDuration(studyTrackingStartTime_, effectiveStudyTrackingEndTime(QDateTime::currentDateTime()));
+    isStudyTrackingActive_ = false;
+}
+
+void VibeSpellerWindow::markStudyUserActivity() {
+    const QDateTime now = QDateTime::currentDateTime();
+    lastStudyUserActionTime_ = now;
+
+    const bool canTrack = stack_ != nullptr
+                          && stack_->currentWidget() == spellingPage_
+                          && isActiveWindow();
+    if (canTrack && !isStudyTrackingActive_) {
+        isStudyTrackingActive_ = true;
+        studyTrackingStartTime_ = now;
+    }
+}
+
+QDateTime VibeSpellerWindow::effectiveStudyTrackingEndTime(const QDateTime &now) const {
+    if (!lastStudyUserActionTime_.isValid()) {
+        return now;
+    }
+
+    const qint64 idleSeconds = lastStudyUserActionTime_.secsTo(now);
+    if (idleSeconds > kStudyIdleCutoffSeconds) {
+        // 超过 2 分钟无输入时，连这 2 分钟等待时间也不计入。
+        return lastStudyUserActionTime_;
+    }
+    return now;
+}
+
+void VibeSpellerWindow::accumulateStudyDuration(const QDateTime &start, const QDateTime &end) {
+    if (!start.isValid() || !end.isValid() || end <= start) {
+        return;
+    }
+
+    QDateTime cursor = start;
+    while (cursor.date() < end.date()) {
+        const QDateTime endOfDay(cursor.date(), QTime(23, 59, 59));
+        const int seconds = static_cast<int>(cursor.secsTo(endOfDay) + 1);
+        if (seconds > 0) {
+            db_.addDailyStudySeconds(seconds, cursor.date());
+        }
+        cursor = endOfDay.addSecs(1);
+    }
+
+    const int finalSeconds = static_cast<int>(cursor.secsTo(end));
+    if (finalSeconds > 0) {
+        db_.addDailyStudySeconds(finalSeconds, cursor.date());
+    }
 }
 
 void VibeSpellerWindow::initializeDatabase() {

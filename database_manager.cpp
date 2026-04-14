@@ -244,11 +244,31 @@ bool DatabaseManager::initialize() {
         "CREATE TABLE IF NOT EXISTS learning_logs ("
         "log_date TEXT PRIMARY KEY,"
         "learning_count INTEGER DEFAULT 0,"
-        "review_count INTEGER DEFAULT 0"
+        "review_count INTEGER DEFAULT 0,"
+        "study_seconds INTEGER DEFAULT 0"
         ")");
     if (!query.exec(createLogsSql)) {
         lastError_ = query.lastError().text();
         return false;
+    }
+
+    bool hasStudySecondsColumn = false;
+    QSqlQuery logsInfo(database());
+    if (!logsInfo.exec(QStringLiteral("PRAGMA table_info(learning_logs)"))) {
+        lastError_ = logsInfo.lastError().text();
+        return false;
+    }
+    while (logsInfo.next()) {
+        if (logsInfo.value(1).toString() == QStringLiteral("study_seconds")) {
+            hasStudySecondsColumn = true;
+            break;
+        }
+    }
+    if (!hasStudySecondsColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE learning_logs ADD COLUMN study_seconds INTEGER DEFAULT 0"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
     }
 
     return true;
@@ -935,6 +955,34 @@ bool DatabaseManager::incrementDailyCount(bool isLearning, const QDate &date) {
     return true;
 }
 
+bool DatabaseManager::addDailyStudySeconds(int seconds, const QDate &date) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (seconds <= 0) {
+        return true;
+    }
+
+    const QString dateStr = date.toString(Qt::ISODate);
+    QSqlQuery query(database());
+
+    query.prepare(QStringLiteral("INSERT OR IGNORE INTO learning_logs (log_date) VALUES (?)"));
+    query.bindValue(0, dateStr);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral("UPDATE learning_logs SET study_seconds = study_seconds + ? WHERE log_date = ?"));
+    query.bindValue(0, seconds);
+    query.bindValue(1, dateStr);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
 QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate &endDate) const {
     QVector<DailyLog> logs;
     if (!ensureDatabaseOpen()) {
@@ -944,7 +992,7 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
     const QDate startDate = endDate.addDays(-6);
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT log_date, learning_count, review_count "
+        "SELECT log_date, learning_count, review_count, study_seconds "
         "FROM learning_logs "
         "WHERE log_date >= ? AND log_date <= ? "
         "ORDER BY log_date ASC"));
@@ -962,6 +1010,8 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
         log.date = query.value(0).toString();
         log.learningCount = query.value(1).toInt();
         log.reviewCount = query.value(2).toInt();
+        const int seconds = query.value(3).toInt();
+        log.studyMinutes = seconds > 0 ? (seconds + 59) / 60 : 0;
         logMap.insert(log.date, log);
     }
 
@@ -971,7 +1021,7 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
         if (logMap.contains(dStr)) {
             logs.push_back(logMap.value(dStr));
         } else {
-            logs.push_back({dStr, 0, 0});
+            logs.push_back({dStr, 0, 0, 0});
         }
     }
 
