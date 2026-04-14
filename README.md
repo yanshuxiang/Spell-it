@@ -6,10 +6,10 @@ Spell it 是一个面向拼写训练的极简桌面工具。
 ## 总览
 
 <p align="center">
-  <img src="./assets/screenshots/overview-home.png" alt="首页" width="24%" />
-  <img src="./assets/screenshots/overview-books.png" alt="词书页" width="24%" />
-  <img src="./assets/screenshots/overview-stats.png" alt="统计页" width="24%" />
-  <img src="./assets/screenshots/overview-spell.png" alt="拼写页" width="24%" />
+  <img src="https://raw.githubusercontent.com/yanshuxiang/Spell-it/main/assets/screenshots/%E9%A6%96%E9%A1%B5.png" alt="首页" width="24%" />
+  <img src="https://raw.githubusercontent.com/yanshuxiang/Spell-it/main/assets/screenshots/%E8%AF%8D%E6%95%B0%E9%A1%B5.png" alt="词书页" width="24%" />
+  <img src="https://raw.githubusercontent.com/yanshuxiang/Spell-it/main/assets/screenshots/%E7%BB%9F%E8%AE%A1%E9%A1%B5.png" alt="统计页" width="24%" />
+  <img src="https://raw.githubusercontent.com/yanshuxiang/Spell-it/main/assets/screenshots/%E6%8B%BC%E5%86%99%E9%A1%B5.png" alt="拼写页" width="24%" />
 </p>
 
 - 技术栈：`C++17 + Qt Widgets + QtSql + SQLite`
@@ -71,4 +71,3 @@ Spell it 是一个面向拼写训练的极简桌面工具。
 - 本地 SQLite 存储全部学习状态、调度时间、会话进度与统计数据。
 
 ---
-
