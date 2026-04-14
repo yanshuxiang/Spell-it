@@ -11,6 +11,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QFrame>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -673,6 +674,8 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
 
 SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     : QWidget(parent) {
+    setFocusPolicy(Qt::StrongFocus);
+
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(16, 12, 16, 34);
     root->setSpacing(8);
@@ -698,10 +701,10 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     translationLabel_ = new QLabel(this);
     translationLabel_->setAlignment(Qt::AlignCenter);
     translationLabel_->setWordWrap(true);
-    translationLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #111827;"));
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
 
     inputEdit_ = new QLineEdit(this);
-    inputEdit_->setPlaceholderText(QStringLiteral("输入英文后按 Enter"));
+    inputEdit_->setPlaceholderText(QStringLiteral("输入后按回车"));
     inputEdit_->setAlignment(Qt::AlignCenter);
     inputEdit_->setFixedWidth(310);
     inputEdit_->setMinimumHeight(42);
@@ -709,7 +712,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
         "border: none;"
         "border-bottom: 2px solid #e5e7eb;"
         "color: #6b7280;"
-        "font-size: 16px;"
+        "font-size: 35px;"
         "padding: 4px 8px;"
         "background: transparent;"));
 
@@ -717,7 +720,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     feedbackLabel_->setAlignment(Qt::AlignCenter);
     feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #6b7280;"));
 
-    skipButton_ = new QPushButton(QStringLiteral("跳过"), this);
+    skipButton_ = new QPushButton(QStringLiteral("看答案"), this);
     skipButton_->setFixedSize(104, 42);
     skipButton_->setStyleSheet(QStringLiteral("font-size: 12px; border-radius: 12px;"));
 
@@ -761,23 +764,63 @@ void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int tot
     translationLabel_->setText(word.translation);
     inputEdit_->clear();
     clearFeedback();
+    setAwaitingProceed(false);
     setInputEnabled(true);
     inputEdit_->setFocus();
 }
 
 void SpellingPageWidget::setInputEnabled(bool enabled) {
+    setAwaitingProceed(!enabled);
     inputEdit_->setEnabled(enabled);
     skipButton_->setEnabled(enabled);
+    if (!enabled) {
+        setFocus(Qt::OtherFocusReason);
+    }
 }
 
 void SpellingPageWidget::showFeedback(const QString &text, const QString &colorHex) {
     feedbackLabel_->setText(text);
-    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 16px; color: %1;").arg(colorHex));
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: %1;").arg(colorHex));
 }
 
 void SpellingPageWidget::clearFeedback() {
     feedbackLabel_->setText(QString());
-    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 16px; color: #6b7280;"));
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 17px; font-weight: 700; color: #6b7280;"));
+}
+
+void SpellingPageWidget::keyPressEvent(QKeyEvent *event) {
+    if (awaitingProceed_
+        && (event->key() == Qt::Key_Return
+            || event->key() == Qt::Key_Enter
+            || event->key() == Qt::Key_Space)) {
+        if (!proceedKeyArmed_) {
+            event->accept();
+            return;
+        }
+        proceedKeyArmed_ = false;
+        emit userActivity();
+        emit proceedRequested();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void SpellingPageWidget::setAwaitingProceed(bool awaiting) {
+    awaitingProceed_ = awaiting;
+    if (!awaitingProceed_) {
+        proceedKeyArmed_ = false;
+        return;
+    }
+
+    // Arm on next event-loop turn so the same Enter used for submit
+    // won't immediately trigger "next word".
+    proceedKeyArmed_ = false;
+    QTimer::singleShot(0, this, [this]() {
+        if (awaitingProceed_) {
+            proceedKeyArmed_ = true;
+        }
+    });
 }
 
 SummaryPageWidget::SummaryPageWidget(QWidget *parent)
@@ -1454,6 +1497,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
             });
 
     connect(spellingPage_, &SpellingPageWidget::submitted, this, &VibeSpellerWindow::onSubmitAnswer);
+    connect(spellingPage_, &SpellingPageWidget::proceedRequested, this, &VibeSpellerWindow::onProceedAfterFeedback);
     connect(spellingPage_, &SpellingPageWidget::skipped, this, &VibeSpellerWindow::onSkipWord);
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
@@ -1540,7 +1584,10 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     }
 
     const WordItem current = currentWords_.at(currentIndex_);
-    const SpellingResult result = db_.evaluateSpelling(text, current.word);
+    const SpellingResult evaluated = db_.evaluateSpelling(text, current.word);
+    const SpellingResult result = (evaluated == SpellingResult::Mastered)
+                                      ? SpellingResult::Mastered
+                                      : SpellingResult::Unfamiliar;
 
     if (!db_.applyReviewResult(current.id, result, false, QDateTime::currentDateTime())) {
         showWarningPrompt(this,
@@ -1557,11 +1604,22 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     record.skipped = false;
     records_.push_back(record);
 
-    spellingPage_->setInputEnabled(false);
-    spellingPage_->showFeedback(resultLabel(result), resultColor(result));
-    db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
+    if (result == SpellingResult::Mastered) {
+        moveToNextWord();
+    } else {
+        spellingPage_->setInputEnabled(false);
+        spellingPage_->showFeedback(
+            QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
+            QStringLiteral("#4bc816b6"));
+        db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
+    }
+}
 
-    QTimer::singleShot(620, this, &VibeSpellerWindow::moveToNextWord);
+void VibeSpellerWindow::onProceedAfterFeedback() {
+    if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
+        return;
+    }
+    moveToNextWord();
 }
 
 void VibeSpellerWindow::onSkipWord() {
@@ -1589,10 +1647,10 @@ void VibeSpellerWindow::onSkipWord() {
     records_.push_back(record);
 
     spellingPage_->setInputEnabled(false);
-    spellingPage_->showFeedback(QStringLiteral("不熟悉（已跳过）"), QStringLiteral("#dc2626"));
+    spellingPage_->showFeedback(
+        QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
+        QStringLiteral("#4bc816b6"));
     db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
-
-    QTimer::singleShot(260, this, &VibeSpellerWindow::moveToNextWord);
 }
 
 void VibeSpellerWindow::onExitSession() {

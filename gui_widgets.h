@@ -12,6 +12,7 @@ class QListWidget;
 class QListWidgetItem;
 class QCloseEvent;
 class QEvent;
+class QKeyEvent;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
@@ -82,9 +83,15 @@ signals:
     void submitted(const QString &text);
     void skipped();
     void exitRequested();
+    void proceedRequested();
     void userActivity();
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+
 private:
+    void setAwaitingProceed(bool awaiting);
+
     QLabel *modeLabel_ = nullptr;
     QLabel *progressLabel_ = nullptr;
     QLabel *translationLabel_ = nullptr;
@@ -92,6 +99,8 @@ private:
     QLabel *feedbackLabel_ = nullptr;
     QPushButton *exitButton_ = nullptr;
     QPushButton *skipButton_ = nullptr;
+    bool awaitingProceed_ = false;
+    bool proceedKeyArmed_ = false;
 };
 
 class SummaryPageWidget : public QWidget {
@@ -167,6 +176,7 @@ private slots:
     void onStartLearning();
     void onStartReview();
     void onSubmitAnswer(const QString &text);
+    void onProceedAfterFeedback();
     void onSkipWord();
     void onExitSession();
     void onOpenWordBooks();
