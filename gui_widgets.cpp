@@ -24,6 +24,7 @@
 #include <QShortcut>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QSet>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTime>
@@ -1585,34 +1586,60 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
 
     const WordItem current = currentWords_.at(currentIndex_);
     const SpellingResult evaluated = db_.evaluateSpelling(text, current.word);
-    const SpellingResult result = (evaluated == SpellingResult::Mastered)
-                                      ? SpellingResult::Mastered
-                                      : SpellingResult::Unfamiliar;
+    if (evaluated == SpellingResult::Mastered) {
+        if (!db_.applyReviewResult(current.id, SpellingResult::Mastered, false, QDateTime::currentDateTime())) {
+            showWarningPrompt(this,
+                              QStringLiteral("更新失败"),
+                              QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+        } else {
+            db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
+        }
 
-    if (!db_.applyReviewResult(current.id, result, false, QDateTime::currentDateTime())) {
-        showWarningPrompt(this,
-                          QStringLiteral("更新失败"),
-                          QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
-    } else {
-        db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
+        PracticeRecord record;
+        record.word = current;
+        record.result = SpellingResult::Mastered;
+        record.userInput = text;
+        record.skipped = false;
+        records_.push_back(record);
+        roundMistakeCounts_.remove(current.id);
+        moveToNextWord();
+        return;
     }
 
-    PracticeRecord record;
-    record.word = current;
-    record.result = result;
-    record.userInput = text;
-    record.skipped = false;
-    records_.push_back(record);
+    const int mistakeCount = roundMistakeCounts_.value(current.id, 0) + 1;
+    roundMistakeCounts_.insert(current.id, mistakeCount);
 
-    if (result == SpellingResult::Mastered) {
-        moveToNextWord();
-    } else {
+    if (mistakeCount > 3) {
+        if (!db_.applyReviewResult(current.id, SpellingResult::Unfamiliar, true, QDateTime::currentDateTime())) {
+            showWarningPrompt(this,
+                              QStringLiteral("更新失败"),
+                              QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+        } else {
+            db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
+        }
+
+        PracticeRecord record;
+        record.word = current;
+        record.result = SpellingResult::Unfamiliar;
+        record.userInput = text;
+        record.skipped = true;
+        records_.push_back(record);
+        roundMistakeCounts_.remove(current.id);
+
         spellingPage_->setInputEnabled(false);
         spellingPage_->showFeedback(
             QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
             QStringLiteral("#4bc816b6"));
         db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
+        return;
     }
+
+    currentWords_.push_back(current);
+    spellingPage_->setInputEnabled(false);
+    spellingPage_->showFeedback(
+        QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
+        QStringLiteral("#4bc816b6"));
+    db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
 }
 
 void VibeSpellerWindow::onProceedAfterFeedback() {
@@ -1645,6 +1672,7 @@ void VibeSpellerWindow::onSkipWord() {
     record.userInput.clear();
     record.skipped = true;
     records_.push_back(record);
+    roundMistakeCounts_.remove(current.id);
 
     spellingPage_->setInputEnabled(false);
     spellingPage_->showFeedback(
@@ -1925,7 +1953,55 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     currentMode_ = mode;
     currentWords_ = std::move(words);
     records_.clear();
-    currentIndex_ = qMax(0, startIndex);
+    roundMistakeCounts_.clear();
+    sessionWordTargetCount_ = 0;
+
+    constexpr int kRoundLimit = 20;
+    int normalizedStart = qMax(0, startIndex);
+    if (normalizedStart > currentWords_.size()) {
+        normalizedStart = currentWords_.size();
+    }
+
+    // 恢复时从断点开始：已完成前缀直接移除。
+    if (normalizedStart > 0) {
+        currentWords_ = currentWords_.mid(normalizedStart);
+    }
+
+    // 兜底去重：避免会话中错词回尾导致持久化后重复。
+    QVector<WordItem> deduped;
+    deduped.reserve(currentWords_.size());
+    QSet<int> pickedIds;
+    for (const WordItem &word : currentWords_) {
+        if (word.id > 0 && pickedIds.contains(word.id)) {
+            continue;
+        }
+        deduped.push_back(word);
+        if (word.id > 0) {
+            pickedIds.insert(word.id);
+        }
+    }
+    currentWords_ = std::move(deduped);
+
+    // 若不足 20，按当前模式从池中补齐；不够就按实际数量开组。
+    if (currentWords_.size() < kRoundLimit) {
+        const int fetchLimit = 200;
+        const QVector<WordItem> candidates = (mode == SessionMode::Review)
+                                                 ? db_.fetchReviewBatch(QDateTime::currentDateTime(), fetchLimit)
+                                                 : db_.fetchLearningBatch(fetchLimit);
+        for (const WordItem &candidate : candidates) {
+            if (pickedIds.contains(candidate.id)) {
+                continue;
+            }
+            currentWords_.push_back(candidate);
+            pickedIds.insert(candidate.id);
+            if (currentWords_.size() >= kRoundLimit) {
+                break;
+            }
+        }
+    }
+
+    sessionWordTargetCount_ = qMin(kRoundLimit, currentWords_.size());
+    currentIndex_ = 0;
     if (currentIndex_ >= currentWords_.size()) {
         clearSessionForMode(mode);
         return;
@@ -1943,9 +2019,11 @@ void VibeSpellerWindow::showCurrentWord() {
     }
 
     const WordItem &word = currentWords_.at(currentIndex_);
+    const int totalTarget = qMax(1, sessionWordTargetCount_);
+    const int displayIndex = qMin(records_.size() + 1, totalTarget);
     spellingPage_->setWord(word,
-                           currentIndex_ + 1,
-                           currentWords_.size(),
+                           displayIndex,
+                           totalTarget,
                            currentMode_ == SessionMode::Review);
 }
 

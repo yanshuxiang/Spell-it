@@ -1,6 +1,7 @@
 #ifndef GUI_WIDGETS_H
 #define GUI_WIDGETS_H
 
+#include <QHash>
 #include <QWidget>
 
 #include "database_manager.h"
@@ -231,6 +232,8 @@ private:
     bool returnToWordBooksAfterImport_ = false;
     QVector<WordItem> currentWords_;
     QVector<PracticeRecord> records_;
+    QHash<int, int> roundMistakeCounts_;
+    int sessionWordTargetCount_ = 0;
     int currentIndex_ = 0;
     SessionMode currentMode_ = SessionMode::Learning;
     bool isStudyTrackingActive_ = false;
