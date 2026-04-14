@@ -15,6 +15,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMouseEvent>
 #include <QColor>
 #include <QIcon>
 #include <QPainter>
@@ -971,6 +972,22 @@ void SummaryPageWidget::setSummary(const QVector<PracticeRecord> &records, bool 
 
 StatisticsPageWidget::StatisticsPageWidget(QWidget *parent)
     : QWidget(parent) {
+    setMouseTracking(true);
+
+    hoverTip_ = new QLabel(this);
+    hoverTip_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    hoverTip_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    hoverTip_->setMargin(0);
+    hoverTip_->setStyleSheet(QStringLiteral(
+        "background: rgba(15,23,42,0.92);"
+        "color: #f8fafc;"
+        "border: 1px solid rgba(203,213,225,0.25);"
+        "border-radius: 10px;"
+        "padding: 6px 8px;"
+        "font-size: 12px;"
+        "font-weight: 600;"));
+    hoverTip_->hide();
+
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(18, 16, 18, 18);
     root->setSpacing(16);
@@ -1004,12 +1021,22 @@ StatisticsPageWidget::StatisticsPageWidget(QWidget *parent)
 
 void StatisticsPageWidget::setLogs(const QVector<DatabaseManager::DailyLog> &logs) {
     logs_ = logs;
+    hoverBars_.clear();
+    hoveredBarIndex_ = -1;
+    if (hoverTip_) {
+        hoverTip_->hide();
+    }
     update();
 }
 
 void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     QWidget::paintEvent(event);
+    hoverBars_.clear();
+
     if (logs_.isEmpty()) {
+        if (hoverTip_) {
+            hoverTip_->hide();
+        }
         return;
     }
 
@@ -1080,6 +1107,20 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(learningColor);
             painter.drawRoundedRect(QRect(centerX - barWidth / 2, baseY - learningHeight, barWidth, learningHeight), 4, 4);
+        }
+
+        if (fullHeight > 0) {
+            HoverBarInfo info;
+            const int hoverWidth = qMax(16, barWidth + 10);
+            const int hoverHeight = qMax(18, fullHeight);
+            info.rect = QRect(centerX - hoverWidth / 2, baseY - hoverHeight, hoverWidth, hoverHeight);
+            const QString dayText = (i == logs_.size() - 1) ? QStringLiteral("今日") : log.date;
+            info.text = QStringLiteral("%1\n学习：%2 词\n复习：%3 词\n合计：%4 词")
+                            .arg(dayText)
+                            .arg(log.learningCount)
+                            .arg(log.reviewCount)
+                            .arg(total);
+            hoverBars_.push_back(info);
         }
 
         painter.setPen(textMuted);
@@ -1191,6 +1232,46 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 24, bottomCard.width() / 2, 22),
                      Qt::AlignCenter,
                      QStringLiteral("%1 分钟").arg(weeklyMinutes));
+}
+
+void StatisticsPageWidget::mouseMoveEvent(QMouseEvent *event) {
+    int hitIndex = -1;
+    for (int i = 0; i < hoverBars_.size(); ++i) {
+        if (hoverBars_[i].rect.contains(event->pos())) {
+            hitIndex = i;
+            break;
+        }
+    }
+
+    if (hitIndex >= 0) {
+        hoveredBarIndex_ = hitIndex;
+        if (hoverTip_) {
+            const HoverBarInfo &info = hoverBars_[hitIndex];
+            hoverTip_->setText(info.text);
+            hoverTip_->adjustSize();
+            QPoint popupPos = event->pos() - QPoint(hoverTip_->width() + 10, hoverTip_->height() + 10);
+            // Keep tooltip inside current page.
+            popupPos.setX(qBound(6, popupPos.x(), width() - hoverTip_->width() - 6));
+            popupPos.setY(qBound(6, popupPos.y(), height() - hoverTip_->height() - 6));
+            hoverTip_->move(popupPos);
+            hoverTip_->show();
+        }
+    } else {
+        hoveredBarIndex_ = -1;
+        if (hoverTip_) {
+            hoverTip_->hide();
+        }
+    }
+
+    QWidget::mouseMoveEvent(event);
+}
+
+void StatisticsPageWidget::leaveEvent(QEvent *event) {
+    hoveredBarIndex_ = -1;
+    if (hoverTip_) {
+        hoverTip_->hide();
+    }
+    QWidget::leaveEvent(event);
 }
 
 WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
@@ -1684,13 +1765,6 @@ void VibeSpellerWindow::onSkipWord() {
 void VibeSpellerWindow::onExitSession() {
     if (currentWords_.isEmpty() || currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
         stack_->setCurrentWidget(homePage_);
-        return;
-    }
-
-    const bool answer = showQuestionPrompt(this,
-                                           QStringLiteral("退出练习"),
-                                           QStringLiteral("退出后会保存当前进度，下次继续这组 20 词。是否退出？"));
-    if (!answer) {
         return;
     }
 

@@ -2,6 +2,7 @@
 #define GUI_WIDGETS_H
 
 #include <QHash>
+#include <QRect>
 #include <QWidget>
 
 #include "database_manager.h"
@@ -14,6 +15,7 @@ class QListWidgetItem;
 class QCloseEvent;
 class QEvent;
 class QKeyEvent;
+class QMouseEvent;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
@@ -138,10 +140,20 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
+    struct HoverBarInfo {
+        QRect rect;
+        QString text;
+    };
+
     QPushButton *backButton_ = nullptr;
+    QLabel *hoverTip_ = nullptr;
     QVector<DatabaseManager::DailyLog> logs_;
+    QVector<HoverBarInfo> hoverBars_;
+    int hoveredBarIndex_ = -1;
 };
 
 class WordBooksPageWidget : public QWidget {
