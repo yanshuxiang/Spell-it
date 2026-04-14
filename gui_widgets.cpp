@@ -1520,8 +1520,10 @@ void VibeSpellerWindow::initializeDatabase() {
 void VibeSpellerWindow::refreshHomeCounts() {
     db_.reconcileFirstDayDailyLog();
 
-    int learning = qMin(20, db_.unlearnedCount());
-    int review = qMin(20, db_.dueReviewCount(QDateTime::currentDateTime()));
+    // 首页展示“总任务量”：
+    // 学习 = 当前词书剩余未学总数；复习 = 今天到期需复习总数。
+    const int learning = db_.unlearnedCount();
+    const int review = db_.dueReviewCount(QDateTime::currentDateTime());
 
     int todayLearning = 0;
     int todayReview = 0;
@@ -1529,15 +1531,6 @@ void VibeSpellerWindow::refreshHomeCounts() {
     if (!logs.isEmpty()) {
         todayLearning = logs.last().learningCount;
         todayReview = logs.last().reviewCount;
-    }
-
-    QVector<WordItem> savedWords;
-    int savedIndex = 0;
-    if (db_.loadSessionProgress(modeKey(SessionMode::Learning), savedWords, savedIndex)) {
-        learning = qMax(0, savedWords.size() - savedIndex);
-    }
-    if (db_.loadSessionProgress(modeKey(SessionMode::Review), savedWords, savedIndex)) {
-        review = qMax(0, savedWords.size() - savedIndex);
     }
 
     homePage_->setCounts(learning, review, todayLearning, todayReview);
