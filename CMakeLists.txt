@@ -17,7 +17,13 @@ add_executable(VibeSpeller
     audio_downloader.h
     audio_downloader.cpp
     gui_widgets.h
+    gui_widgets_internal.h
     gui_widgets.cpp
+    gui_widgets_internal.cpp
+    gui_widgets_home_mapping.cpp
+    gui_widgets_spelling.cpp
+    gui_widgets_summary_stats_books.cpp
+    gui_widgets_window.cpp
 )
 
 target_link_libraries(VibeSpeller PRIVATE Qt6::Widgets Qt6::Sql Qt6::Network)
