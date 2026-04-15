@@ -5,7 +5,7 @@
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
-    const bool kDebugMode = true;
+    const bool kDebugMode = false;
     app.setProperty("vibespeller_debug", kDebugMode);
 
     QFont uiFont;

@@ -87,18 +87,28 @@ public:
     void setDebugMode(bool enabled);
     void setDebugInfo(const QDateTime &nextReview, int attemptCount, int correctCount);
     void clearDebugInfo();
+    void playCorrectTransition(const WordItem &currentWord,
+                               const WordItem &nextWord,
+                               int nextIndex,
+                               int totalCount,
+                               bool isReviewMode);
+    void playWrongShake();
 
 signals:
     void submitted(const QString &text);
     void exitRequested();
     void proceedRequested();
     void userActivity();
+    void correctTransitionFinished();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void setAwaitingProceed(bool awaiting);
+    void applyInputDefaultStyle();
+    void refreshAnimationBasePositions();
 
     QLabel *modeLabel_ = nullptr;
     QLabel *progressLabel_ = nullptr;
@@ -109,9 +119,15 @@ private:
     QLabel *debugScheduleLabel_ = nullptr;
     QLabel *debugAccuracyLabel_ = nullptr;
     QPushButton *exitButton_ = nullptr;
+    QGraphicsOpacityEffect *translationOpacity_ = nullptr;
+    QGraphicsOpacityEffect *inputOpacity_ = nullptr;
     bool debugMode_ = false;
     bool awaitingProceed_ = false;
     bool proceedKeyArmed_ = false;
+    bool inTransition_ = false;
+    bool resetInputOnNextType_ = false;
+    QPoint translationBasePos_;
+    QPoint inputBasePos_;
 };
 
 class SummaryPageWidget : public QWidget {

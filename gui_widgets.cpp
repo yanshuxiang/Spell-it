@@ -25,6 +25,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPainterPath>
+#include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QProgressBar>
 #include <QPushButton>
@@ -51,6 +52,24 @@ enum class PromptType {
 constexpr int kStudyIdleCutoffSeconds = 120;
 // 每组练习词数。调试时可改成 5 等更小值。
 constexpr int kSessionBatchSize = 5;
+// 正确切词动画时长（毫秒），默认 0.7 秒。
+constexpr int kCorrectTransitionMs = 300;
+// 错误抖动动画时长（毫秒），默认 0.2 秒。
+constexpr int kWrongShakeMs = 200;
+// 正确切词位移幅度（像素），调大可让左右切换更明显。
+constexpr int kTransitionShiftPx = 300;
+// 错误抖动位移幅度（像素），调大晃动更明显。
+constexpr int kWrongShakeOffsetPx = 3;
+
+QString defaultInputStyle() {
+    return QStringLiteral(
+        "border: none;"
+        "border-bottom: 2px solid #e5e7eb;"
+        "color: #6b7280;"
+        "font-size: 35px;"
+        "padding: 0 8px;"
+        "background: transparent;");
+}
 
 QString findBestColumn(const QStringList &headers, const QStringList &keywords) {
     for (const QString &keyword : keywords) {
@@ -789,18 +808,23 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     inputEdit_->setPlaceholderText(QStringLiteral("输入后按回车"));
     inputEdit_->setAlignment(Qt::AlignCenter);
     inputEdit_->setFixedWidth(310);
-    inputEdit_->setMinimumHeight(42);
-    inputEdit_->setStyleSheet(QStringLiteral(
-        "border: none;"
-        "border-bottom: 2px solid #e5e7eb;"
-        "color: #6b7280;"
-        "font-size: 35px;"
-        "padding: 4px 8px;"
-        "background: transparent;"));
+    inputEdit_->setFixedHeight(64);
+    inputEdit_->setStyleSheet(defaultInputStyle());
+    inputEdit_->installEventFilter(this);
 
     feedbackLabel_ = new QLabel(this);
     feedbackLabel_->setAlignment(Qt::AlignCenter);
-    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #6b7280;"));
+    feedbackLabel_->setWordWrap(true);
+    feedbackLabel_->setMinimumHeight(34);
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; color: #6b7280;"));
+
+    translationOpacity_ = new QGraphicsOpacityEffect(translationLabel_);
+    translationOpacity_->setOpacity(1.0);
+    translationLabel_->setGraphicsEffect(translationOpacity_);
+
+    inputOpacity_ = new QGraphicsOpacityEffect(inputEdit_);
+    inputOpacity_->setOpacity(1.0);
+    inputEdit_->setGraphicsEffect(inputOpacity_);
 
     debugHost_ = new QWidget(this);
     debugHost_->setVisible(false);
@@ -842,6 +866,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     inputRow->addWidget(inputEdit_, 0, Qt::AlignHCenter);
     inputRow->addStretch(1);
     root->addLayout(inputRow);
+    root->addSpacing(16);
     root->addWidget(feedbackLabel_);
     root->addWidget(debugHost_);
     root->addStretch(2);
@@ -859,13 +884,22 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
 }
 
 void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
+    inTransition_ = false;
+    resetInputOnNextType_ = false;
     modeLabel_->setText(isReviewMode ? QStringLiteral("复习模式") : QStringLiteral("学习模式"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(totalCount));
     translationLabel_->setText(word.translation);
     inputEdit_->clear();
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    applyInputDefaultStyle();
+    translationOpacity_->setOpacity(1.0);
+    inputOpacity_->setOpacity(1.0);
     clearFeedback();
     setAwaitingProceed(false);
     setInputEnabled(true);
+    refreshAnimationBasePositions();
+    translationLabel_->move(translationBasePos_);
+    inputEdit_->move(inputBasePos_);
     inputEdit_->setFocus();
 }
 
@@ -877,14 +911,27 @@ void SpellingPageWidget::setInputEnabled(bool enabled) {
     }
 }
 
+void SpellingPageWidget::applyInputDefaultStyle() {
+    inputEdit_->setStyleSheet(defaultInputStyle());
+}
+
+void SpellingPageWidget::refreshAnimationBasePositions() {
+    if (layout() != nullptr) {
+        layout()->activate();
+    }
+    translationBasePos_ = translationLabel_->pos();
+    inputBasePos_ = inputEdit_->pos();
+}
+
 void SpellingPageWidget::showFeedback(const QString &text, const QString &colorHex) {
     feedbackLabel_->setText(text);
-    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: %1;").arg(colorHex));
+    feedbackLabel_->setStyleSheet(
+        QStringLiteral("font-size: 20px; font-weight: 700; color: %1; padding-top: 4px;").arg(colorHex));
 }
 
 void SpellingPageWidget::clearFeedback() {
     feedbackLabel_->setText(QString());
-    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 17px; font-weight: 700; color: #6b7280;"));
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 600; color: #6b7280;"));
 }
 
 void SpellingPageWidget::setDebugMode(bool enabled) {
@@ -917,6 +964,159 @@ void SpellingPageWidget::clearDebugInfo() {
     debugAccuracyLabel_->setText(QString());
 }
 
+void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
+                                               const WordItem &nextWord,
+                                               int nextIndex,
+                                               int totalCount,
+                                               bool isReviewMode) {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+
+    setInputEnabled(false);
+    setAwaitingProceed(false);
+
+    refreshAnimationBasePositions();
+
+    auto *currentTranslation = new QLabel(translationLabel_->text(), this);
+    currentTranslation->setAlignment(Qt::AlignCenter);
+    currentTranslation->setWordWrap(true);
+    currentTranslation->setGeometry(translationLabel_->geometry());
+    currentTranslation->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    auto *currentTransOpacity = new QGraphicsOpacityEffect(currentTranslation);
+    currentTransOpacity->setOpacity(1.0);
+    currentTranslation->setGraphicsEffect(currentTransOpacity);
+    currentTranslation->show();
+
+    auto *currentWordLabel = new QLabel(currentWord.word, this);
+    currentWordLabel->setAlignment(Qt::AlignCenter);
+    currentWordLabel->setGeometry(inputEdit_->geometry());
+    currentWordLabel->setStyleSheet(QStringLiteral("font-size: 35px; font-weight: 600; color: #b7e4c7;"));
+    auto *currentWordOpacity = new QGraphicsOpacityEffect(currentWordLabel);
+    currentWordOpacity->setOpacity(1.0);
+    currentWordLabel->setGraphicsEffect(currentWordOpacity);
+    currentWordLabel->show();
+
+    modeLabel_->setText(isReviewMode ? QStringLiteral("复习模式") : QStringLiteral("学习模式"));
+    progressLabel_->setText(QStringLiteral("%1 / %2").arg(nextIndex).arg(totalCount));
+    translationLabel_->setText(nextWord.translation);
+    inputEdit_->clear();
+    resetInputOnNextType_ = false;
+    clearFeedback();
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    applyInputDefaultStyle();
+
+    translationLabel_->move(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
+    inputEdit_->move(inputBasePos_ + QPoint(kTransitionShiftPx, 0));
+    translationOpacity_->setOpacity(0.0);
+    inputOpacity_->setOpacity(0.0);
+
+    auto *group = new QParallelAnimationGroup(this);
+
+    auto *outTransMove = new QPropertyAnimation(currentTranslation, "pos", group);
+    outTransMove->setDuration(kCorrectTransitionMs);
+    outTransMove->setStartValue(translationBasePos_);
+    outTransMove->setEndValue(translationBasePos_ - QPoint(kTransitionShiftPx, 0));
+
+    auto *outWordMove = new QPropertyAnimation(currentWordLabel, "pos", group);
+    outWordMove->setDuration(kCorrectTransitionMs);
+    outWordMove->setStartValue(inputBasePos_);
+    outWordMove->setEndValue(inputBasePos_ - QPoint(kTransitionShiftPx, 0));
+
+    auto *outTransFade = new QPropertyAnimation(currentTransOpacity, "opacity", group);
+    outTransFade->setDuration(kCorrectTransitionMs);
+    outTransFade->setKeyValueAt(0.0, 1.0);
+    outTransFade->setKeyValueAt(0.45, 0.0);
+    outTransFade->setKeyValueAt(1.0, 0.0);
+
+    auto *outWordFade = new QPropertyAnimation(currentWordOpacity, "opacity", group);
+    outWordFade->setDuration(kCorrectTransitionMs);
+    outWordFade->setStartValue(1.0);
+    outWordFade->setEndValue(0.0);
+
+    auto *inTransMove = new QPropertyAnimation(translationLabel_, "pos", group);
+    inTransMove->setDuration(kCorrectTransitionMs);
+    inTransMove->setStartValue(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
+    inTransMove->setEndValue(translationBasePos_);
+
+    auto *inWordMove = new QPropertyAnimation(inputEdit_, "pos", group);
+    inWordMove->setDuration(kCorrectTransitionMs);
+    inWordMove->setStartValue(inputBasePos_ + QPoint(kTransitionShiftPx, 0));
+    inWordMove->setEndValue(inputBasePos_);
+
+    auto *inTransFade = new QPropertyAnimation(translationOpacity_, "opacity", group);
+    inTransFade->setDuration(kCorrectTransitionMs);
+    inTransFade->setKeyValueAt(0.0, 0.0);
+    inTransFade->setKeyValueAt(0.35, 0.0);
+    inTransFade->setKeyValueAt(1.0, 1.0);
+
+    auto *inWordFade = new QPropertyAnimation(inputOpacity_, "opacity", group);
+    inWordFade->setDuration(kCorrectTransitionMs);
+    inWordFade->setStartValue(0.0);
+    inWordFade->setEndValue(1.0);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, currentTranslation, currentWordLabel]() {
+        currentTranslation->deleteLater();
+        currentWordLabel->deleteLater();
+        translationLabel_->move(translationBasePos_);
+        inputEdit_->move(inputBasePos_);
+        translationOpacity_->setOpacity(1.0);
+        inputOpacity_->setOpacity(1.0);
+        inTransition_ = false;
+        setInputEnabled(true);
+        inputEdit_->setFocus();
+        emit correctTransitionFinished();
+        group->deleteLater();
+    });
+
+    group->start();
+}
+
+void SpellingPageWidget::playWrongShake() {
+    if (inTransition_) {
+        return;
+    }
+
+    refreshAnimationBasePositions();
+    resetInputOnNextType_ = true;
+
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    inputEdit_->setStyleSheet(QStringLiteral(
+        "border: none;"
+        "border-bottom: 2px solid #e5e7eb;"
+        "color: #ef4444;"
+        "font-size: 35px;"
+        "padding: 0 8px;"
+        "background: transparent;"));
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *shakeTranslation = new QPropertyAnimation(translationLabel_, "pos", group);
+    shakeTranslation->setDuration(kWrongShakeMs);
+    shakeTranslation->setKeyValueAt(0.0, translationBasePos_);
+    shakeTranslation->setKeyValueAt(0.2, translationBasePos_ + QPoint(-kWrongShakeOffsetPx, 0));
+    shakeTranslation->setKeyValueAt(0.4, translationBasePos_ + QPoint(kWrongShakeOffsetPx, 0));
+    shakeTranslation->setKeyValueAt(0.6, translationBasePos_ + QPoint(-(kWrongShakeOffsetPx * 3) / 4, 0));
+    shakeTranslation->setKeyValueAt(0.8, translationBasePos_ + QPoint((kWrongShakeOffsetPx * 3) / 4, 0));
+    shakeTranslation->setKeyValueAt(1.0, translationBasePos_);
+
+    auto *shakeInput = new QPropertyAnimation(inputEdit_, "pos", group);
+    shakeInput->setDuration(kWrongShakeMs);
+    shakeInput->setKeyValueAt(0.0, inputBasePos_);
+    shakeInput->setKeyValueAt(0.2, inputBasePos_ + QPoint(-kWrongShakeOffsetPx, 0));
+    shakeInput->setKeyValueAt(0.4, inputBasePos_ + QPoint(kWrongShakeOffsetPx, 0));
+    shakeInput->setKeyValueAt(0.6, inputBasePos_ + QPoint(-(kWrongShakeOffsetPx * 3) / 4, 0));
+    shakeInput->setKeyValueAt(0.8, inputBasePos_ + QPoint((kWrongShakeOffsetPx * 3) / 4, 0));
+    shakeInput->setKeyValueAt(1.0, inputBasePos_);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group]() {
+        translationLabel_->move(translationBasePos_);
+        inputEdit_->move(inputBasePos_);
+        group->deleteLater();
+    });
+    group->start();
+}
+
 void SpellingPageWidget::keyPressEvent(QKeyEvent *event) {
     if (awaitingProceed_
         && (event->key() == Qt::Key_Return
@@ -933,6 +1133,29 @@ void SpellingPageWidget::keyPressEvent(QKeyEvent *event) {
         return;
     }
     QWidget::keyPressEvent(event);
+}
+
+bool SpellingPageWidget::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == inputEdit_ && event->type() == QEvent::KeyPress && resetInputOnNextType_) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        const bool isReturnKey = (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter);
+        if (isReturnKey) {
+            return QWidget::eventFilter(watched, event);
+        }
+
+        const bool hasTextInput = !keyEvent->text().isEmpty()
+                                  && !(keyEvent->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+        if (hasTextInput) {
+            resetInputOnNextType_ = false;
+            applyInputDefaultStyle();
+            const QString typed = keyEvent->text();
+            inputEdit_->clear();
+            inputEdit_->setText(typed);
+            emit userActivity();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void SpellingPageWidget::setAwaitingProceed(bool awaiting) {
@@ -2069,10 +2292,34 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
                 records_.push_back(record);
                 roundMistakeCounts_.remove(current.id);
                 firstWrongInputs_.remove(current.id);
+                if (currentIndex_ + 1 < currentWords_.size()) {
+                    const int nextIndex = currentIndex_ + 1;
+                    const int totalTarget = qMax(1, sessionWordTargetCount_);
+                    const int displayIndex = qMin(records_.size() + 1, totalTarget);
+                    const WordItem nextWord = currentWords_.at(nextIndex);
+                    currentIndex_ = nextIndex;
+                    persistCurrentSession();
+                    updateSpellingDebugInfo(nextWord.id);
+                    spellingPage_->playCorrectTransition(current, nextWord, displayIndex, totalTarget, currentMode_ == SessionMode::Review);
+                    return;
+                }
+                moveToNextWord();
+                return;
             } else {
                 // 进入下一次回尾复现前重置“本次出现”的错误计数，
                 // 避免旧计数让下一次出现出现“无论对错都跳词”的体感。
                 roundMistakeCounts_.insert(current.id, 0);
+            }
+            if (currentIndex_ + 1 < currentWords_.size()) {
+                const int nextIndex = currentIndex_ + 1;
+                const int totalTarget = qMax(1, sessionWordTargetCount_);
+                const int displayIndex = qMin(records_.size() + 1, totalTarget);
+                const WordItem nextWord = currentWords_.at(nextIndex);
+                currentIndex_ = nextIndex;
+                persistCurrentSession();
+                updateSpellingDebugInfo(nextWord.id);
+                spellingPage_->playCorrectTransition(current, nextWord, displayIndex, totalTarget, currentMode_ == SessionMode::Review);
+                return;
             }
             moveToNextWord();
             return;
@@ -2094,6 +2341,17 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
         records_.push_back(record);
         roundMistakeCounts_.remove(current.id);
         firstWrongInputs_.remove(current.id);
+        if (currentIndex_ + 1 < currentWords_.size()) {
+            const int nextIndex = currentIndex_ + 1;
+            const int totalTarget = qMax(1, sessionWordTargetCount_);
+            const int displayIndex = qMin(records_.size() + 1, totalTarget);
+            const WordItem nextWord = currentWords_.at(nextIndex);
+            currentIndex_ = nextIndex;
+            persistCurrentSession();
+            updateSpellingDebugInfo(nextWord.id);
+            spellingPage_->playCorrectTransition(current, nextWord, displayIndex, totalTarget, currentMode_ == SessionMode::Review);
+            return;
+        }
         moveToNextWord();
         return;
     }
@@ -2136,6 +2394,7 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     }
 
     spellingPage_->setInputEnabled(true);
+    spellingPage_->playWrongShake();
     spellingPage_->showFeedback(
         QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
         QStringLiteral("#4bc816b6"));
