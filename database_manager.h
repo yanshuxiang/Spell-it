@@ -64,8 +64,8 @@ public:
     int unlearnedCount() const;
     int dueReviewCount(const QDateTime &now = QDateTime::currentDateTime()) const;
 
-    QVector<WordItem> fetchLearningBatch(int limit = 20) const;
-    QVector<WordItem> fetchReviewBatch(const QDateTime &now = QDateTime::currentDateTime(), int limit = 20) const;
+    QVector<WordItem> fetchLearningBatch(int limit) const;
+    QVector<WordItem> fetchReviewBatch(const QDateTime &now, int limit) const;
     bool saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex);
     bool loadSessionProgress(const QString &mode, QVector<WordItem> &words, int &currentIndex);
     bool clearSessionProgress(const QString &mode);

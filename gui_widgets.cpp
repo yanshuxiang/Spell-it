@@ -46,6 +46,8 @@ enum class PromptType {
 };
 
 constexpr int kStudyIdleCutoffSeconds = 120;
+// 每组练习词数。调试时可改成 5 等更小值。
+constexpr int kSessionBatchSize = 5;
 
 QString findBestColumn(const QStringList &headers, const QStringList &keywords) {
     for (const QString &keyword : keywords) {
@@ -756,16 +758,6 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     feedbackLabel_->setAlignment(Qt::AlignCenter);
     feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #6b7280;"));
 
-    skipButton_ = new QPushButton(QStringLiteral("看答案"), this);
-    skipButton_->setFixedSize(104, 42);
-    skipButton_->setStyleSheet(QStringLiteral("font-size: 12px; border-radius: 12px;"));
-
-    auto *bottom = new QHBoxLayout();
-    bottom->setContentsMargins(0, 0, 0, 0);
-    bottom->addStretch(1);
-    bottom->addWidget(skipButton_);
-    bottom->addStretch(1);
-
     root->addLayout(top);
     root->addStretch(1);
     root->addWidget(translationLabel_);
@@ -777,16 +769,12 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     root->addLayout(inputRow);
     root->addWidget(feedbackLabel_);
     root->addStretch(2);
-    root->addLayout(bottom);
+    root->addSpacing(10);
 
     connect(inputEdit_, &QLineEdit::textEdited, this, &SpellingPageWidget::userActivity);
     connect(inputEdit_, &QLineEdit::returnPressed, this, [this]() {
         emit userActivity();
         emit submitted(inputEdit_->text());
-    });
-    connect(skipButton_, &QPushButton::clicked, this, [this]() {
-        emit userActivity();
-        emit skipped();
     });
     connect(exitButton_, &QPushButton::clicked, this, [this]() {
         emit userActivity();
@@ -808,7 +796,6 @@ void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int tot
 void SpellingPageWidget::setInputEnabled(bool enabled) {
     setAwaitingProceed(!enabled);
     inputEdit_->setEnabled(enabled);
-    skipButton_->setEnabled(enabled);
     if (!enabled) {
         setFocus(Qt::OtherFocusReason);
     }
@@ -1707,7 +1694,6 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(spellingPage_, &SpellingPageWidget::submitted, this, &VibeSpellerWindow::onSubmitAnswer);
     connect(spellingPage_, &SpellingPageWidget::proceedRequested, this, &VibeSpellerWindow::onProceedAfterFeedback);
-    connect(spellingPage_, &SpellingPageWidget::skipped, this, &VibeSpellerWindow::onSkipWord);
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
 
@@ -1756,7 +1742,7 @@ void VibeSpellerWindow::onStartLearning() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchLearningBatch(20);
+    const QVector<WordItem> words = db_.fetchLearningBatch(kSessionBatchSize);
     if (words.isEmpty()) {
         const bool answer = showQuestionPrompt(this,
                                                QStringLiteral("暂无学习任务"),
@@ -1775,7 +1761,7 @@ void VibeSpellerWindow::onStartReview() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchReviewBatch(QDateTime::currentDateTime(), 20);
+    const QVector<WordItem> words = db_.fetchReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
     if (words.isEmpty()) {
         const int tomorrowCount = db_.dueReviewCount(QDateTime::currentDateTime().addDays(1));
         showInfoPrompt(this,
@@ -1794,7 +1780,46 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
 
     const WordItem current = currentWords_.at(currentIndex_);
     const SpellingResult evaluated = db_.evaluateSpelling(text, current.word);
+    const int existingMistakes = roundMistakeCounts_.value(current.id, 0);
+    const bool hasWrongHistory = firstWrongInputs_.contains(current.id);
+    const auto hasSameWordAhead = [this, &current]() -> bool {
+        for (int i = currentIndex_ + 1; i < currentWords_.size(); ++i) {
+            if (currentWords_.at(i).id == current.id) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto removeSameWordAhead = [this, &current]() {
+        for (int i = currentWords_.size() - 1; i > currentIndex_; --i) {
+            if (currentWords_.at(i).id == current.id) {
+                currentWords_.removeAt(i);
+            }
+        }
+    };
+
     if (evaluated == SpellingResult::Mastered) {
+        // 若本词本轮出现过拼写错误，本次“拼对”仅用于加深记忆，不升级为熟悉。
+        if (hasWrongHistory) {
+            // 若后面还有同词，说明本轮仍需在队尾继续复现，不在当前这次结算。
+            if (!hasSameWordAhead()) {
+                PracticeRecord record;
+                record.word = current;
+                record.result = SpellingResult::Unfamiliar;
+                record.userInput = firstWrongInputs_.value(current.id, text);
+                record.skipped = false;
+                records_.push_back(record);
+                roundMistakeCounts_.remove(current.id);
+                firstWrongInputs_.remove(current.id);
+            } else {
+                // 进入下一次回尾复现前重置“本次出现”的错误计数，
+                // 避免旧计数让下一次出现出现“无论对错都跳词”的体感。
+                roundMistakeCounts_.insert(current.id, 0);
+            }
+            moveToNextWord();
+            return;
+        }
+
         if (!db_.applyReviewResult(current.id, SpellingResult::Mastered, false, QDateTime::currentDateTime())) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
@@ -1810,14 +1835,19 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
         record.skipped = false;
         records_.push_back(record);
         roundMistakeCounts_.remove(current.id);
+        firstWrongInputs_.remove(current.id);
         moveToNextWord();
         return;
     }
 
-    const int mistakeCount = roundMistakeCounts_.value(current.id, 0) + 1;
+    const int mistakeCount = existingMistakes + 1;
     roundMistakeCounts_.insert(current.id, mistakeCount);
+    if (!hasWrongHistory) {
+        firstWrongInputs_.insert(current.id, text);
+    }
 
-    if (mistakeCount > 3) {
+    // 本词本轮第一次拼错时，按“不熟悉”更新复习安排；后续错不重复入库。
+    if (!hasWrongHistory && mistakeCount == 1) {
         if (!db_.applyReviewResult(current.id, SpellingResult::Unfamiliar, true, QDateTime::currentDateTime())) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
@@ -1825,29 +1855,33 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
         } else {
             db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
         }
+    }
 
+    if (mistakeCount > 3) {
+        // 超过 3 次则本轮跳过：删除后续同词，不再继续推送。
+        removeSameWordAhead();
         PracticeRecord record;
         record.word = current;
         record.result = SpellingResult::Unfamiliar;
-        record.userInput = text;
+        record.userInput = firstWrongInputs_.value(current.id, text);
         record.skipped = true;
         records_.push_back(record);
         roundMistakeCounts_.remove(current.id);
-
-        spellingPage_->setInputEnabled(false);
-        spellingPage_->showFeedback(
-            QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
-            QStringLiteral("#4bc816b6"));
-        db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
+        firstWrongInputs_.remove(current.id);
+        moveToNextWord();
         return;
     }
 
-    currentWords_.push_back(current);
-    spellingPage_->setInputEnabled(false);
+    // 本词拼错后加入本轮末尾；若已在后续队列中则不重复追加。
+    if (!hasSameWordAhead()) {
+        currentWords_.push_back(current);
+    }
+
+    spellingPage_->setInputEnabled(true);
     spellingPage_->showFeedback(
         QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
         QStringLiteral("#4bc816b6"));
-    db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
+    persistCurrentSession();
 }
 
 void VibeSpellerWindow::onProceedAfterFeedback() {
@@ -1855,38 +1889,6 @@ void VibeSpellerWindow::onProceedAfterFeedback() {
         return;
     }
     moveToNextWord();
-}
-
-void VibeSpellerWindow::onSkipWord() {
-    if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
-        return;
-    }
-
-    const WordItem current = currentWords_.at(currentIndex_);
-    const SpellingResult result = SpellingResult::Unfamiliar;
-
-    if (!db_.applyReviewResult(current.id, result, true, QDateTime::currentDateTime())) {
-        showWarningPrompt(this,
-                          QStringLiteral("更新失败"),
-                          QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
-    } else {
-        // 跳过也代表完成了一次练习尝试，应计入当日学习/复习统计。
-        db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
-    }
-
-    PracticeRecord record;
-    record.word = current;
-    record.result = result;
-    record.userInput.clear();
-    record.skipped = true;
-    records_.push_back(record);
-    roundMistakeCounts_.remove(current.id);
-
-    spellingPage_->setInputEnabled(false);
-    spellingPage_->showFeedback(
-        QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
-        QStringLiteral("#4bc816b6"));
-    db_.saveSessionProgress(modeKey(currentMode_), currentWords_, currentIndex_ + 1);
 }
 
 void VibeSpellerWindow::onExitSession() {
@@ -2166,9 +2168,10 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     currentWords_ = std::move(words);
     records_.clear();
     roundMistakeCounts_.clear();
+    firstWrongInputs_.clear();
     sessionWordTargetCount_ = 0;
 
-    constexpr int kRoundLimit = 20;
+    constexpr int kRoundLimit = kSessionBatchSize;
     int normalizedStart = qMax(0, startIndex);
     if (normalizedStart > currentWords_.size()) {
         normalizedStart = currentWords_.size();
@@ -2194,7 +2197,19 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     }
     currentWords_ = std::move(deduped);
 
-    // 若不足 20，按当前模式从池中补齐；不够就按实际数量开组。
+    // 若历史会话是按更大批次（如 20）保存，而当前批次改小（如 5），
+    // 则按当前批次上限裁剪，确保所有流程都围绕 kSessionBatchSize 运行。
+    if (currentWords_.size() > kRoundLimit) {
+        currentWords_ = currentWords_.mid(0, kRoundLimit);
+        pickedIds.clear();
+        for (const WordItem &word : currentWords_) {
+            if (word.id > 0) {
+                pickedIds.insert(word.id);
+            }
+        }
+    }
+
+    // 若不足每组目标数，按当前模式从池中补齐；不够就按实际数量开组。
     if (currentWords_.size() < kRoundLimit) {
         const int fetchLimit = 200;
         const QVector<WordItem> candidates = (mode == SessionMode::Review)

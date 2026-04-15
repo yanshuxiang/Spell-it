@@ -86,7 +86,6 @@ public:
 
 signals:
     void submitted(const QString &text);
-    void skipped();
     void exitRequested();
     void proceedRequested();
     void userActivity();
@@ -103,7 +102,6 @@ private:
     QLineEdit *inputEdit_ = nullptr;
     QLabel *feedbackLabel_ = nullptr;
     QPushButton *exitButton_ = nullptr;
-    QPushButton *skipButton_ = nullptr;
     bool awaitingProceed_ = false;
     bool proceedKeyArmed_ = false;
 };
@@ -196,7 +194,6 @@ private slots:
     void onStartReview();
     void onSubmitAnswer(const QString &text);
     void onProceedAfterFeedback();
-    void onSkipWord();
     void onExitSession();
     void onOpenWordBooks();
     void onSelectWordBook(int bookId);
@@ -251,6 +248,7 @@ private:
     QVector<WordItem> currentWords_;
     QVector<PracticeRecord> records_;
     QHash<int, int> roundMistakeCounts_;
+    QHash<int, QString> firstWrongInputs_;
     int sessionWordTargetCount_ = 0;
     int currentIndex_ = 0;
     SessionMode currentMode_ = SessionMode::Learning;
