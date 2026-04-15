@@ -457,7 +457,9 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
 
     QSqlQuery query(database());
     if (!query.exec(QStringLiteral(
-            "SELECT b.id, b.name, b.is_active, COUNT(w.id) AS word_count "
+            "SELECT b.id, b.name, b.is_active, "
+            "COUNT(w.id) AS word_count, "
+            "SUM(CASE WHEN w.status != 0 THEN 1 ELSE 0 END) AS learned_count "
             "FROM word_books b "
             "LEFT JOIN words w ON w.book_id = b.id "
             "GROUP BY b.id, b.name, b.is_active "
@@ -472,6 +474,7 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
         item.name = query.value(1).toString();
         item.isActive = query.value(2).toInt() == 1;
         item.wordCount = query.value(3).toInt();
+        item.learnedCount = query.value(4).toInt();
         books.push_back(item);
     }
 

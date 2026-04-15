@@ -20,6 +20,8 @@ class QPushButton;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
+class QVBoxLayout;
+class QGraphicsOpacityEffect;
 
 struct PracticeRecord {
     WordItem word;
@@ -175,6 +177,10 @@ private:
     QVector<WordBookItem> books_;
     int activeBookId_ = -1;
     QLabel *metaLabel_ = nullptr;
+    QLabel *currentTitleLabel_ = nullptr;
+    QWidget *currentCardHost_ = nullptr;
+    QVBoxLayout *currentCardLayout_ = nullptr;
+    QLabel *otherTitleLabel_ = nullptr;
     QListWidget *booksList_ = nullptr;
     QPushButton *backButton_ = nullptr;
     QPushButton *addBookButton_ = nullptr;

@@ -25,6 +25,7 @@ struct WordBookItem {
     int id = -1;
     QString name;
     int wordCount = 0;
+    int learnedCount = 0;
     bool isActive = false;
 };
 

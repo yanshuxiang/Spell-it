@@ -18,9 +18,12 @@
 #include <QMouseEvent>
 #include <QColor>
 #include <QIcon>
+#include <QGraphicsOpacityEffect>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPainterPath>
+#include <QPropertyAnimation>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
@@ -143,6 +146,37 @@ QString coverColorForBook(int bookId) {
         return colors.first();
     }
     return colors.at(bookId % colors.size());
+}
+
+QString coverTextForBook(const QString &bookName) {
+    QString text = bookName.trimmed();
+    if (text.isEmpty()) {
+        text = QStringLiteral("词书");
+    }
+    if (text.size() > 4) {
+        text = text.left(4);
+    }
+    if (text.size() >= 3) {
+        text.insert(text.size() / 2, QChar('\n'));
+    }
+    return text;
+}
+
+QIcon createBackLineIcon() {
+    QPixmap pix(20, 20);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor("#374151"));
+    pen.setWidthF(1.9);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawLine(QPointF(13.5, 4.5), QPointF(6.5, 10.0));
+    painter.drawLine(QPointF(6.5, 10.0), QPointF(13.5, 15.5));
+    return QIcon(pix);
 }
 
 QIcon createBooksLineIcon() {
@@ -1278,14 +1312,16 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(24, 18, 24, 22);
-    root->setSpacing(14);
+    root->setSpacing(10);
 
     auto *header = new QHBoxLayout();
     header->setSpacing(14);
-    backButton_ = new QPushButton(QStringLiteral("返回"), this);
-    backButton_->setFixedSize(94, 46);
+    backButton_ = new QPushButton(this);
+    backButton_->setFixedSize(46, 46);
+    backButton_->setIcon(createBackLineIcon());
+    backButton_->setIconSize(QSize(20, 20));
     backButton_->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 600; border-radius: 14px;"
+        "border-radius: 14px;"
         "background: #f3f4f6; color: #374151;"
         "QPushButton:hover { background: #e9ebef; }"));
 
@@ -1305,8 +1341,20 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     header->addLayout(titleCol, 1);
     header->addStretch(1);
 
+    currentTitleLabel_ = new QLabel(QStringLiteral("当前学习词书"), this);
+    currentTitleLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
+
+    currentCardHost_ = new QWidget(this);
+    currentCardLayout_ = new QVBoxLayout(currentCardHost_);
+    currentCardLayout_->setContentsMargins(0, 0, 0, 0);
+    currentCardLayout_->setSpacing(0);
+
+    otherTitleLabel_ = new QLabel(QStringLiteral("其他词书"), this);
+    otherTitleLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
+
     booksList_ = new QListWidget(this);
-    booksList_->setSpacing(12);
+    booksList_->setSpacing(10);
+    booksList_->setSelectionMode(QAbstractItemView::NoSelection);
     booksList_->setFrameShape(QFrame::NoFrame);
     booksList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     booksList_->setStyleSheet(QStringLiteral(
@@ -1317,25 +1365,21 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
 
     addBookButton_ = new QPushButton(QStringLiteral("添加词书"), this);
-    addBookButton_->setFixedHeight(64);
+    addBookButton_->setFixedHeight(60);
     addBookButton_->setStyleSheet(QStringLiteral(
-        "font-size: 24px; font-weight: 700; border-radius: 20px;"
+        "font-size: 22px; font-weight: 700; border-radius: 18px;"
         "background: #0f1b3d; color: #ffffff;"
         "QPushButton:hover { background: #13224b; }"));
 
     root->addLayout(header);
+    root->addWidget(currentTitleLabel_);
+    root->addWidget(currentCardHost_);
+    root->addWidget(otherTitleLabel_);
     root->addWidget(booksList_, 1);
     root->addWidget(addBookButton_);
 
     connect(backButton_, &QPushButton::clicked, this, &WordBooksPageWidget::backClicked);
     connect(addBookButton_, &QPushButton::clicked, this, &WordBooksPageWidget::addBookClicked);
-    connect(booksList_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
-        if (!item) {
-            return;
-        }
-        const int bookId = item->data(Qt::UserRole).toInt();
-        emit wordBookSelected(bookId);
-    });
 }
 
 void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int activeBookId) {
@@ -1352,114 +1396,197 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int a
 }
 
 void WordBooksPageWidget::rebuildList() {
+    while (QLayoutItem *item = currentCardLayout_->takeAt(0)) {
+        if (item->widget()) {
+            item->widget()->deleteLater();
+        }
+        delete item;
+    }
+
     booksList_->clear();
     booksList_->setUpdatesEnabled(false);
 
-    for (const WordBookItem &book : books_) {
-        auto *item = new QListWidgetItem(booksList_);
-        item->setData(Qt::UserRole, book.id);
-        item->setSizeHint(QSize(0, 126));
-        booksList_->addItem(item);
+    if (books_.isEmpty()) {
+        auto *emptyCurrent = new QWidget(currentCardHost_);
+        emptyCurrent->setStyleSheet(QStringLiteral(
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
+        auto *emptyCurrentLayout = new QVBoxLayout(emptyCurrent);
+        emptyCurrentLayout->setContentsMargins(16, 12, 16, 12);
+        auto *emptyTitle = new QLabel(QStringLiteral("还没有词书"), emptyCurrent);
+        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
+        auto *emptyDesc = new QLabel(QStringLiteral("点击底部“添加词书”导入 CSV 开始练习"), emptyCurrent);
+        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+        emptyCurrentLayout->addWidget(emptyTitle);
+        emptyCurrentLayout->addWidget(emptyDesc);
+        currentCardLayout_->addWidget(emptyCurrent);
+        otherTitleLabel_->hide();
+        booksList_->hide();
+        booksList_->setUpdatesEnabled(true);
+        return;
+    }
 
-        auto *row = new QWidget(booksList_);
+    otherTitleLabel_->show();
+    booksList_->show();
+
+    WordBookItem activeBook = books_.first();
+    for (const WordBookItem &book : books_) {
+        if (book.id == activeBookId_) {
+            activeBook = book;
+            break;
+        }
+    }
+
+    const auto makeBookCard = [this](QWidget *parent, const WordBookItem &book, bool isCurrent) -> QWidget * {
+        auto *row = new QWidget(parent);
         row->setObjectName(QStringLiteral("bookRow"));
         row->setStyleSheet(QStringLiteral(
             "QWidget#bookRow {"
             "  background: %1;"
             "  border: 1px solid %2;"
-            "  border-radius: 20px;"
-            "}").arg(book.id == activeBookId_ ? QStringLiteral("#f8fafc") : QStringLiteral("#ffffff"),
-                     book.id == activeBookId_ ? QStringLiteral("#dbe4ef") : QStringLiteral("#e9eef5")));
+            "  border-radius: 18px;"
+            "}").arg(isCurrent ? QStringLiteral("#f8fafc") : QStringLiteral("#ffffff"),
+                     isCurrent ? QStringLiteral("#dbe4ef") : QStringLiteral("#e9eef5")));
 
         auto *layout = new QHBoxLayout(row);
-        layout->setContentsMargins(16, 14, 16, 14);
-        layout->setSpacing(14);
+        layout->setContentsMargins(14, 12, 14, 12);
+        layout->setSpacing(12);
 
         const QColor baseColor(coverColorForBook(book.id));
-        const QString coverTop = baseColor.lighter(120).name();
+        const QString coverTop = baseColor.lighter(118).name();
         const QString coverBottom = baseColor.darker(105).name();
 
-        auto *cover = new QLabel(QStringLiteral("BOOK"), row);
+        auto *cover = new QLabel(coverTextForBook(book.name), row);
         cover->setAlignment(Qt::AlignCenter);
-        cover->setFixedSize(72, 92);
+        cover->setFixedSize(68, 84);
+        cover->setWordWrap(true);
         cover->setStyleSheet(QStringLiteral(
-            "font-size: 12px; letter-spacing: 0.5px; font-weight: 700; color: rgba(255,255,255,0.92);"
-            "border-radius: 16px;"
+            "font-size: 12px; line-height: 1.1; font-weight: 700; color: rgba(255,255,255,0.95);"
+            "border-radius: 14px;"
             "background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 %1, stop:1 %2);")
-                                .arg(coverTop, coverBottom));
+                                 .arg(coverTop, coverBottom));
 
         auto *title = new QLabel(book.name, row);
-        title->setStyleSheet(
-            QStringLiteral("font-size: 20px; font-weight: 700; color: #0f172a; border: none; background: transparent;"));
+        title->setStyleSheet(QStringLiteral(
+            "font-size: 20px; font-weight: 700; color: #0f172a;"
+            "background: transparent; border: none;"));
         title->setWordWrap(true);
 
         auto *count = new QLabel(QStringLiteral("%1 词").arg(book.wordCount), row);
-        count->setStyleSheet(QStringLiteral("font-size: 15px; color: #94a3b8; border: none; background: transparent;"));
+        count->setStyleSheet(QStringLiteral(
+            "font-size: 15px; color: #94a3b8;"
+            "background: transparent; border: none;"));
 
         auto *textLayout = new QVBoxLayout();
-        textLayout->setContentsMargins(0, 4, 0, 4);
-        textLayout->setSpacing(4);
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(5);
         textLayout->addWidget(title);
         textLayout->addWidget(count);
-        textLayout->addStretch(1);
 
-        auto *status = new QLabel(book.id == activeBookId_ ? QStringLiteral("正在学习") : QString(), row);
-        status->setStyleSheet(
-            book.id == activeBookId_
-                ? QStringLiteral(
-                      "font-size: 16px; font-weight: 700; color: #ea580c;"
-                      "padding: 6px 10px; border-radius: 10px;"
-                      "border: 1px solid rgba(251,146,60,0.35);"
-                      "background: rgba(251,146,60,0.12);")
-                : QStringLiteral(
-                      "font-size: 14px; font-weight: 600; color: #9ca3af;"
-                      "padding: 0; border: none; background: transparent;"));
-        if (book.id != activeBookId_) {
-            status->setText(QStringLiteral("点击切换"));
+        if (isCurrent) {
+            auto *progressBar = new QProgressBar(row);
+            progressBar->setTextVisible(false);
+            progressBar->setRange(0, qMax(1, book.wordCount));
+            progressBar->setValue(qBound(0, book.learnedCount, qMax(1, book.wordCount)));
+            progressBar->setFixedHeight(10);
+            progressBar->setStyleSheet(QStringLiteral(
+                "QProgressBar {"
+                "  border: none;"
+                "  border-radius: 5px;"
+                "  background: #e8edf3;"
+                "}"
+                "QProgressBar::chunk {"
+                "  border-radius: 5px;"
+                "  background: #0ea5a4;"
+                "}"));
+
+            auto *progressText = new QHBoxLayout();
+            progressText->setContentsMargins(0, 0, 0, 0);
+            progressText->setSpacing(4);
+            auto *learnedLabel = new QLabel(QStringLiteral("已学习 %1").arg(book.learnedCount), row);
+            learnedLabel->setStyleSheet(QStringLiteral(
+                "font-size: 13px; color: #475569; background: transparent; border: none;"));
+            auto *totalLabel = new QLabel(QStringLiteral("总词数 %1").arg(book.wordCount), row);
+            totalLabel->setStyleSheet(QStringLiteral(
+                "font-size: 13px; color: #64748b; background: transparent; border: none;"));
+            progressText->addWidget(learnedLabel, 0, Qt::AlignLeft);
+            progressText->addStretch();
+            progressText->addWidget(totalLabel, 0, Qt::AlignRight);
+
+            textLayout->addSpacing(2);
+            textLayout->addWidget(progressBar);
+            textLayout->addLayout(progressText);
         }
-        status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        textLayout->addStretch();
+
+        auto *rightLayout = new QVBoxLayout();
+        rightLayout->setContentsMargins(0, 0, 0, 0);
+        rightLayout->setSpacing(8);
+        rightLayout->addStretch();
+
+        if (!isCurrent) {
+            auto *learnButton = new QPushButton(QStringLiteral("学习"), row);
+            learnButton->setFixedSize(88, 38);
+            learnButton->setStyleSheet(QStringLiteral(
+                "font-size: 15px; font-weight: 700; border-radius: 12px;"
+                "background: #0f1b3d; color: #ffffff;"
+                "QPushButton:hover { background: #13224b; }"));
+            connect(learnButton, &QPushButton::clicked, this, [this, book]() {
+                emit wordBookSelected(book.id);
+            });
+            rightLayout->addWidget(learnButton, 0, Qt::AlignRight);
+        }
 
         auto *deleteButton = new QPushButton(QStringLiteral("删除"), row);
-        deleteButton->setMinimumSize(76, 34);
+        deleteButton->setMinimumSize(78, 34);
         deleteButton->setStyleSheet(QStringLiteral(
-            "font-size: 14px; font-weight: 600; border-radius: 10px;"
-            "padding: 4px 12px; border: none;"
-            "background: rgba(239,68,68,0.08); color: #b91c1c;"
-            "QPushButton:hover { background: rgba(239,68,68,0.14); }"));
+            "font-size: 13px; font-weight: 600; border-radius: 11px;"
+            "padding: 3px 10px;"
+            "border: 1px solid rgba(239,68,68,0.28);"
+            "background: rgba(239,68,68,0.05); color: #c2410c;"
+            "QPushButton:hover { background: rgba(239,68,68,0.10); }"));
         connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
             emit wordBookDeleteRequested(book.id);
         });
-
-        auto *rightLayout = new QVBoxLayout();
-        rightLayout->setContentsMargins(0, 2, 0, 2);
-        rightLayout->setSpacing(8);
-        rightLayout->addWidget(status, 0, Qt::AlignRight);
         rightLayout->addWidget(deleteButton, 0, Qt::AlignRight);
         rightLayout->addStretch();
 
         layout->addWidget(cover);
         layout->addLayout(textLayout, 1);
         layout->addLayout(rightLayout);
+        return row;
+    };
 
-        booksList_->setItemWidget(item, row);
+    currentCardLayout_->addWidget(makeBookCard(currentCardHost_, activeBook, true));
+
+    int otherCount = 0;
+    for (const WordBookItem &book : books_) {
+        if (book.id == activeBook.id) {
+            continue;
+        }
+        ++otherCount;
+        auto *item = new QListWidgetItem(booksList_);
+        item->setData(Qt::UserRole, book.id);
+        item->setSizeHint(QSize(0, 114));
+        booksList_->addItem(item);
+        booksList_->setItemWidget(item, makeBookCard(booksList_, book, false));
     }
 
-    if (books_.isEmpty()) {
+    if (otherCount == 0) {
         auto *item = new QListWidgetItem(booksList_);
-        item->setSizeHint(QSize(0, 120));
+        item->setSizeHint(QSize(0, 78));
         booksList_->addItem(item);
 
         auto *emptyWidget = new QWidget(booksList_);
         emptyWidget->setStyleSheet(QStringLiteral(
-            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
-        auto *emptyLayout = new QVBoxLayout(emptyWidget);
-        emptyLayout->setContentsMargins(16, 12, 16, 12);
-        auto *emptyTitle = new QLabel(QStringLiteral("还没有词书"), emptyWidget);
-        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
-        auto *emptyDesc = new QLabel(QStringLiteral("点击底部“添加词书”导入 CSV 开始练习"), emptyWidget);
-        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 14px;"));
+        auto *emptyLayout = new QHBoxLayout(emptyWidget);
+        emptyLayout->setContentsMargins(14, 10, 14, 10);
+        auto *emptyTitle = new QLabel(QStringLiteral("无其他词书"), emptyWidget);
+        emptyTitle->setStyleSheet(QStringLiteral(
+            "font-size: 14px; font-weight: 600; color: #64748b;"
+            "background: transparent; border: none;"));
         emptyLayout->addWidget(emptyTitle);
-        emptyLayout->addWidget(emptyDesc);
         emptyLayout->addStretch();
         booksList_->setItemWidget(item, emptyWidget);
     }
@@ -1780,6 +1907,17 @@ void VibeSpellerWindow::onOpenWordBooks() {
 
 void VibeSpellerWindow::onSelectWordBook(int bookId) {
     if (bookId <= 0) {
+        return;
+    }
+    if (bookId == db_.activeWordBookId()) {
+        return;
+    }
+
+    const bool confirmSwitch = showQuestionPrompt(
+        this,
+        QStringLiteral("切换词书"),
+        QStringLiteral("是否切换词书？当前词书进度会保留，已学单词正常推送复习"));
+    if (!confirmSwitch) {
         return;
     }
 
