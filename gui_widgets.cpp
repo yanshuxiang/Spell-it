@@ -9,7 +9,10 @@
 #include <QDateTime>
 #include <QDir>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QFontMetrics>
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -28,9 +31,11 @@
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QProgressBar>
+#include <QProcess>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QStyle>
 #include <QSet>
 #include <QTableWidget>
@@ -38,7 +43,9 @@
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QRegularExpression>
 
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -53,22 +60,47 @@ constexpr int kStudyIdleCutoffSeconds = 120;
 // 每组练习词数。调试时可改成 5 等更小值。
 constexpr int kSessionBatchSize = 5;
 // 正确切词动画时长（毫秒），默认 0.7 秒。
-constexpr int kCorrectTransitionMs = 300;
+constexpr int kCorrectTransitionMs = 700;
 // 错误抖动动画时长（毫秒），默认 0.2 秒。
 constexpr int kWrongShakeMs = 200;
 // 正确切词位移幅度（像素），调大可让左右切换更明显。
 constexpr int kTransitionShiftPx = 300;
 // 错误抖动位移幅度（像素），调大晃动更明显。
 constexpr int kWrongShakeOffsetPx = 3;
+constexpr qreal kBasePlaybackVolume = 1.0;
+constexpr double kTargetMeanDb = -20.0;
+constexpr double kMaxPeakDb = -1.0;
+constexpr int kAnalyzeTimeoutMs = 8000;
 
 QString defaultInputStyle() {
     return QStringLiteral(
         "border: none;"
         "border-bottom: 2px solid #e5e7eb;"
         "color: #6b7280;"
-        "font-size: 35px;"
-        "padding: 0 8px;"
+        "padding: 6px 8px;"
         "background: transparent;");
+}
+
+QGraphicsOpacityEffect *ensureOpacityEffect(QWidget *widget) {
+    if (widget == nullptr) {
+        return nullptr;
+    }
+    auto *effect = qobject_cast<QGraphicsOpacityEffect *>(widget->graphicsEffect());
+    if (effect == nullptr) {
+        effect = new QGraphicsOpacityEffect(widget);
+        widget->setGraphicsEffect(effect);
+    }
+    return effect;
+}
+
+QString safeAudioFileName(const QString &word) {
+    QString name = word.trimmed();
+    name.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")), QStringLiteral("_"));
+    name = name.trimmed();
+    if (name.isEmpty()) {
+        name = QStringLiteral("word");
+    }
+    return name;
 }
 
 QString findBestColumn(const QStringList &headers, const QStringList &keywords) {
@@ -802,29 +834,28 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     translationLabel_ = new QLabel(this);
     translationLabel_->setAlignment(Qt::AlignCenter);
     translationLabel_->setWordWrap(true);
+    translationLabel_->setFixedHeight(170);
     translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
 
     inputEdit_ = new QLineEdit(this);
-    inputEdit_->setPlaceholderText(QStringLiteral("输入后按回车"));
+    inputEdit_->setPlaceholderText(QString());
     inputEdit_->setAlignment(Qt::AlignCenter);
     inputEdit_->setFixedWidth(310);
-    inputEdit_->setFixedHeight(64);
+    QFont spellingInputFont = inputEdit_->font();
+    spellingInputFont.setPixelSize(35);
+    inputEdit_->setFont(spellingInputFont);
+    const int inputHeight = qMax(64, QFontMetrics(spellingInputFont).height() + 26);
+    inputEdit_->setFixedHeight(inputHeight);
+    inputEdit_->setFrame(false);
+    inputEdit_->setTextMargins(0, 0, 0, 0);
     inputEdit_->setStyleSheet(defaultInputStyle());
     inputEdit_->installEventFilter(this);
 
     feedbackLabel_ = new QLabel(this);
     feedbackLabel_->setAlignment(Qt::AlignCenter);
     feedbackLabel_->setWordWrap(true);
-    feedbackLabel_->setMinimumHeight(34);
+    feedbackLabel_->setFixedHeight(56);
     feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; color: #6b7280;"));
-
-    translationOpacity_ = new QGraphicsOpacityEffect(translationLabel_);
-    translationOpacity_->setOpacity(1.0);
-    translationLabel_->setGraphicsEffect(translationOpacity_);
-
-    inputOpacity_ = new QGraphicsOpacityEffect(inputEdit_);
-    inputOpacity_->setOpacity(1.0);
-    inputEdit_->setGraphicsEffect(inputOpacity_);
 
     debugHost_ = new QWidget(this);
     debugHost_->setVisible(false);
@@ -892,14 +923,10 @@ void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int tot
     inputEdit_->clear();
     translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
     applyInputDefaultStyle();
-    translationOpacity_->setOpacity(1.0);
-    inputOpacity_->setOpacity(1.0);
     clearFeedback();
     setAwaitingProceed(false);
     setInputEnabled(true);
     refreshAnimationBasePositions();
-    translationLabel_->move(translationBasePos_);
-    inputEdit_->move(inputBasePos_);
     inputEdit_->setFocus();
 }
 
@@ -969,6 +996,7 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
                                                int nextIndex,
                                                int totalCount,
                                                bool isReviewMode) {
+    Q_UNUSED(currentWord);
     if (inTransition_) {
         return;
     }
@@ -989,28 +1017,29 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
     currentTranslation->setGraphicsEffect(currentTransOpacity);
     currentTranslation->show();
 
-    auto *currentWordLabel = new QLabel(currentWord.word, this);
-    currentWordLabel->setAlignment(Qt::AlignCenter);
-    currentWordLabel->setGeometry(inputEdit_->geometry());
-    currentWordLabel->setStyleSheet(QStringLiteral("font-size: 35px; font-weight: 600; color: #b7e4c7;"));
-    auto *currentWordOpacity = new QGraphicsOpacityEffect(currentWordLabel);
-    currentWordOpacity->setOpacity(1.0);
-    currentWordLabel->setGraphicsEffect(currentWordOpacity);
-    currentWordLabel->show();
+    auto *nextTranslation = new QLabel(nextWord.translation, this);
+    nextTranslation->setAlignment(Qt::AlignCenter);
+    nextTranslation->setWordWrap(true);
+    nextTranslation->setGeometry(translationLabel_->geometry());
+    nextTranslation->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    auto *nextTranslationOpacity = new QGraphicsOpacityEffect(nextTranslation);
+    nextTranslationOpacity->setOpacity(0.0);
+    nextTranslation->setGraphicsEffect(nextTranslationOpacity);
+    nextTranslation->move(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
+    nextTranslation->show();
 
     modeLabel_->setText(isReviewMode ? QStringLiteral("复习模式") : QStringLiteral("学习模式"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(nextIndex).arg(totalCount));
-    translationLabel_->setText(nextWord.translation);
-    inputEdit_->clear();
     resetInputOnNextType_ = false;
     clearFeedback();
     translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
     applyInputDefaultStyle();
-
-    translationLabel_->move(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
-    inputEdit_->move(inputBasePos_ + QPoint(kTransitionShiftPx, 0));
-    translationOpacity_->setOpacity(0.0);
-    inputOpacity_->setOpacity(0.0);
+    inputEdit_->clear();
+    // 保持布局内真实控件可见，避免 setVisible(false) 触发布局重排导致“瞬移”。
+    // 动画只作用于叠加层，真实控件通过透明度临时隐藏。
+    if (auto *translationEffect = ensureOpacityEffect(translationLabel_)) {
+        translationEffect->setOpacity(0.0);
+    }
 
     auto *group = new QParallelAnimationGroup(this);
 
@@ -1019,50 +1048,32 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
     outTransMove->setStartValue(translationBasePos_);
     outTransMove->setEndValue(translationBasePos_ - QPoint(kTransitionShiftPx, 0));
 
-    auto *outWordMove = new QPropertyAnimation(currentWordLabel, "pos", group);
-    outWordMove->setDuration(kCorrectTransitionMs);
-    outWordMove->setStartValue(inputBasePos_);
-    outWordMove->setEndValue(inputBasePos_ - QPoint(kTransitionShiftPx, 0));
-
     auto *outTransFade = new QPropertyAnimation(currentTransOpacity, "opacity", group);
     outTransFade->setDuration(kCorrectTransitionMs);
     outTransFade->setKeyValueAt(0.0, 1.0);
     outTransFade->setKeyValueAt(0.45, 0.0);
     outTransFade->setKeyValueAt(1.0, 0.0);
 
-    auto *outWordFade = new QPropertyAnimation(currentWordOpacity, "opacity", group);
-    outWordFade->setDuration(kCorrectTransitionMs);
-    outWordFade->setStartValue(1.0);
-    outWordFade->setEndValue(0.0);
-
-    auto *inTransMove = new QPropertyAnimation(translationLabel_, "pos", group);
+    auto *inTransMove = new QPropertyAnimation(nextTranslation, "pos", group);
     inTransMove->setDuration(kCorrectTransitionMs);
     inTransMove->setStartValue(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
     inTransMove->setEndValue(translationBasePos_);
 
-    auto *inWordMove = new QPropertyAnimation(inputEdit_, "pos", group);
-    inWordMove->setDuration(kCorrectTransitionMs);
-    inWordMove->setStartValue(inputBasePos_ + QPoint(kTransitionShiftPx, 0));
-    inWordMove->setEndValue(inputBasePos_);
-
-    auto *inTransFade = new QPropertyAnimation(translationOpacity_, "opacity", group);
+    auto *inTransFade = new QPropertyAnimation(nextTranslationOpacity, "opacity", group);
     inTransFade->setDuration(kCorrectTransitionMs);
     inTransFade->setKeyValueAt(0.0, 0.0);
     inTransFade->setKeyValueAt(0.35, 0.0);
     inTransFade->setKeyValueAt(1.0, 1.0);
 
-    auto *inWordFade = new QPropertyAnimation(inputOpacity_, "opacity", group);
-    inWordFade->setDuration(kCorrectTransitionMs);
-    inWordFade->setStartValue(0.0);
-    inWordFade->setEndValue(1.0);
-
-    connect(group, &QParallelAnimationGroup::finished, this, [this, group, currentTranslation, currentWordLabel]() {
+    connect(group, &QParallelAnimationGroup::finished, this,
+            [this, group, currentTranslation, nextTranslation, nextWord]() {
         currentTranslation->deleteLater();
-        currentWordLabel->deleteLater();
-        translationLabel_->move(translationBasePos_);
-        inputEdit_->move(inputBasePos_);
-        translationOpacity_->setOpacity(1.0);
-        inputOpacity_->setOpacity(1.0);
+        nextTranslation->deleteLater();
+        translationLabel_->setText(nextWord.translation);
+        if (auto *translationEffect = ensureOpacityEffect(translationLabel_)) {
+            translationEffect->setOpacity(1.0);
+        }
+        applyInputDefaultStyle();
         inTransition_ = false;
         setInputEnabled(true);
         inputEdit_->setFocus();
@@ -1085,22 +1096,18 @@ void SpellingPageWidget::playWrongShake() {
     inputEdit_->setStyleSheet(QStringLiteral(
         "border: none;"
         "border-bottom: 2px solid #e5e7eb;"
-        "color: #ef4444;"
-        "font-size: 35px;"
-        "padding: 0 8px;"
+        "color: transparent;"
+        "padding: 6px 8px;"
         "background: transparent;"));
 
-    auto *group = new QParallelAnimationGroup(this);
-    auto *shakeTranslation = new QPropertyAnimation(translationLabel_, "pos", group);
-    shakeTranslation->setDuration(kWrongShakeMs);
-    shakeTranslation->setKeyValueAt(0.0, translationBasePos_);
-    shakeTranslation->setKeyValueAt(0.2, translationBasePos_ + QPoint(-kWrongShakeOffsetPx, 0));
-    shakeTranslation->setKeyValueAt(0.4, translationBasePos_ + QPoint(kWrongShakeOffsetPx, 0));
-    shakeTranslation->setKeyValueAt(0.6, translationBasePos_ + QPoint(-(kWrongShakeOffsetPx * 3) / 4, 0));
-    shakeTranslation->setKeyValueAt(0.8, translationBasePos_ + QPoint((kWrongShakeOffsetPx * 3) / 4, 0));
-    shakeTranslation->setKeyValueAt(1.0, translationBasePos_);
+    auto *shakeWordLabel = new QLabel(inputEdit_->text(), this);
+    shakeWordLabel->setAlignment(Qt::AlignCenter);
+    shakeWordLabel->setGeometry(inputEdit_->geometry());
+    shakeWordLabel->setStyleSheet(QStringLiteral("font-size: 35px; font-weight: 500; color: #ef4444;"));
+    shakeWordLabel->show();
 
-    auto *shakeInput = new QPropertyAnimation(inputEdit_, "pos", group);
+    auto *group = new QParallelAnimationGroup(this);
+    auto *shakeInput = new QPropertyAnimation(shakeWordLabel, "pos", group);
     shakeInput->setDuration(kWrongShakeMs);
     shakeInput->setKeyValueAt(0.0, inputBasePos_);
     shakeInput->setKeyValueAt(0.2, inputBasePos_ + QPoint(-kWrongShakeOffsetPx, 0));
@@ -1109,9 +1116,14 @@ void SpellingPageWidget::playWrongShake() {
     shakeInput->setKeyValueAt(0.8, inputBasePos_ + QPoint((kWrongShakeOffsetPx * 3) / 4, 0));
     shakeInput->setKeyValueAt(1.0, inputBasePos_);
 
-    connect(group, &QParallelAnimationGroup::finished, this, [this, group]() {
-        translationLabel_->move(translationBasePos_);
-        inputEdit_->move(inputBasePos_);
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, shakeWordLabel]() {
+        shakeWordLabel->deleteLater();
+        inputEdit_->setStyleSheet(QStringLiteral(
+            "border: none;"
+            "border-bottom: 2px solid #e5e7eb;"
+            "color: #ef4444;"
+            "padding: 6px 8px;"
+            "background: transparent;"));
         group->deleteLater();
     });
     group->start();
@@ -2090,6 +2102,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     wordBooksPage_ = new WordBooksPageWidget(this);
     debugMode_ = qApp->property("vibespeller_debug").toBool();
     spellingPage_->setDebugMode(debugMode_);
+    pronunciationProcess_ = new QProcess(this);
 
     stack_->addWidget(homePage_);
     stack_->addWidget(mappingPage_);
@@ -2280,6 +2293,7 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     };
 
     if (evaluated == SpellingResult::Mastered) {
+        playPronunciationForWord(current.word);
         // 若本词本轮出现过拼写错误，本次“拼对”仅用于加深记忆，不升级为熟悉。
         if (hasWrongHistory) {
             // 若后面还有同词，说明本轮仍需在队尾继续复现，不在当前这次结算。
@@ -2574,6 +2588,92 @@ void VibeSpellerWindow::onAudioDownloadStopRequested() {
     }
     audioDownloadCancelRequested_ = true;
     wordBooksPage_->setAudioDownloadStatus(QStringLiteral("正在停止..."), -1, -1, true);
+}
+
+void VibeSpellerWindow::playPronunciationForWord(const QString &word) {
+    if (word.trimmed().isEmpty() || pronunciationProcess_ == nullptr) {
+        return;
+    }
+
+    const QDir audioDir(QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/assets/audio"));
+    const QString rawName = word.trimmed();
+    const QStringList candidates = {
+        safeAudioFileName(rawName) + QStringLiteral(".mp3"),
+        rawName + QStringLiteral(".mp3"),
+        rawName.toLower() + QStringLiteral(".mp3")
+    };
+
+    QString audioPath;
+    for (const QString &fileName : candidates) {
+        const QString path = audioDir.filePath(fileName);
+        if (QFileInfo::exists(path) && QFileInfo(path).size() > 0) {
+            audioPath = path;
+            break;
+        }
+    }
+    if (audioPath.isEmpty()) {
+        return;
+    }
+
+    const qreal volume = computeNormalizedVolume(audioPath);
+    if (pronunciationProcess_->state() != QProcess::NotRunning) {
+        pronunciationProcess_->kill();
+        pronunciationProcess_->waitForFinished(200);
+    }
+
+    QStringList arguments;
+    arguments << QStringLiteral("-v")
+              << QString::number(volume, 'f', 3)
+              << audioPath;
+    pronunciationProcess_->start(QStringLiteral("/usr/bin/afplay"), arguments);
+}
+
+qreal VibeSpellerWindow::computeNormalizedVolume(const QString &audioFilePath) {
+    const auto cached = pronunciationVolumeCache_.constFind(audioFilePath);
+    if (cached != pronunciationVolumeCache_.constEnd()) {
+        return cached.value();
+    }
+
+    qreal volume = kBasePlaybackVolume;
+    const QString ffmpegPath = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    if (ffmpegPath.isEmpty()) {
+        pronunciationVolumeCache_.insert(audioFilePath, volume);
+        return volume;
+    }
+
+    QProcess ffmpeg;
+    QStringList args;
+    args << QStringLiteral("-i")
+         << audioFilePath
+         << QStringLiteral("-af")
+         << QStringLiteral("volumedetect")
+         << QStringLiteral("-f")
+         << QStringLiteral("null")
+         << QStringLiteral("-");
+    ffmpeg.start(ffmpegPath, args);
+    if (ffmpeg.waitForFinished(kAnalyzeTimeoutMs)) {
+        const QString output = QString::fromUtf8(ffmpeg.readAllStandardError());
+        QRegularExpression meanRe(QStringLiteral("mean_volume:\\s*([-+]?\\d+(?:\\.\\d+)?)\\s*dB"));
+        QRegularExpression maxRe(QStringLiteral("max_volume:\\s*([-+]?\\d+(?:\\.\\d+)?)\\s*dB"));
+        const QRegularExpressionMatch meanMatch = meanRe.match(output);
+        const QRegularExpressionMatch maxMatch = maxRe.match(output);
+
+        bool meanOk = false;
+        bool maxOk = false;
+        const double meanDb = meanMatch.hasMatch() ? meanMatch.captured(1).toDouble(&meanOk) : 0.0;
+        const double maxDb = maxMatch.hasMatch() ? maxMatch.captured(1).toDouble(&maxOk) : 0.0;
+        if (meanOk) {
+            double gainDb = kTargetMeanDb - meanDb;
+            if (maxOk && maxDb + gainDb > kMaxPeakDb) {
+                gainDb = kMaxPeakDb - maxDb;
+            }
+            volume = static_cast<qreal>(std::pow(10.0, gainDb / 20.0));
+            volume = qBound<qreal>(0.25, volume, 2.0);
+        }
+    }
+
+    pronunciationVolumeCache_.insert(audioFilePath, volume);
+    return volume;
 }
 
 void VibeSpellerWindow::updateStudyTimeTracking() {

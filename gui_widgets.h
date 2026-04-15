@@ -22,7 +22,7 @@ class QStackedWidget;
 class QTableWidget;
 class QTimer;
 class QVBoxLayout;
-class QGraphicsOpacityEffect;
+class QProcess;
 
 struct PracticeRecord {
     WordItem word;
@@ -119,8 +119,6 @@ private:
     QLabel *debugScheduleLabel_ = nullptr;
     QLabel *debugAccuracyLabel_ = nullptr;
     QPushButton *exitButton_ = nullptr;
-    QGraphicsOpacityEffect *translationOpacity_ = nullptr;
-    QGraphicsOpacityEffect *inputOpacity_ = nullptr;
     bool debugMode_ = false;
     bool awaitingProceed_ = false;
     bool proceedKeyArmed_ = false;
@@ -253,6 +251,8 @@ private:
     void requestCsvImportIfNeeded();
     bool pickCsvAndShowMapping(bool returnToWordBooks = false);
     bool tryResumeSession(SessionMode mode);
+    void playPronunciationForWord(const QString &word);
+    qreal computeNormalizedVolume(const QString &audioFilePath);
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
     void showCurrentWord();
@@ -293,6 +293,8 @@ private:
     bool audioDownloadRunning_ = false;
     bool audioDownloadCancelRequested_ = false;
     bool debugMode_ = false;
+    QProcess *pronunciationProcess_ = nullptr;
+    QHash<QString, qreal> pronunciationVolumeCache_;
 };
 
 #endif // GUI_WIDGETS_H
