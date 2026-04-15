@@ -783,11 +783,21 @@ void WordBooksPageWidget::rebuildList() {
 
         if (!isCurrent) {
             auto *learnButton = new QPushButton(QStringLiteral("学习"), row);
-            learnButton->setFixedSize(74, 30);
+            learnButton->setObjectName(QStringLiteral("bookLearnButton"));
+            learnButton->setFixedSize(88, 34);
+            learnButton->setCursor(Qt::PointingHandCursor);
             learnButton->setStyleSheet(QStringLiteral(
-                "font-size: 13px; font-weight: 700; border-radius: 10px;"
-                "background: #0f1b3d; color: #ffffff;"
-                "QPushButton:hover { background: #13224b; }"));
+                "#bookLearnButton {"
+                "  font-size: 13px;"
+                "  font-weight: 700;"
+                "  border-radius: 17px;"
+                "  padding: 0 12px;"
+                "  border: 1px solid rgba(15,23,42,0.14);"
+                "  background: #f8fafc;"
+                "  color: #0f172a;"
+                "}"
+                "#bookLearnButton:hover { background: #eef2f7; }"
+                "#bookLearnButton:pressed { background: #e2e8f0; }"));
             connect(learnButton, &QPushButton::clicked, this, [this, book]() {
                 emit wordBookSelected(book.id);
             });

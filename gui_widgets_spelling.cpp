@@ -443,15 +443,18 @@ bool SpellingPageWidget::eventFilter(QObject *watched, QEvent *event) {
         if (isReturnKey) {
             return QWidget::eventFilter(watched, event);
         }
+        const bool isBackspaceKey = (keyEvent->key() == Qt::Key_Backspace);
 
         const bool hasTextInput = !keyEvent->text().isEmpty()
                                   && !(keyEvent->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
-        if (hasTextInput) {
+        if (hasTextInput || isBackspaceKey) {
             resetInputOnNextType_ = false;
             applyInputDefaultStyle();
             const QString typed = keyEvent->text();
             inputEdit_->clear();
-            inputEdit_->setText(typed);
+            if (!isBackspaceKey) {
+                inputEdit_->setText(typed);
+            }
             emit userActivity();
             return true;
         }

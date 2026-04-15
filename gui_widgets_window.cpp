@@ -463,7 +463,6 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
     }
 
     clearSessionForMode(SessionMode::Learning);
-    clearSessionForMode(SessionMode::Review);
     refreshHomeCounts();
     refreshWordBooks();
 }

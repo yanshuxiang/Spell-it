@@ -673,18 +673,12 @@ int DatabaseManager::dueReviewCount(const QDateTime &now) const {
         return 0;
     }
 
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId <= 0) {
-        return 0;
-    }
-
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM words "
         "WHERE status != 0 AND skip_forever = 0 AND next_review IS NOT NULL "
-        "AND date(next_review) <= date(?) AND book_id = ?"));
+        "AND date(next_review) <= date(?)"));
     query.bindValue(0, now.toString(kDateTimeFormat));
-    query.bindValue(1, activeBookId);
 
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -733,21 +727,15 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
         return items;
     }
 
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId <= 0) {
-        return items;
-    }
-
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
         "FROM words "
         "WHERE status != 0 AND skip_forever = 0 AND next_review IS NOT NULL "
-        "AND date(next_review) <= date(?) AND book_id = ? "
+        "AND date(next_review) <= date(?) "
         "ORDER BY next_review ASC, id ASC LIMIT ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
-    query.bindValue(1, activeBookId);
-    query.bindValue(2, qMax(1, limit));
+    query.bindValue(1, qMax(1, limit));
 
     if (!query.exec()) {
         lastError_ = query.lastError().text();
