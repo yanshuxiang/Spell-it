@@ -29,6 +29,12 @@ struct WordBookItem {
     bool isActive = false;
 };
 
+struct WordDebugStats {
+    QDateTime nextReview;
+    int attemptCount = 0;
+    int correctCount = 0;
+};
+
 enum class SpellingResult {
     Mastered,
     Blurry,
@@ -66,10 +72,13 @@ public:
 
     QVector<WordItem> fetchLearningBatch(int limit) const;
     QVector<WordItem> fetchReviewBatch(const QDateTime &now, int limit) const;
+    QVector<WordItem> fetchWordsForBook(int bookId) const;
     bool saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex);
     bool loadSessionProgress(const QString &mode, QVector<WordItem> &words, int &currentIndex);
     bool clearSessionProgress(const QString &mode);
     bool hasSessionProgress(const QString &mode) const;
+    bool recordSpellingAttempt(int wordId, bool correct);
+    bool fetchWordDebugStats(int wordId, WordDebugStats &stats) const;
 
     SpellingResult evaluateSpelling(const QString &input, const QString &target) const;
 

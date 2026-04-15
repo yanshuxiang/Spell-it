@@ -5,6 +5,8 @@
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    const bool kDebugMode = true;
+    app.setProperty("vibespeller_debug", kDebugMode);
 
     QFont uiFont;
     uiFont.setFamilies({QStringLiteral("PingFang SC"),

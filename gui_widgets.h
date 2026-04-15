@@ -16,6 +16,7 @@ class QCloseEvent;
 class QEvent;
 class QKeyEvent;
 class QMouseEvent;
+class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
@@ -83,6 +84,9 @@ public:
     void setInputEnabled(bool enabled);
     void showFeedback(const QString &text, const QString &colorHex);
     void clearFeedback();
+    void setDebugMode(bool enabled);
+    void setDebugInfo(const QDateTime &nextReview, int attemptCount, int correctCount);
+    void clearDebugInfo();
 
 signals:
     void submitted(const QString &text);
@@ -101,7 +105,11 @@ private:
     QLabel *translationLabel_ = nullptr;
     QLineEdit *inputEdit_ = nullptr;
     QLabel *feedbackLabel_ = nullptr;
+    QWidget *debugHost_ = nullptr;
+    QLabel *debugScheduleLabel_ = nullptr;
+    QLabel *debugAccuracyLabel_ = nullptr;
     QPushButton *exitButton_ = nullptr;
+    bool debugMode_ = false;
     bool awaitingProceed_ = false;
     bool proceedKeyArmed_ = false;
 };
@@ -162,12 +170,15 @@ public:
     explicit WordBooksPageWidget(QWidget *parent = nullptr);
 
     void setWordBooks(const QVector<WordBookItem> &books, int activeBookId);
+    void setAudioDownloadStatus(const QString &text, int current, int total, bool running);
 
 signals:
     void backClicked();
     void addBookClicked();
     void wordBookSelected(int bookId);
     void wordBookDeleteRequested(int bookId);
+    void downloadAudioRequested(int bookId);
+    void audioDownloadStopRequested();
 
 private:
     void rebuildList();
@@ -182,6 +193,10 @@ private:
     QListWidget *booksList_ = nullptr;
     QPushButton *backButton_ = nullptr;
     QPushButton *addBookButton_ = nullptr;
+    QWidget *audioStatusHost_ = nullptr;
+    QLabel *audioStatusLabel_ = nullptr;
+    QProgressBar *audioProgressBar_ = nullptr;
+    QPushButton *audioStopButton_ = nullptr;
 };
 
 class VibeSpellerWindow : public QWidget {
@@ -198,6 +213,8 @@ private slots:
     void onOpenWordBooks();
     void onSelectWordBook(int bookId);
     void onDeleteWordBook(int bookId);
+    void onDownloadAudio(int bookId);
+    void onAudioDownloadStopRequested();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -223,6 +240,7 @@ private:
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
     void showCurrentWord();
+    void updateSpellingDebugInfo(int wordId);
     void persistCurrentSession();
     void clearSessionForMode(SessionMode mode);
     void moveToNextWord();
@@ -256,6 +274,9 @@ private:
     QDateTime studyTrackingStartTime_;
     QDateTime lastStudyUserActionTime_;
     QTimer *studyIdleTimer_ = nullptr;
+    bool audioDownloadRunning_ = false;
+    bool audioDownloadCancelRequested_ = false;
+    bool debugMode_ = false;
 };
 
 #endif // GUI_WIDGETS_H

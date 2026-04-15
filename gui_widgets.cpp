@@ -1,6 +1,9 @@
 #include "gui_widgets.h"
+#include "audio_downloader.h"
 
+#include <QCoreApplication>
 #include <QComboBox>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDateTime>
@@ -387,6 +390,47 @@ void showWarningPrompt(QWidget *parent, const QString &title, const QString &mes
 void showErrorPrompt(QWidget *parent, const QString &title, const QString &message) {
     showStyledPrompt(parent, title, message, PromptType::Error, {QStringLiteral("知道了")}, 0);
 }
+
+QString buildMiniWeekCalendarHtml(const QDateTime &nextReview) {
+    if (!nextReview.isValid()) {
+        return QStringLiteral(
+            "<div style='font-size:12px;color:#64748b;'>"
+            "尚未安排复习时间"
+            "</div>");
+    }
+
+    const QDate today = QDate::currentDate();
+    const QDate dueDate = nextReview.date();
+    const int daysToDue = today.daysTo(dueDate);
+    const QString relation = (daysToDue > 0)
+                                 ? QStringLiteral("%1 天后").arg(daysToDue)
+                                 : (daysToDue == 0 ? QStringLiteral("今天") : QStringLiteral("已过期"));
+
+    QString html = QStringLiteral(
+        "<div style='font-size:12px;color:#64748b;'>"
+        "下次复习：<b style='color:#0f172a;'>%1</b>（%2）"
+        "</div><div style='margin-top:6px;'>")
+                       .arg(dueDate.toString(QStringLiteral("MM-dd ddd")))
+                       .arg(relation);
+
+    for (int offset = 0; offset < 7; ++offset) {
+        const QDate day = today.addDays(offset);
+        const bool isDueDay = (day == dueDate);
+        const QString bg = isDueDay ? QStringLiteral("#dbeafe") : QStringLiteral("#f8fafc");
+        const QString fg = isDueDay ? QStringLiteral("#1d4ed8") : QStringLiteral("#64748b");
+        const QString border = isDueDay ? QStringLiteral("#93c5fd") : QStringLiteral("#e2e8f0");
+        html += QStringLiteral(
+                    "<span style='display:inline-block;width:34px;height:34px;line-height:16px;"
+                    "text-align:center;border-radius:10px;border:1px solid %1;background:%2;"
+                    "font-size:11px;color:%3;margin-right:6px;padding-top:3px;'>"
+                    "%4<br><b>%5</b></span>")
+                    .arg(border, bg, fg)
+                    .arg(day.toString(QStringLiteral("dd")))
+                    .arg(day.toString(QStringLiteral("ddd")));
+    }
+    html += QStringLiteral("</div>");
+    return html;
+}
 } // namespace
 
 HomePageWidget::HomePageWidget(QWidget *parent)
@@ -758,6 +802,37 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     feedbackLabel_->setAlignment(Qt::AlignCenter);
     feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #6b7280;"));
 
+    debugHost_ = new QWidget(this);
+    debugHost_->setVisible(false);
+    auto *debugLayout = new QVBoxLayout(debugHost_);
+    debugLayout->setContentsMargins(0, 0, 0, 0);
+    debugLayout->setSpacing(8);
+
+    debugScheduleLabel_ = new QLabel(debugHost_);
+    debugScheduleLabel_->setTextFormat(Qt::RichText);
+    debugScheduleLabel_->setWordWrap(true);
+    debugScheduleLabel_->setStyleSheet(QStringLiteral(
+        "background: #f8fafc;"
+        "border: 1px solid #e2e8f0;"
+        "border-radius: 12px;"
+        "padding: 10px 12px;"
+        "font-size: 12px;"
+        "color: #334155;"));
+
+    debugAccuracyLabel_ = new QLabel(debugHost_);
+    debugAccuracyLabel_->setWordWrap(true);
+    debugAccuracyLabel_->setStyleSheet(QStringLiteral(
+        "background: #f8fafc;"
+        "border: 1px solid #e2e8f0;"
+        "border-radius: 12px;"
+        "padding: 10px 12px;"
+        "font-size: 13px;"
+        "font-weight: 600;"
+        "color: #0f172a;"));
+
+    debugLayout->addWidget(debugScheduleLabel_);
+    debugLayout->addWidget(debugAccuracyLabel_);
+
     root->addLayout(top);
     root->addStretch(1);
     root->addWidget(translationLabel_);
@@ -768,6 +843,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     inputRow->addStretch(1);
     root->addLayout(inputRow);
     root->addWidget(feedbackLabel_);
+    root->addWidget(debugHost_);
     root->addStretch(2);
     root->addSpacing(10);
 
@@ -809,6 +885,36 @@ void SpellingPageWidget::showFeedback(const QString &text, const QString &colorH
 void SpellingPageWidget::clearFeedback() {
     feedbackLabel_->setText(QString());
     feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 17px; font-weight: 700; color: #6b7280;"));
+}
+
+void SpellingPageWidget::setDebugMode(bool enabled) {
+    debugMode_ = enabled;
+    debugHost_->setVisible(enabled);
+    if (!enabled) {
+        clearDebugInfo();
+    }
+}
+
+void SpellingPageWidget::setDebugInfo(const QDateTime &nextReview, int attemptCount, int correctCount) {
+    if (!debugMode_) {
+        return;
+    }
+
+    debugScheduleLabel_->setText(buildMiniWeekCalendarHtml(nextReview));
+    double accuracy = 0.0;
+    if (attemptCount > 0) {
+        accuracy = (100.0 * static_cast<double>(correctCount)) / static_cast<double>(attemptCount);
+    }
+    debugAccuracyLabel_->setText(
+        QStringLiteral("正确率：%1%  （正确 %2 / 总尝试 %3）")
+            .arg(QString::number(accuracy, 'f', 1))
+            .arg(correctCount)
+            .arg(attemptCount));
+}
+
+void SpellingPageWidget::clearDebugInfo() {
+    debugScheduleLabel_->setText(QString());
+    debugAccuracyLabel_->setText(QString());
 }
 
 void SpellingPageWidget::keyPressEvent(QKeyEvent *event) {
@@ -1324,9 +1430,66 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     titleCol->addWidget(title);
     titleCol->addWidget(metaLabel_);
 
+    audioStatusHost_ = new QWidget(this);
+    audioStatusHost_->setFixedSize(240, 54);
+    audioStatusHost_->setStyleSheet(QStringLiteral(
+        "background: transparent;"
+        "border: none;"));
+    auto *audioStatusLayout = new QVBoxLayout(audioStatusHost_);
+    audioStatusLayout->setContentsMargins(0, 0, 0, 0);
+    audioStatusLayout->setSpacing(3);
+
+    audioStatusLabel_ = new QLabel(QStringLiteral("音频未下载"), audioStatusHost_);
+    audioStatusLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 12px; color: #475569;"
+        "background: transparent; border: none;"));
+
+    audioProgressBar_ = new QProgressBar(audioStatusHost_);
+    audioProgressBar_->setTextVisible(false);
+    audioProgressBar_->setRange(0, 100);
+    audioProgressBar_->setValue(0);
+    audioProgressBar_->setFixedHeight(8);
+    audioProgressBar_->setStyleSheet(QStringLiteral(
+        "QProgressBar {"
+        "  border: none;"
+        "  border-radius: 4px;"
+        "  background: rgba(148,163,184,0.22);"
+        "}"
+        "QProgressBar::chunk {"
+        "  border: none;"
+        "  border-radius: 4px;"
+        "  min-width: 8px;"
+        "  background: #0ea5a4;"
+        "}"));
+
+    audioStopButton_ = new QPushButton(QStringLiteral("⏸"), audioStatusHost_);
+    audioStopButton_->setObjectName(QStringLiteral("audioPauseEmojiButton"));
+    audioStopButton_->setFixedSize(18, 18);
+    audioStopButton_->setToolTip(QStringLiteral("暂停下载"));
+    audioStopButton_->setStyleSheet(QStringLiteral(
+        "#audioPauseEmojiButton {"
+        "  border: none;"
+        "  background: transparent;"
+        "  padding: 0;"
+        "  font-size: 12px;"
+        "  color: #64748b;"
+        "}"
+        "#audioPauseEmojiButton:hover { color: #334155; }"
+        "#audioPauseEmojiButton:disabled { color: #cbd5e1; }"));
+    audioStopButton_->setEnabled(false);
+
+    auto *progressRow = new QHBoxLayout();
+    progressRow->setContentsMargins(0, 0, 0, 0);
+    progressRow->setSpacing(6);
+    progressRow->addWidget(audioProgressBar_, 1);
+    progressRow->addWidget(audioStopButton_, 0, Qt::AlignVCenter);
+
+    audioStatusLayout->addWidget(audioStatusLabel_);
+    audioStatusLayout->addLayout(progressRow);
+
     header->addWidget(backButton_, 0, Qt::AlignTop);
     header->addLayout(titleCol, 1);
-    header->addStretch(1);
+    header->addWidget(audioStatusHost_, 0, Qt::AlignTop | Qt::AlignRight);
 
     currentTitleLabel_ = new QLabel(QStringLiteral("当前学习词书"), this);
     currentTitleLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
@@ -1367,6 +1530,45 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
 
     connect(backButton_, &QPushButton::clicked, this, &WordBooksPageWidget::backClicked);
     connect(addBookButton_, &QPushButton::clicked, this, &WordBooksPageWidget::addBookClicked);
+    connect(audioStopButton_, &QPushButton::clicked, this, &WordBooksPageWidget::audioDownloadStopRequested);
+    setAudioDownloadStatus(QStringLiteral("音频未下载"), 0, 0, false);
+}
+
+void WordBooksPageWidget::setAudioDownloadStatus(const QString &text, int current, int total, bool running) {
+    if (audioStatusHost_) {
+        audioStatusHost_->setVisible(running);
+    }
+    if (!running) {
+        if (audioStatusLabel_) {
+            audioStatusLabel_->setText(QString());
+        }
+        if (audioProgressBar_) {
+            audioProgressBar_->setRange(0, 100);
+            audioProgressBar_->setValue(0);
+        }
+        if (audioStopButton_) {
+            audioStopButton_->setEnabled(false);
+        }
+        return;
+    }
+
+    if (audioStatusLabel_) {
+        audioStatusLabel_->setText(text);
+    }
+    if (audioProgressBar_) {
+        if (total < 0) {
+            audioProgressBar_->setRange(0, 0);
+        } else if (total == 0) {
+            audioProgressBar_->setRange(0, 100);
+            audioProgressBar_->setValue(0);
+        } else if (total > 0) {
+            audioProgressBar_->setRange(0, total);
+            audioProgressBar_->setValue(qBound(0, current, total));
+        }
+    }
+    if (audioStopButton_) {
+        audioStopButton_->setEnabled(running);
+    }
 }
 
 void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int activeBookId) {
@@ -1474,15 +1676,17 @@ void WordBooksPageWidget::rebuildList() {
             progressBar->setTextVisible(false);
             progressBar->setRange(0, qMax(1, book.wordCount));
             progressBar->setValue(qBound(0, book.learnedCount, qMax(1, book.wordCount)));
-            progressBar->setFixedHeight(10);
+            progressBar->setFixedHeight(8);
             progressBar->setStyleSheet(QStringLiteral(
                 "QProgressBar {"
                 "  border: none;"
-                "  border-radius: 5px;"
-                "  background: #e8edf3;"
+                "  border-radius: 4px;"
+                "  background: rgba(148,163,184,0.22);"
                 "}"
                 "QProgressBar::chunk {"
-                "  border-radius: 5px;"
+                "  border: none;"
+                "  border-radius: 4px;"
+                "  min-width: 8px;"
                 "  background: #0ea5a4;"
                 "}"));
 
@@ -1508,35 +1712,80 @@ void WordBooksPageWidget::rebuildList() {
 
         auto *rightLayout = new QVBoxLayout();
         rightLayout->setContentsMargins(0, 0, 0, 0);
-        rightLayout->setSpacing(8);
-        rightLayout->addStretch();
+        rightLayout->setSpacing(4);
+        rightLayout->setAlignment(Qt::AlignTop | Qt::AlignRight);
 
         if (!isCurrent) {
             auto *learnButton = new QPushButton(QStringLiteral("学习"), row);
-            learnButton->setFixedSize(88, 38);
+            learnButton->setFixedSize(74, 30);
             learnButton->setStyleSheet(QStringLiteral(
-                "font-size: 15px; font-weight: 700; border-radius: 12px;"
+                "font-size: 13px; font-weight: 700; border-radius: 10px;"
                 "background: #0f1b3d; color: #ffffff;"
                 "QPushButton:hover { background: #13224b; }"));
             connect(learnButton, &QPushButton::clicked, this, [this, book]() {
                 emit wordBookSelected(book.id);
             });
-            rightLayout->addWidget(learnButton, 0, Qt::AlignRight);
-        }
 
-        auto *deleteButton = new QPushButton(QStringLiteral("删除"), row);
-        deleteButton->setMinimumSize(78, 34);
-        deleteButton->setStyleSheet(QStringLiteral(
-            "font-size: 13px; font-weight: 600; border-radius: 11px;"
-            "padding: 3px 10px;"
-            "border: 1px solid rgba(239,68,68,0.28);"
-            "background: rgba(239,68,68,0.05); color: #c2410c;"
-            "QPushButton:hover { background: rgba(239,68,68,0.10); }"));
-        connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
-            emit wordBookDeleteRequested(book.id);
-        });
-        rightLayout->addWidget(deleteButton, 0, Qt::AlignRight);
-        rightLayout->addStretch();
+            auto *deleteButton = new QPushButton(QStringLiteral("🗑"), row);
+            deleteButton->setObjectName(QStringLiteral("bookDeleteEmojiButton"));
+            deleteButton->setFixedSize(26, 26);
+            deleteButton->setToolTip(QStringLiteral("删除词书"));
+            deleteButton->setStyleSheet(QStringLiteral(
+                "#bookDeleteEmojiButton {"
+                "  border: none; border-radius: 8px; padding: 0;"
+                "  background: transparent; font-size: 12px; color: #64748b;"
+                "}"
+                "#bookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
+            connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
+                emit wordBookDeleteRequested(book.id);
+            });
+
+            auto *opsRow = new QHBoxLayout();
+            opsRow->setContentsMargins(0, 0, 0, 0);
+            opsRow->setSpacing(6);
+            opsRow->addStretch(1);
+            opsRow->addWidget(learnButton);
+            opsRow->addWidget(deleteButton);
+            rightLayout->addLayout(opsRow);
+        } else {
+            auto *downloadButton = new QPushButton(QStringLiteral("下载音频"), row);
+            downloadButton->setObjectName(QStringLiteral("bookDownloadButton"));
+            downloadButton->setFixedSize(88, 28);
+            downloadButton->setToolTip(QStringLiteral("下载音频"));
+            downloadButton->setStyleSheet(QStringLiteral(
+                "#bookDownloadButton {"
+                "  font-size: 12px; font-weight: 700; border-radius: 8px;"
+                "  padding: 0;"
+                "  border: 1px solid rgba(15,23,42,0.20);"
+                "  background: transparent; color: #334155;"
+                "}"
+                "#bookDownloadButton:hover { background: rgba(15,23,42,0.05); }"));
+            connect(downloadButton, &QPushButton::clicked, this, [this, book]() {
+                emit downloadAudioRequested(book.id);
+            });
+
+            auto *deleteButton = new QPushButton(QStringLiteral("🗑"), row);
+            deleteButton->setObjectName(QStringLiteral("bookDeleteEmojiButton"));
+            deleteButton->setFixedSize(26, 26);
+            deleteButton->setToolTip(QStringLiteral("删除词书"));
+            deleteButton->setStyleSheet(QStringLiteral(
+                "#bookDeleteEmojiButton {"
+                "  border: none; border-radius: 8px; padding: 0;"
+                "  background: transparent; font-size: 12px; color: #64748b;"
+                "}"
+                "#bookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
+            connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
+                emit wordBookDeleteRequested(book.id);
+            });
+
+            auto *opsRow = new QHBoxLayout();
+            opsRow->setContentsMargins(0, 0, 0, 0);
+            opsRow->setSpacing(6);
+            opsRow->addStretch(1);
+            opsRow->addWidget(downloadButton);
+            opsRow->addWidget(deleteButton);
+            rightLayout->addLayout(opsRow);
+        }
 
         layout->addWidget(cover);
         layout->addLayout(textLayout, 1);
@@ -1616,6 +1865,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
     wordBooksPage_ = new WordBooksPageWidget(this);
+    debugMode_ = qApp->property("vibespeller_debug").toBool();
+    spellingPage_->setDebugMode(debugMode_);
 
     stack_->addWidget(homePage_);
     stack_->addWidget(mappingPage_);
@@ -1711,6 +1962,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
     connect(wordBooksPage_, &WordBooksPageWidget::wordBookSelected, this, &VibeSpellerWindow::onSelectWordBook);
     connect(wordBooksPage_, &WordBooksPageWidget::wordBookDeleteRequested, this, &VibeSpellerWindow::onDeleteWordBook);
+    connect(wordBooksPage_, &WordBooksPageWidget::downloadAudioRequested, this, &VibeSpellerWindow::onDownloadAudio);
+    connect(wordBooksPage_, &WordBooksPageWidget::audioDownloadStopRequested, this, &VibeSpellerWindow::onAudioDownloadStopRequested);
 
     auto *importShortcut = new QShortcut(QKeySequence::Open, this);
     connect(importShortcut, &QShortcut::activated, this, [this]() {
@@ -1780,6 +2033,11 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
 
     const WordItem current = currentWords_.at(currentIndex_);
     const SpellingResult evaluated = db_.evaluateSpelling(text, current.word);
+    if (!db_.recordSpellingAttempt(current.id, evaluated == SpellingResult::Mastered)) {
+        showWarningPrompt(this,
+                          QStringLiteral("统计保存失败"),
+                          QStringLiteral("保存单词正确率失败：%1").arg(db_.lastError()));
+    }
     const int existingMistakes = roundMistakeCounts_.value(current.id, 0);
     const bool hasWrongHistory = firstWrongInputs_.contains(current.id);
     const auto hasSameWordAhead = [this, &current]() -> bool {
@@ -1881,6 +2139,7 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     spellingPage_->showFeedback(
         QStringLiteral("正确拼写：<b>%1</b>").arg(current.word.toHtmlEscaped()),
         QStringLiteral("#4bc816b6"));
+    updateSpellingDebugInfo(current.id);
     persistCurrentSession();
 }
 
@@ -1982,6 +2241,80 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     clearSessionForMode(SessionMode::Review);
     refreshHomeCounts();
     refreshWordBooks();
+}
+
+void VibeSpellerWindow::onDownloadAudio(int bookId) {
+    if (bookId <= 0) {
+        return;
+    }
+    if (audioDownloadRunning_) {
+        wordBooksPage_->setAudioDownloadStatus(QStringLiteral("已有下载任务进行中"), -1, -1, true);
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchWordsForBook(bookId);
+    if (words.isEmpty()) {
+        wordBooksPage_->setAudioDownloadStatus(QStringLiteral("当前词书没有可下载单词"), 0, 0, false);
+        return;
+    }
+
+    audioDownloadRunning_ = true;
+    audioDownloadCancelRequested_ = false;
+    wordBooksPage_->setAudioDownloadStatus(QStringLiteral("准备下载..."), 0, words.size(), true);
+
+    AudioDownloader downloader;
+    QString errorText;
+    const AudioDownloader::Result result = downloader.downloadBookAudio(
+        words,
+        bookId,
+        [this](int current, int total, const QString &word) {
+            const int displayIndex = qMin(total, qMax(1, current + 1));
+            const QString status = QStringLiteral("下载中：%1（%2/%3）")
+                                       .arg(word)
+                                       .arg(displayIndex)
+                                       .arg(total);
+            wordBooksPage_->setAudioDownloadStatus(status, current, total, true);
+            QCoreApplication::processEvents();
+        },
+        [this]() {
+            return audioDownloadCancelRequested_;
+        },
+        errorText);
+
+    audioDownloadRunning_ = false;
+
+    if (!errorText.isEmpty()) {
+        const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
+        wordBooksPage_->setAudioDownloadStatus(
+            QStringLiteral("下载异常：%1").arg(errorText),
+            qMin(processed, result.totalWords),
+            result.totalWords,
+            false);
+        return;
+    }
+
+    const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
+    const QString finalText = result.cancelled
+                                  ? QStringLiteral("已暂停（%1/%2），下次会从上一个单词重下")
+                                        .arg(qMin(processed, result.totalWords))
+                                        .arg(result.totalWords)
+                                  : QStringLiteral("完成：新增%1 已有%2 无MP3%3 失败%4")
+                                        .arg(result.downloaded)
+                                        .arg(result.reused)
+                                        .arg(result.noMp3)
+                                        .arg(result.failed);
+    wordBooksPage_->setAudioDownloadStatus(finalText,
+                                           qMin(processed, result.totalWords),
+                                           result.totalWords,
+                                           false);
+}
+
+void VibeSpellerWindow::onAudioDownloadStopRequested() {
+    if (!audioDownloadRunning_) {
+        return;
+    }
+    audioDownloadCancelRequested_ = true;
+    wordBooksPage_->setAudioDownloadStatus(QStringLiteral("正在停止..."), -1, -1, true);
 }
 
 void VibeSpellerWindow::updateStudyTimeTracking() {
@@ -2252,6 +2585,20 @@ void VibeSpellerWindow::showCurrentWord() {
                            displayIndex,
                            totalTarget,
                            currentMode_ == SessionMode::Review);
+    updateSpellingDebugInfo(word.id);
+}
+
+void VibeSpellerWindow::updateSpellingDebugInfo(int wordId) {
+    if (!debugMode_) {
+        return;
+    }
+
+    WordDebugStats stats;
+    if (!db_.fetchWordDebugStats(wordId, stats)) {
+        spellingPage_->clearDebugInfo();
+        return;
+    }
+    spellingPage_->setDebugInfo(stats.nextReview, stats.attemptCount, stats.correctCount);
 }
 
 void VibeSpellerWindow::persistCurrentSession() {

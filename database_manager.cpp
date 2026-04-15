@@ -271,6 +271,18 @@ bool DatabaseManager::initialize() {
         }
     }
 
+    const QString createStatsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS word_spelling_stats ("
+        "word_id INTEGER PRIMARY KEY,"
+        "attempt_count INTEGER NOT NULL DEFAULT 0,"
+        "correct_count INTEGER NOT NULL DEFAULT 0,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createStatsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     return true;
 }
 
@@ -730,6 +742,37 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
     return items;
 }
 
+QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
+    QVector<WordItem> items;
+    if (!ensureDatabaseOpen()) {
+        return items;
+    }
+
+    int targetBookId = bookId;
+    if (targetBookId <= 0) {
+        targetBookId = activeWordBookIdInternal();
+    }
+    if (targetBookId <= 0) {
+        return items;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
+        "FROM words WHERE book_id = ? ORDER BY id"));
+    query.bindValue(0, targetBookId);
+
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return items;
+    }
+
+    while (query.next()) {
+        items.push_back(readWordFromQuery(query));
+    }
+    return items;
+}
+
 bool DatabaseManager::saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex) {
     if (!ensureDatabaseOpen()) {
         return false;
@@ -848,6 +891,79 @@ bool DatabaseManager::hasSessionProgress(const QString &mode) const {
         return false;
     }
     return query.value(0).toInt() > 0;
+}
+
+bool DatabaseManager::recordSpellingAttempt(int wordId, bool correct) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    if (wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO word_spelling_stats(word_id, attempt_count, correct_count, updated_at) "
+        "VALUES(?, 1, ?, ?) "
+        "ON CONFLICT(word_id) DO UPDATE SET "
+        "attempt_count = attempt_count + 1, "
+        "correct_count = correct_count + excluded.correct_count, "
+        "updated_at = excluded.updated_at"));
+    query.bindValue(0, wordId);
+    query.bindValue(1, correct ? 1 : 0);
+    query.bindValue(2, QDateTime::currentDateTime().toString(kDateTimeFormat));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::fetchWordDebugStats(int wordId, WordDebugStats &stats) const {
+    stats = WordDebugStats();
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+
+    QSqlQuery wordQuery(database());
+    wordQuery.prepare(QStringLiteral("SELECT next_review FROM words WHERE id = ?"));
+    wordQuery.bindValue(0, wordId);
+    if (!wordQuery.exec()) {
+        lastError_ = wordQuery.lastError().text();
+        return false;
+    }
+    if (!wordQuery.next()) {
+        lastError_ = QStringLiteral("找不到对应单词");
+        return false;
+    }
+    const QString nextReviewText = wordQuery.value(0).toString();
+    if (!nextReviewText.isEmpty()) {
+        stats.nextReview = QDateTime::fromString(nextReviewText, kDateTimeFormat);
+        if (!stats.nextReview.isValid()) {
+            stats.nextReview = QDateTime::fromString(nextReviewText, Qt::ISODate);
+        }
+    }
+
+    QSqlQuery statsQuery(database());
+    statsQuery.prepare(QStringLiteral(
+        "SELECT attempt_count, correct_count "
+        "FROM word_spelling_stats WHERE word_id = ?"));
+    statsQuery.bindValue(0, wordId);
+    if (!statsQuery.exec()) {
+        lastError_ = statsQuery.lastError().text();
+        return false;
+    }
+    if (statsQuery.next()) {
+        stats.attemptCount = statsQuery.value(0).toInt();
+        stats.correctCount = statsQuery.value(1).toInt();
+    }
+    return true;
 }
 
 SpellingResult DatabaseManager::evaluateSpelling(const QString &input, const QString &target) const {
