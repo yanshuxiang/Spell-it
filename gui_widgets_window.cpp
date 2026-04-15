@@ -13,11 +13,13 @@
 #include <QHash>
 #include <QKeySequence>
 #include <QProcess>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QShortcut>
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStyle>
+#include <QThread>
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -185,6 +187,7 @@ void VibeSpellerWindow::changeEvent(QEvent *event) {
 
 void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
     flushStudyTimeTracking();
+    audioDownloadCancelRequested_.store(true);
     QWidget::closeEvent(event);
 }
 
@@ -529,61 +532,86 @@ void VibeSpellerWindow::onDownloadAudio(int bookId) {
     }
 
     audioDownloadRunning_ = true;
-    audioDownloadCancelRequested_ = false;
+    audioDownloadCancelRequested_.store(false);
     wordBooksPage_->setAudioDownloadStatus(QStringLiteral("准备下载..."), 0, words.size(), true);
+    QPointer<VibeSpellerWindow> window(this);
+    auto *thread = QThread::create([window, words, bookId]() {
+        AudioDownloader downloader;
+        QString errorText;
+        const AudioDownloader::Result result = downloader.downloadBookAudio(
+            words,
+            bookId,
+            [window](int current, int total, const QString &word) {
+                if (!window) {
+                    return;
+                }
+                const int displayIndex = qMin(total, qMax(1, current + 1));
+                const QString status = QStringLiteral("下载中：%1（%2/%3）")
+                                           .arg(word)
+                                           .arg(displayIndex)
+                                           .arg(total);
+                QMetaObject::invokeMethod(window.data(), [window, status, current, total]() {
+                    if (window && window->wordBooksPage_) {
+                        window->wordBooksPage_->setAudioDownloadStatus(status, current, total, true);
+                    }
+                }, Qt::QueuedConnection);
+            },
+            [window]() {
+                return !window || window->audioDownloadCancelRequested_.load();
+            },
+            errorText);
 
-    AudioDownloader downloader;
-    QString errorText;
-    const AudioDownloader::Result result = downloader.downloadBookAudio(
-        words,
-        bookId,
-        [this](int current, int total, const QString &word) {
-            const int displayIndex = qMin(total, qMax(1, current + 1));
-            const QString status = QStringLiteral("下载中：%1（%2/%3）")
-                                       .arg(word)
-                                       .arg(displayIndex)
-                                       .arg(total);
-            wordBooksPage_->setAudioDownloadStatus(status, current, total, true);
-            QCoreApplication::processEvents();
-        },
-        [this]() {
-            return audioDownloadCancelRequested_;
-        },
-        errorText);
+        if (!window) {
+            return;
+        }
 
-    audioDownloadRunning_ = false;
+        QMetaObject::invokeMethod(window.data(), [window, result, errorText]() {
+            if (!window) {
+                return;
+            }
 
-    if (!errorText.isEmpty()) {
-        const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
-        wordBooksPage_->setAudioDownloadStatus(
-            QStringLiteral("下载异常：%1").arg(errorText),
-            qMin(processed, result.totalWords),
-            result.totalWords,
-            false);
-        return;
-    }
+            window->audioDownloadRunning_ = false;
+            if (window->audioDownloadThread_ != nullptr) {
+                window->audioDownloadThread_->deleteLater();
+                window->audioDownloadThread_ = nullptr;
+            }
 
-    const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
-    const QString finalText = result.cancelled
-                                  ? QStringLiteral("已暂停（%1/%2），下次会从上一个单词重下")
-                                        .arg(qMin(processed, result.totalWords))
-                                        .arg(result.totalWords)
-                                  : QStringLiteral("完成：新增%1 已有%2 无MP3%3 失败%4")
-                                        .arg(result.downloaded)
-                                        .arg(result.reused)
-                                        .arg(result.noMp3)
-                                        .arg(result.failed);
-    wordBooksPage_->setAudioDownloadStatus(finalText,
-                                           qMin(processed, result.totalWords),
-                                           result.totalWords,
-                                           false);
+            const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
+            if (!errorText.isEmpty()) {
+                window->wordBooksPage_->setAudioDownloadStatus(
+                    QStringLiteral("下载异常：%1").arg(errorText),
+                    qMin(processed, result.totalWords),
+                    result.totalWords,
+                    false);
+                return;
+            }
+
+            const QString finalText = result.cancelled
+                                          ? QStringLiteral("已暂停（%1/%2），下次会从上一个单词重下")
+                                                .arg(qMin(processed, result.totalWords))
+                                                .arg(result.totalWords)
+                                          : QStringLiteral("完成：新增%1 已有%2 无MP3%3 失败%4")
+                                                .arg(result.downloaded)
+                                                .arg(result.reused)
+                                                .arg(result.noMp3)
+                                                .arg(result.failed);
+            window->wordBooksPage_->setAudioDownloadStatus(finalText,
+                                                           qMin(processed, result.totalWords),
+                                                           result.totalWords,
+                                                           false);
+        }, Qt::QueuedConnection);
+    });
+
+    audioDownloadThread_ = thread;
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 void VibeSpellerWindow::onAudioDownloadStopRequested() {
     if (!audioDownloadRunning_) {
         return;
     }
-    audioDownloadCancelRequested_ = true;
+    audioDownloadCancelRequested_.store(true);
     wordBooksPage_->setAudioDownloadStatus(QStringLiteral("正在停止..."), -1, -1, true);
 }
 

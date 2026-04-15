@@ -816,16 +816,18 @@ void WordBooksPageWidget::rebuildList() {
         } else {
             auto *downloadButton = new QPushButton(QStringLiteral("下载音频"), row);
             downloadButton->setObjectName(QStringLiteral("bookDownloadButton"));
-            downloadButton->setFixedSize(88, 28);
+            downloadButton->setFixedSize(112, 34);
+            downloadButton->setCursor(Qt::PointingHandCursor);
             downloadButton->setToolTip(QStringLiteral("下载音频"));
             downloadButton->setStyleSheet(QStringLiteral(
                 "#bookDownloadButton {"
-                "  font-size: 12px; font-weight: 700; border-radius: 8px;"
-                "  padding: 0;"
-                "  border: 1px solid rgba(15,23,42,0.20);"
-                "  background: transparent; color: #334155;"
+                "  font-size: 13px; font-weight: 700; border-radius: 17px;"
+                "  padding: 0 12px;"
+                "  border: 1px solid rgba(15,23,42,0.14);"
+                "  background: #f8fafc; color: #0f172a;"
                 "}"
-                "#bookDownloadButton:hover { background: rgba(15,23,42,0.05); }"));
+                "#bookDownloadButton:hover { background: #eef2f7; }"
+                "#bookDownloadButton:pressed { background: #e2e8f0; }"));
             connect(downloadButton, &QPushButton::clicked, this, [this, book]() {
                 emit downloadAudioRequested(book.id);
             });
@@ -895,4 +897,3 @@ void WordBooksPageWidget::rebuildList() {
 
     booksList_->setUpdatesEnabled(true);
 }
-

@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QRect>
 #include <QWidget>
+#include <atomic>
 
 #include "database_manager.h"
 
@@ -23,6 +24,7 @@ class QTableWidget;
 class QTimer;
 class QVBoxLayout;
 class QProcess;
+class QThread;
 
 struct PracticeRecord {
     WordItem word;
@@ -297,7 +299,8 @@ private:
     QDateTime lastStudyUserActionTime_;
     QTimer *studyIdleTimer_ = nullptr;
     bool audioDownloadRunning_ = false;
-    bool audioDownloadCancelRequested_ = false;
+    std::atomic_bool audioDownloadCancelRequested_ {false};
+    QThread *audioDownloadThread_ = nullptr;
     bool debugMode_ = false;
     QProcess *pronunciationProcess_ = nullptr;
     QHash<QString, qreal> pronunciationVolumeCache_;
