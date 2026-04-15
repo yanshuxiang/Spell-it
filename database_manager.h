@@ -19,6 +19,7 @@ struct WordItem {
     int interval = 0;
     QDateTime nextReview;
     int status = 0;
+    bool skipForever = false;
 };
 
 struct WordBookItem {
@@ -79,6 +80,7 @@ public:
     bool hasSessionProgress(const QString &mode) const;
     bool recordSpellingAttempt(int wordId, bool correct);
     bool fetchWordDebugStats(int wordId, WordDebugStats &stats) const;
+    bool setWordSkipForever(int wordId, bool skipForever = true);
 
     SpellingResult evaluateSpelling(const QString &input, const QString &target) const;
 

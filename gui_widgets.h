@@ -97,6 +97,7 @@ public:
 signals:
     void submitted(const QString &text);
     void exitRequested();
+    void skipForeverRequested();
     void proceedRequested();
     void userActivity();
     void correctTransitionFinished();
@@ -109,12 +110,16 @@ private:
     void setAwaitingProceed(bool awaiting);
     void applyInputDefaultStyle();
     void refreshAnimationBasePositions();
+    void showSkipForeverTip(const QPoint &anchorPos);
+    void hideSkipForeverTip();
 
     QLabel *modeLabel_ = nullptr;
     QLabel *progressLabel_ = nullptr;
     QLabel *translationLabel_ = nullptr;
     QLineEdit *inputEdit_ = nullptr;
     QLabel *feedbackLabel_ = nullptr;
+    QPushButton *skipForeverButton_ = nullptr;
+    QLabel *skipForeverTip_ = nullptr;
     QWidget *debugHost_ = nullptr;
     QLabel *debugScheduleLabel_ = nullptr;
     QLabel *debugAccuracyLabel_ = nullptr;
@@ -224,6 +229,7 @@ private slots:
     void onSubmitAnswer(const QString &text);
     void onProceedAfterFeedback();
     void onExitSession();
+    void onSkipForeverCurrentWord();
     void onOpenWordBooks();
     void onSelectWordBook(int bookId);
     void onDeleteWordBook(int bookId);

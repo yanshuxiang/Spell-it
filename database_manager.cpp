@@ -144,7 +144,8 @@ bool DatabaseManager::initialize() {
         "ease_factor REAL DEFAULT 2.5,"
         "interval INTEGER DEFAULT 0,"
         "next_review TEXT,"
-        "status INTEGER DEFAULT 0"
+        "status INTEGER DEFAULT 0,"
+        "skip_forever INTEGER DEFAULT 0"
         ")");
 
     if (!query.exec(createSql)) {
@@ -175,6 +176,7 @@ bool DatabaseManager::initialize() {
     }
 
     bool hasBookIdColumn = false;
+    bool hasSkipForeverColumn = false;
     QSqlQuery tableInfo(database());
     if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
         lastError_ = tableInfo.lastError().text();
@@ -183,11 +185,23 @@ bool DatabaseManager::initialize() {
     while (tableInfo.next()) {
         if (tableInfo.value(1).toString() == QStringLiteral("book_id")) {
             hasBookIdColumn = true;
-            break;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("skip_forever")) {
+            hasSkipForeverColumn = true;
         }
     }
     if (!hasBookIdColumn) {
         if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN book_id INTEGER"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+    if (!hasSkipForeverColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN skip_forever INTEGER DEFAULT 0"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        if (!query.exec(QStringLiteral("UPDATE words SET skip_forever = 0 WHERE skip_forever IS NULL"))) {
             lastError_ = query.lastError().text();
             return false;
         }
@@ -224,6 +238,11 @@ bool DatabaseManager::initialize() {
     }
 
     if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_book ON words(book_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_skip_forever ON words(skip_forever)"))) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -410,8 +429,8 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO words "
-        "(word, phonetic, translation, ease_factor, interval, next_review, status, book_id) "
-        "VALUES (?, ?, ?, 2.5, 0, NULL, 0, ?)"));
+        "(word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever, book_id) "
+        "VALUES (?, ?, ?, 2.5, 0, NULL, 0, 0, ?)"));
 
     while (true) {
         const QString record = readCsvRecord(in);
@@ -636,7 +655,7 @@ int DatabaseManager::unlearnedCount() const {
     }
 
     QSqlQuery query(database());
-    query.prepare(QStringLiteral("SELECT COUNT(*) FROM words WHERE status = 0 AND book_id = ?"));
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM words WHERE status = 0 AND skip_forever = 0 AND book_id = ?"));
     query.bindValue(0, activeBookId);
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -662,7 +681,7 @@ int DatabaseManager::dueReviewCount(const QDateTime &now) const {
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL "
+        "WHERE status != 0 AND skip_forever = 0 AND next_review IS NOT NULL "
         "AND date(next_review) <= date(?) AND book_id = ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
     query.bindValue(1, activeBookId);
@@ -691,8 +710,8 @@ QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
-        "FROM words WHERE status = 0 AND book_id = ? ORDER BY id LIMIT ?"));
+        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
+        "FROM words WHERE status = 0 AND skip_forever = 0 AND book_id = ? ORDER BY id LIMIT ?"));
     query.bindValue(0, activeBookId);
     query.bindValue(1, qMax(1, limit));
 
@@ -721,9 +740,9 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
+        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
         "FROM words "
-        "WHERE status != 0 AND next_review IS NOT NULL "
+        "WHERE status != 0 AND skip_forever = 0 AND next_review IS NOT NULL "
         "AND date(next_review) <= date(?) AND book_id = ? "
         "ORDER BY next_review ASC, id ASC LIMIT ?"));
     query.bindValue(0, now.toString(kDateTimeFormat));
@@ -758,8 +777,8 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
-        "FROM words WHERE book_id = ? ORDER BY id"));
+        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
+        "FROM words WHERE skip_forever = 0 AND book_id = ? ORDER BY id"));
     query.bindValue(0, targetBookId);
 
     if (!query.exec()) {
@@ -1379,7 +1398,7 @@ bool DatabaseManager::queryWordById(int wordId, WordItem &item) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status "
+        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
         "FROM words WHERE id = ?"));
     query.bindValue(0, wordId);
 
@@ -1394,5 +1413,26 @@ bool DatabaseManager::queryWordById(int wordId, WordItem &item) const {
     }
 
     item = readWordFromQuery(query);
+    return true;
+}
+
+bool DatabaseManager::setWordSkipForever(int wordId, bool skipForever) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    if (wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("UPDATE words SET skip_forever = ? WHERE id = ?"));
+    query.bindValue(0, skipForever ? 1 : 0);
+    query.bindValue(1, wordId);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
     return true;
 }

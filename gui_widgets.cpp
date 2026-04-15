@@ -60,7 +60,7 @@ constexpr int kStudyIdleCutoffSeconds = 120;
 // 每组练习词数。调试时可改成 5 等更小值。
 constexpr int kSessionBatchSize = 5;
 // 正确切词动画时长（毫秒），默认 0.7 秒。
-constexpr int kCorrectTransitionMs = 700;
+constexpr int kCorrectTransitionMs = 300;
 // 错误抖动动画时长（毫秒），默认 0.2 秒。
 constexpr int kWrongShakeMs = 200;
 // 正确切词位移幅度（像素），调大可让左右切换更明显。
@@ -292,6 +292,28 @@ QIcon createChartLineIcon() {
     painter.drawLine(QPointF(8, 18), QPointF(12, 14));
     painter.drawLine(QPointF(12, 14), QPointF(15, 16));
     painter.drawLine(QPointF(15, 16), QPointF(20, 10));
+    return QIcon(pix);
+}
+
+QIcon createTrashLineIcon() {
+    QPixmap pix(20, 20);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor("#475569"));
+    pen.setWidthF(1.7);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    painter.drawRoundedRect(QRectF(6.5, 6.5, 7.0, 9.5), 1.8, 1.8);
+    painter.drawLine(QPointF(5.0, 6.5), QPointF(15.0, 6.5));
+    painter.drawLine(QPointF(7.6, 4.8), QPointF(12.4, 4.8));
+    painter.drawLine(QPointF(8.3, 8.2), QPointF(8.3, 14.6));
+    painter.drawLine(QPointF(10.0, 8.2), QPointF(10.0, 14.6));
+    painter.drawLine(QPointF(11.7, 8.2), QPointF(11.7, 14.6));
     return QIcon(pix);
 }
 
@@ -824,10 +846,38 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     progressLabel_ = new QLabel(this);
     progressLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #4b5563;"));
 
+    skipForeverButton_ = new QPushButton(this);
+    skipForeverButton_->setFixedSize(40, 40);
+    skipForeverButton_->setIcon(createTrashLineIcon());
+    skipForeverButton_->setIconSize(QSize(25, 25));
+    skipForeverButton_->setCursor(Qt::PointingHandCursor);
+    skipForeverButton_->setToolTip(QString());
+    skipForeverButton_->setMouseTracking(true);
+    skipForeverButton_->setAttribute(Qt::WA_Hover, true);
+    skipForeverButton_->installEventFilter(this);
+    skipForeverButton_->setStyleSheet(QStringLiteral(
+        "border: none;"
+        "background: transparent;"
+        "padding: 0;"
+        "margin: 0;"));
+
+    skipForeverTip_ = new QLabel(QStringLiteral("双击标熟"), this);
+    skipForeverTip_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    skipForeverTip_->setVisible(false);
+    skipForeverTip_->setStyleSheet(QStringLiteral(
+        "background: rgba(15, 23, 42, 0.92);"
+        "color: #ffffff;"
+        "border-radius: 10px;"
+        "padding: 5px 9px;"
+        "font-size: 12px;"
+        "font-weight: 600;"));
+
     top->addWidget(exitButton_);
     top->addStretch();
     top->addWidget(modeLabel_);
     top->addStretch();
+    top->addWidget(skipForeverButton_, 0, Qt::AlignVCenter);
+    top->addSpacing(4);
     top->addWidget(progressLabel_);
     top->setContentsMargins(4, 2, 4, 8);
 
@@ -912,6 +962,9 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
         emit userActivity();
         emit exitRequested();
     });
+    connect(skipForeverButton_, &QPushButton::clicked, this, [this]() {
+        // 单击不执行动作，避免误触；永久跳过只通过双击触发。
+    });
 }
 
 void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
@@ -989,6 +1042,25 @@ void SpellingPageWidget::setDebugInfo(const QDateTime &nextReview, int attemptCo
 void SpellingPageWidget::clearDebugInfo() {
     debugScheduleLabel_->setText(QString());
     debugAccuracyLabel_->setText(QString());
+}
+
+void SpellingPageWidget::showSkipForeverTip(const QPoint &anchorPos) {
+    if (!skipForeverTip_) {
+        return;
+    }
+
+    skipForeverTip_->adjustSize();
+    QPoint popupPos = anchorPos - QPoint(skipForeverTip_->width() + 10, skipForeverTip_->height() + 10);
+    popupPos.setX(qBound(6, popupPos.x(), width() - skipForeverTip_->width() - 6));
+    popupPos.setY(qBound(6, popupPos.y(), height() - skipForeverTip_->height() - 6));
+    skipForeverTip_->move(popupPos);
+    skipForeverTip_->show();
+}
+
+void SpellingPageWidget::hideSkipForeverTip() {
+    if (skipForeverTip_) {
+        skipForeverTip_->hide();
+    }
 }
 
 void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
@@ -1148,6 +1220,34 @@ void SpellingPageWidget::keyPressEvent(QKeyEvent *event) {
 }
 
 bool SpellingPageWidget::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == skipForeverButton_) {
+        switch (event->type()) {
+        case QEvent::Enter:
+        case QEvent::HoverEnter: {
+            const QPoint anchorPos = skipForeverButton_->mapToParent(skipForeverButton_->rect().center());
+            showSkipForeverTip(anchorPos);
+            break;
+        }
+        case QEvent::MouseMove: {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            const QPoint anchorPos = skipForeverButton_->mapToParent(mouseEvent->pos());
+            showSkipForeverTip(anchorPos);
+            break;
+        }
+        case QEvent::Leave:
+        case QEvent::HoverLeave:
+            hideSkipForeverTip();
+            break;
+        case QEvent::MouseButtonDblClick:
+            emit userActivity();
+            emit skipForeverRequested();
+            hideSkipForeverTip();
+            return true;
+        default:
+            break;
+        }
+    }
+
     if (watched == inputEdit_ && event->type() == QEvent::KeyPress && resetInputOnNextType_) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         const bool isReturnKey = (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter);
@@ -2182,6 +2282,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(spellingPage_, &SpellingPageWidget::submitted, this, &VibeSpellerWindow::onSubmitAnswer);
     connect(spellingPage_, &SpellingPageWidget::proceedRequested, this, &VibeSpellerWindow::onProceedAfterFeedback);
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
+    connect(spellingPage_, &SpellingPageWidget::skipForeverRequested, this, &VibeSpellerWindow::onSkipForeverCurrentWord);
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
@@ -2432,6 +2533,41 @@ void VibeSpellerWindow::onExitSession() {
     persistCurrentSession();
     refreshHomeCounts();
     stack_->setCurrentWidget(homePage_);
+}
+
+void VibeSpellerWindow::onSkipForeverCurrentWord() {
+    if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
+        return;
+    }
+
+    const WordItem current = currentWords_.at(currentIndex_);
+    if (current.id <= 0) {
+        return;
+    }
+
+    if (!db_.setWordSkipForever(current.id, true)) {
+        showWarningPrompt(this,
+                          QStringLiteral("标记失败"),
+                          QStringLiteral("标记永久跳过失败：%1").arg(db_.lastError()));
+        return;
+    }
+
+    for (int i = currentWords_.size() - 1; i >= 0; --i) {
+        if (currentWords_.at(i).id == current.id) {
+            currentWords_.removeAt(i);
+        }
+    }
+
+    roundMistakeCounts_.remove(current.id);
+    firstWrongInputs_.remove(current.id);
+
+    if (currentWords_.isEmpty() || currentIndex_ >= currentWords_.size()) {
+        finishSession();
+        return;
+    }
+
+    persistCurrentSession();
+    showCurrentWord();
 }
 
 void VibeSpellerWindow::onOpenWordBooks() {
@@ -2879,6 +3015,9 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     deduped.reserve(currentWords_.size());
     QSet<int> pickedIds;
     for (const WordItem &word : currentWords_) {
+        if (word.skipForever) {
+            continue;
+        }
         if (word.id > 0 && pickedIds.contains(word.id)) {
             continue;
         }
@@ -2908,6 +3047,9 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
                                                  ? db_.fetchReviewBatch(QDateTime::currentDateTime(), fetchLimit)
                                                  : db_.fetchLearningBatch(fetchLimit);
         for (const WordItem &candidate : candidates) {
+            if (candidate.skipForever) {
+                continue;
+            }
             if (pickedIds.contains(candidate.id)) {
                 continue;
             }
