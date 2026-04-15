@@ -184,7 +184,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-i", type=float, default=DEFAULT_TARGET_I, help="Target integrated loudness (LUFS)")
     parser.add_argument("--target-tp", type=float, default=DEFAULT_TARGET_TP, help="Target true peak (dBTP)")
     parser.add_argument("--target-lra", type=float, default=DEFAULT_TARGET_LRA, help="Target loudness range")
-    parser.add_argument("--sleep-ms", type=int, default=120, help="Sleep between files in milliseconds")
+    parser.add_argument("--sleep-ms", type=int, default=0, help="Optional sleep between files in milliseconds")
     parser.add_argument("--limit", type=int, default=0, help="Process only first N files after resume point (0 = all)")
     parser.add_argument(
         "--workers",
