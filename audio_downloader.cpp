@@ -15,10 +15,14 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
+#include <future>
+#include <vector>
+
 namespace {
 constexpr int kDictionaryTimeoutMs = 12000;
 constexpr int kAudioTimeoutMs = 18000;
-constexpr int kRequestGapMs = 450;
+constexpr int kAudioDownloadWorkers = 4;
 }
 
 AudioDownloader::AudioDownloader() = default;
@@ -52,23 +56,30 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         onProgress(startIndex, words.size(), QStringLiteral("准备开始..."));
     }
 
-    for (int i = startIndex; i < words.size(); ++i) {
-        if (shouldCancel && shouldCancel()) {
-            result.cancelled = true;
-            break;
-        }
+    struct ItemResult {
+        enum class Status {
+            Downloaded,
+            Reused,
+            NoMp3,
+            Failed,
+        };
 
-        const QString rawWord = words.at(i).word.trimmed();
-        if (onProgress) {
-            onProgress(i, words.size(), rawWord);
-        }
+        int index = -1;
+        QString word;
+        Status status = Status::Failed;
+        QString errorText;
+    };
+
+    const auto downloadOne = [this, &dir](int index, const WordItem &item) -> ItemResult {
+        ItemResult itemResult;
+        itemResult.index = index;
+
+        const QString rawWord = item.word.trimmed();
+        itemResult.word = rawWord;
         if (rawWord.isEmpty()) {
-            ++result.failed;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), QStringLiteral("(空单词)"));
-            }
-            continue;
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = QStringLiteral("(空单词)");
+            return itemResult;
         }
 
         const QString fileName = safeAudioFileName(rawWord) + QStringLiteral(".mp3");
@@ -77,13 +88,8 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         QFile existing(finalPath);
         if (existing.exists()) {
             if (existing.size() > 0) {
-                ++result.reused;
-                saveLastCompletedIndex(bookId, i);
-                if (onProgress) {
-                    onProgress(i, words.size(), rawWord);
-                }
-                QThread::msleep(kRequestGapMs);
-                continue;
+                itemResult.status = ItemResult::Status::Reused;
+                return itemResult;
             }
             existing.remove();
         }
@@ -94,66 +100,86 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
                                 .arg(QString::fromLatin1(QUrl::toPercentEncoding(rawWord))));
 
         if (!fetchUrl(queryUrl, dictionaryJson, fetchError, kDictionaryTimeoutMs)) {
-            ++result.failed;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), rawWord);
-            }
-            QThread::msleep(kRequestGapMs);
-            continue;
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = fetchError;
+            return itemResult;
         }
 
         const QString mp3Url = extractMp3Url(dictionaryJson);
         if (mp3Url.isEmpty()) {
-            ++result.noMp3;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), rawWord);
-            }
-            QThread::msleep(kRequestGapMs);
-            continue;
+            itemResult.status = ItemResult::Status::NoMp3;
+            return itemResult;
         }
 
-        QThread::msleep(kRequestGapMs);
         QByteArray audioBytes;
         if (!fetchUrl(QUrl(mp3Url), audioBytes, fetchError, kAudioTimeoutMs)) {
-            ++result.failed;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), rawWord);
-            }
-            QThread::msleep(kRequestGapMs);
-            continue;
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = fetchError;
+            return itemResult;
         }
 
         if (audioBytes.isEmpty()) {
-            ++result.failed;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), rawWord);
-            }
-            QThread::msleep(kRequestGapMs);
-            continue;
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = QStringLiteral("下载到的音频为空");
+            return itemResult;
         }
 
         QString writeError;
         if (!writeAudioAtomically(finalPath, audioBytes, writeError)) {
-            ++result.failed;
-            saveLastCompletedIndex(bookId, i);
-            if (onProgress) {
-                onProgress(i, words.size(), rawWord);
-            }
-            QThread::msleep(kRequestGapMs);
-            continue;
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = writeError;
+            return itemResult;
         }
 
-        ++result.downloaded;
-        saveLastCompletedIndex(bookId, i);
-        if (onProgress) {
-            onProgress(i, words.size(), rawWord);
+        itemResult.status = ItemResult::Status::Downloaded;
+        return itemResult;
+    };
+
+    const int workerCount = qBound(1, kAudioDownloadWorkers, qMax(1, QThread::idealThreadCount()));
+    int cursor = startIndex;
+    while (cursor < words.size()) {
+        if (shouldCancel && shouldCancel()) {
+            result.cancelled = true;
+            break;
         }
-        QThread::msleep(kRequestGapMs);
+
+        const int batchEnd = qMin(words.size(), cursor + workerCount);
+        std::vector<std::future<ItemResult>> futures;
+        futures.reserve(static_cast<size_t>(batchEnd - cursor));
+        for (int i = cursor; i < batchEnd; ++i) {
+            futures.emplace_back(std::async(std::launch::async, downloadOne, i, words.at(i)));
+        }
+
+        QVector<ItemResult> batchResults;
+        batchResults.reserve(batchEnd - cursor);
+        for (auto &future : futures) {
+            batchResults.push_back(future.get());
+        }
+        std::sort(batchResults.begin(), batchResults.end(), [](const ItemResult &a, const ItemResult &b) {
+            return a.index < b.index;
+        });
+
+        for (const ItemResult &itemResult : batchResults) {
+            if (itemResult.status == ItemResult::Status::Downloaded) {
+                ++result.downloaded;
+            } else if (itemResult.status == ItemResult::Status::Reused) {
+                ++result.reused;
+            } else if (itemResult.status == ItemResult::Status::NoMp3) {
+                ++result.noMp3;
+            } else {
+                ++result.failed;
+            }
+
+            saveLastCompletedIndex(bookId, itemResult.index);
+            if (onProgress) {
+                const QString shownWord = itemResult.word.isEmpty() ? QStringLiteral("(空单词)") : itemResult.word;
+                onProgress(itemResult.index, words.size(), shownWord);
+            }
+        }
+
+        cursor = batchEnd;
     }
+
     if (onProgress && !result.cancelled) {
         onProgress(words.size(), words.size(), QStringLiteral("下载完成"));
     }
