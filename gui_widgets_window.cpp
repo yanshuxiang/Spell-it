@@ -10,9 +10,16 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGraphicsOpacityEffect>
 #include <QHash>
 #include <QKeySequence>
+#include <QLabel>
+#include <QLayout>
+#include <QPainter>
+#include <QPainterPath>
+#include <QParallelAnimationGroup>
 #include <QProcess>
+#include <QPropertyAnimation>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QShortcut>
@@ -28,6 +35,69 @@
 #include <utility>
 
 using namespace GuiWidgetsInternal;
+
+namespace {
+constexpr int kUnifiedCornerRadiusPx = 18;
+
+class LaunchSnapshotCard final : public QWidget {
+public:
+    explicit LaunchSnapshotCard(QWidget *parent = nullptr)
+        : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+    void setSnapshot(const QPixmap &pixmap) {
+        snapshot_ = pixmap;
+        update();
+    }
+
+    void setCornerRadius(qreal radius) {
+        cornerRadius_ = qMax<qreal>(0.0, radius);
+        update();
+    }
+
+    void setBorderWidth(qreal width) {
+        borderWidth_ = qMax<qreal>(0.0, width);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+        const qreal halfBorder = borderWidth_ * 0.5;
+        const QRectF bounds = rect().adjusted(halfBorder, halfBorder, -halfBorder, -halfBorder);
+        if (bounds.isEmpty()) {
+            return;
+        }
+
+        QPainterPath clipPath;
+        clipPath.addRoundedRect(bounds, cornerRadius_, cornerRadius_);
+        painter.setClipPath(clipPath);
+        painter.fillRect(bounds, QColor("#ffffff"));
+
+        if (!snapshot_.isNull()) {
+            painter.drawPixmap(bounds.toRect(), snapshot_);
+        }
+
+        painter.setClipping(false);
+        QPen pen(QColor("#cbd5e1"));
+        pen.setWidthF(borderWidth_);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(clipPath);
+    }
+
+private:
+    QPixmap snapshot_;
+    qreal cornerRadius_ = 18.0;
+    qreal borderWidth_ = 2.0;
+};
+} // namespace
+
 VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     : QWidget(parent) {
     setWindowTitle(QStringLiteral("VibeSpeller"));
@@ -173,9 +243,27 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     initializeDatabase();
     refreshHomeCounts();
     refreshWordBooks();
+    applyRoundedWindowMask();
 
     // 启动后若词库为空，提示导入 CSV。
     QTimer::singleShot(0, this, &VibeSpellerWindow::requestCsvImportIfNeeded);
+}
+
+void VibeSpellerWindow::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    applyRoundedWindowMask();
+}
+
+void VibeSpellerWindow::applyRoundedWindowMask() {
+    if (width() <= 0 || height() <= 0) {
+        clearMask();
+        return;
+    }
+
+    QPainterPath path;
+    path.addRoundedRect(rect(), kUnifiedCornerRadiusPx, kUnifiedCornerRadiusPx);
+    const QPolygon polygon = path.toFillPolygon().toPolygon();
+    setMask(QRegion(polygon));
 }
 
 void VibeSpellerWindow::changeEvent(QEvent *event) {
@@ -192,6 +280,7 @@ void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
 }
 
 void VibeSpellerWindow::onStartLearning() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(true);
     if (tryResumeSession(SessionMode::Learning)) {
         return;
     }
@@ -211,6 +300,7 @@ void VibeSpellerWindow::onStartLearning() {
 }
 
 void VibeSpellerWindow::onStartReview() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(false);
     if (tryResumeSession(SessionMode::Review)) {
         return;
     }
@@ -956,9 +1046,100 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
         return;
     }
 
-    stack_->setCurrentWidget(spellingPage_);
     persistCurrentSession();
     showCurrentWord();
+    animateHomeToSpellingTransition(pendingHomeLaunchRect_);
+    pendingHomeLaunchRect_ = QRect();
+}
+
+void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect) {
+    const QRect stackRect = stack_->geometry();
+    if (sourceRect.isEmpty() || stack_->currentWidget() != homePage_ || stackRect.isEmpty()) {
+        stack_->setCurrentWidget(spellingPage_);
+        spellingPage_->setFocus();
+        return;
+    }
+
+    QRect startRect(homePage_->mapTo(this, sourceRect.topLeft()), sourceRect.size());
+    startRect = startRect.intersected(rect());
+    if (startRect.isEmpty()) {
+        stack_->setCurrentWidget(spellingPage_);
+        spellingPage_->setFocus();
+        return;
+    }
+
+    const QRect endRect = stackRect.intersected(rect());
+    if (endRect.isEmpty()) {
+        stack_->setCurrentWidget(spellingPage_);
+        spellingPage_->setFocus();
+        return;
+    }
+
+    constexpr int kLaunchDurationMs = 700;
+    constexpr int kCardBorderPx = 2;
+    constexpr int kCardCornerPx = kUnifiedCornerRadiusPx;
+
+    // Render spelling page snapshot first, so page content scales together during launch.
+    spellingPage_->resize(endRect.size());
+    spellingPage_->ensurePolished();
+    if (spellingPage_->layout() != nullptr) {
+        spellingPage_->layout()->activate();
+    }
+
+    QPixmap snapshot(spellingPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        spellingPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        stack_->setCurrentWidget(spellingPage_);
+        spellingPage_->setFocus();
+        return;
+    }
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setStyleSheet(QStringLiteral("background: transparent;"));
+    transitionHost->setGeometry(rect());
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kCardCornerPx);
+    card->setBorderWidth(kCardBorderPx);
+    card->setGeometry(startRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *cardGeomAnim = new QPropertyAnimation(card, "geometry", group);
+    cardGeomAnim->setDuration(kLaunchDurationMs);
+    cardGeomAnim->setStartValue(startRect);
+    cardGeomAnim->setEndValue(endRect);
+    cardGeomAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    auto *homeOpacity = ensureOpacityEffect(homePage_);
+    homeOpacity->setOpacity(1.0);
+    auto *homeFadeAnim = new QPropertyAnimation(homeOpacity, "opacity", group);
+    homeFadeAnim->setDuration(kLaunchDurationMs);
+    homeFadeAnim->setStartValue(1.0);
+    homeFadeAnim->setEndValue(0.0);
+    homeFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this,
+            [this, group, transitionHost, homeOpacity]() {
+        homeOpacity->setOpacity(1.0);
+        stack_->setCurrentWidget(spellingPage_);
+        spellingPage_->setFocus();
+        transitionHost->deleteLater();
+        group->deleteLater();
+    });
+
+    group->start();
 }
 
 void VibeSpellerWindow::showCurrentWord() {

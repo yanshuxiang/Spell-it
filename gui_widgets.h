@@ -42,6 +42,7 @@ public:
                    int reviewCount,
                    int todayLearningCount,
                    int todayReviewCount);
+    QRect launchRect(bool learning) const;
 
 signals:
     void startLearningClicked();
@@ -241,6 +242,7 @@ private slots:
 protected:
     void changeEvent(QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     enum class SessionMode {
@@ -261,6 +263,8 @@ private:
     bool tryResumeSession(SessionMode mode);
     void playPronunciationForWord(const QString &word);
     qreal computeNormalizedVolume(const QString &audioFilePath);
+    void animateHomeToSpellingTransition(const QRect &sourceRect);
+    void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
     void showCurrentWord();
@@ -293,6 +297,7 @@ private:
     QHash<int, QString> firstWrongInputs_;
     int sessionWordTargetCount_ = 0;
     int currentIndex_ = 0;
+    QRect pendingHomeLaunchRect_;
     SessionMode currentMode_ = SessionMode::Learning;
     bool isStudyTrackingActive_ = false;
     QDateTime studyTrackingStartTime_;

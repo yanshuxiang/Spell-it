@@ -119,6 +119,14 @@ void HomePageWidget::setCounts(int learningCount,
     reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));
 }
 
+QRect HomePageWidget::launchRect(bool learning) const {
+    const QPushButton *button = learning ? learningButton_ : reviewButton_;
+    if (button == nullptr) {
+        return QRect();
+    }
+    return button->geometry();
+}
+
 MappingPageWidget::MappingPageWidget(QWidget *parent)
     : QWidget(parent) {
     const int leftLabelWidth = 150;
@@ -332,4 +340,3 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
         previewTable_->setColumnWidth(col, 200);
     }
 }
-

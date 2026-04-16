@@ -8,7 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC OFF)
 set(CMAKE_AUTORCC OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Sql Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Sql Network Quick QuickWidgets Qml)
 
 add_executable(VibeSpeller
     main.cpp
@@ -27,5 +27,6 @@ add_executable(VibeSpeller
 )
 
 target_link_libraries(VibeSpeller PRIVATE Qt6::Widgets Qt6::Sql Qt6::Network)
+target_link_libraries(VibeSpeller PRIVATE Qt6::Quick Qt6::QuickWidgets Qt6::Qml)
 target_compile_definitions(VibeSpeller PRIVATE
     VIBESPELLER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

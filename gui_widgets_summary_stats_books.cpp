@@ -480,8 +480,12 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     backButton_->setIcon(createBackLineIcon());
     backButton_->setIconSize(QSize(20, 20));
     backButton_->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "background: #f3f4f6;"
+        "color: #374151;"
+        "border: none;"
         "border-radius: 14px;"
-        "background: #f3f4f6; color: #374151;"
+        "}"
         "QPushButton:hover { background: #e9ebef; }"));
 
     auto *title = new QLabel(QStringLiteral("词书"), this);
