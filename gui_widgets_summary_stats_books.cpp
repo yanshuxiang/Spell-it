@@ -18,6 +18,61 @@
 #include <QVBoxLayout>
 
 using namespace GuiWidgetsInternal;
+
+namespace {
+class RoundedProgressStrip final : public QWidget {
+public:
+    explicit RoundedProgressStrip(QWidget *parent = nullptr)
+        : QWidget(parent) {}
+
+    void setRange(int minimum, int maximum) {
+        minimum_ = minimum;
+        maximum_ = qMax(minimum_, maximum);
+        value_ = qBound(minimum_, value_, maximum_);
+        update();
+    }
+
+    void setValue(int value) {
+        value_ = qBound(minimum_, value, maximum_);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF r = rect();
+        if (r.width() <= 0 || r.height() <= 0) {
+            return;
+        }
+
+        const qreal radius = r.height() / 2.0;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(148, 163, 184, 56));
+        painter.drawRoundedRect(r, radius, radius);
+
+        const int span = qMax(1, maximum_ - minimum_);
+        const qreal ratio = qBound(0.0, static_cast<qreal>(value_ - minimum_) / span, 1.0);
+        if (ratio <= 0.0) {
+            return;
+        }
+
+        const qreal fillWidth = qMax<qreal>(r.height(), r.width() * ratio);
+        QRectF fillRect = r;
+        fillRect.setWidth(qMin(r.width(), fillWidth));
+        painter.setBrush(QColor("#0ea5a4"));
+        painter.drawRoundedRect(fillRect, radius, radius);
+    }
+
+private:
+    int minimum_ = 0;
+    int maximum_ = 100;
+    int value_ = 0;
+};
+} // namespace
+
 SummaryPageWidget::SummaryPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
@@ -518,17 +573,17 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     audioProgressBar_->setTextVisible(false);
     audioProgressBar_->setRange(0, 100);
     audioProgressBar_->setValue(0);
-    audioProgressBar_->setFixedHeight(8);
+    audioProgressBar_->setFixedHeight(10);
     audioProgressBar_->setStyleSheet(QStringLiteral(
         "QProgressBar {"
         "  border: none;"
-        "  border-radius: 4px;"
+        "  border-radius: 5px;"
         "  background: rgba(148,163,184,0.22);"
         "}"
         "QProgressBar::chunk {"
         "  border: none;"
-        "  border-radius: 4px;"
-        "  min-width: 8px;"
+        "  border-radius: 5px;"
+        "  min-width: 10px;"
         "  background: #0ea5a4;"
         "}"));
 
@@ -711,8 +766,8 @@ void WordBooksPageWidget::rebuildList() {
         layout->setSpacing(12);
 
         const QColor baseColor(coverColorForBook(book.id));
-        const QString coverTop = baseColor.lighter(118).name();
-        const QString coverBottom = baseColor.darker(105).name();
+        const QString coverTop = baseColor.lighter(106).name();
+        const QString coverBottom = baseColor.darker(102).name();
 
         auto *cover = new QLabel(coverTextForBook(book.name), row);
         cover->setAlignment(Qt::AlignCenter);
@@ -742,23 +797,10 @@ void WordBooksPageWidget::rebuildList() {
         textLayout->addWidget(count);
 
         if (isCurrent) {
-            auto *progressBar = new QProgressBar(row);
-            progressBar->setTextVisible(false);
+            auto *progressBar = new RoundedProgressStrip(row);
             progressBar->setRange(0, qMax(1, book.wordCount));
             progressBar->setValue(qBound(0, book.learnedCount, qMax(1, book.wordCount)));
-            progressBar->setFixedHeight(8);
-            progressBar->setStyleSheet(QStringLiteral(
-                "QProgressBar {"
-                "  border: none;"
-                "  border-radius: 4px;"
-                "  background: rgba(148,163,184,0.22);"
-                "}"
-                "QProgressBar::chunk {"
-                "  border: none;"
-                "  border-radius: 4px;"
-                "  min-width: 8px;"
-                "  background: #0ea5a4;"
-                "}"));
+            progressBar->setFixedHeight(10);
 
             auto *progressText = new QHBoxLayout();
             progressText->setContentsMargins(0, 0, 0, 0);

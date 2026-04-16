@@ -132,18 +132,13 @@ QColor summaryRightColor(const PracticeRecord &record, bool reviewMode) {
 }
 
 QString coverColorForBook(int bookId) {
-    static const QStringList colors = {
-        QStringLiteral("#ef4444"),
-        QStringLiteral("#10b981"),
-        QStringLiteral("#84cc16"),
-        QStringLiteral("#f59e0b"),
-        QStringLiteral("#3b82f6"),
-        QStringLiteral("#8b5cf6")
-    };
-    if (bookId < 0) {
-        return colors.first();
-    }
-    return colors.at(bookId % colors.size());
+    // 使用 HSL 按 bookId 生成颜色，减少重复，同时保持低饱和、偏柔和。
+    const int safeId = qMax(0, bookId);
+    constexpr int kHueStep = 47; // 与 360 互质，前 360 个 id 不重复。
+    const int hue = (safeId * kHueStep) % 360;
+    const int saturation = 52; // 低饱和
+    const int lightness = 118; // 偏柔和亮度
+    return QColor::fromHsl(hue, saturation, lightness).name();
 }
 
 QString coverTextForBook(const QString &bookName) {
