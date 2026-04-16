@@ -29,15 +29,21 @@ namespace {
 constexpr int kDictionaryTimeoutMs = 12000;
 constexpr int kAudioTimeoutMs = 18000;
 // 折中值：并发不要太高，避免 API 频繁拒绝。
-constexpr int kAudioDownloadWorkers = 2;
-// 全局请求最小间隔（毫秒），控制所有线程总频率。
+QMutex gRequestGapMutex;
+qint64 gLastRequestMs = 0;
 constexpr qint64 kGlobalRequestGapMs = 260;
-// 限流/网关抖动时的重试策略。
 constexpr int kMaxRetries = 3;
 constexpr int kRetryBaseBackoffMs = 450;
 
-QMutex gRequestGapMutex;
-qint64 gLastRequestMs = 0;
+int getBestWorkerCount(int target = 8) {
+    int ideal = QThread::idealThreadCount();
+    if (ideal <= 0) return 1;
+    int count = target;
+    while (count > ideal && count > 1) {
+        count -= 2;
+    }
+    return qMax(1, count);
+}
 }
 
 AudioDownloader::AudioDownloader() = default;
@@ -196,7 +202,7 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         return itemResult;
     };
 
-    const int workerCount = qBound(1, kAudioDownloadWorkers, qMax(1, QThread::idealThreadCount()));
+    const int workerCount = getBestWorkerCount(8);
     int cursor = 0;
     while (cursor < words.size()) {
         if (shouldCancel && shouldCancel()) {

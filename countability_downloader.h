@@ -28,7 +28,7 @@ public:
         QVector<Update> updates;
     };
 
-    using ProgressCallback = std::function<void(int current, int total, const QString &word)>;
+    using ProgressCallback = std::function<void(int current, int total, const QString &word, const Update &update)>;
     using CancelChecker = std::function<bool()>;
 
     CountabilityDownloader();

@@ -920,13 +920,12 @@ void VibeSpellerWindow::onAudioDownloadStopRequested() {
 }
 
 void VibeSpellerWindow::onDownloadPos(int bookId) {
-    Q_UNUSED(bookId);
     if (posDownloadRunning_) {
         wordBooksPage_->setPosDownloadStatus(QStringLiteral("已有可数性下载任务进行中"), -1, -1, true);
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchWordsForCountabilityDownload();
+    const QVector<WordItem> words = db_.fetchWordsForCountabilityDownload(bookId);
     if (words.isEmpty()) {
         wordBooksPage_->setPosDownloadStatus(QStringLiteral("数据库中无待处理名词"), 0, 0, false);
         return;
@@ -942,7 +941,7 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
         QString errorText;
         const CountabilityDownloader::Result result = downloader.downloadCountabilityForWords(
             words,
-            [window](int current, int total, const QString &word) {
+            [window](int current, int total, const QString &word, const CountabilityDownloader::Update &update) {
                 if (!window) {
                     return;
                 }
@@ -951,8 +950,12 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
                                            .arg(word)
                                            .arg(displayIndex)
                                            .arg(total);
-                QMetaObject::invokeMethod(window.data(), [window, status, current, total]() {
-                    if (window && window->wordBooksPage_) {
+                QMetaObject::invokeMethod(window.data(), [window, status, current, total, update]() {
+                    if (!window) return;
+                    if (update.wordId > 0 && !update.label.isEmpty()) {
+                        window->db_.updateWordCountability(update.wordId, update.label, update.source);
+                    }
+                    if (window->wordBooksPage_) {
                         window->wordBooksPage_->setPosDownloadStatus(status, current, total, true);
                     }
                 }, Qt::QueuedConnection);
@@ -969,10 +972,6 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
         QMetaObject::invokeMethod(window.data(), [window, result, errorText]() {
             if (!window) {
                 return;
-            }
-
-            for (const CountabilityDownloader::Update &update : result.updates) {
-                window->db_.updateWordCountability(update.wordId, update.label, update.source);
             }
 
             window->posDownloadRunning_ = false;

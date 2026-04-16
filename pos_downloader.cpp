@@ -24,10 +24,18 @@ constexpr int kDictionaryTimeoutMs = 12000;
 constexpr int kGlobalRequestGapMs = 260;
 constexpr int kMaxRetries = 3;
 constexpr int kRetryBaseBackoffMs = 450;
-constexpr int kPosDownloadWorkers = 3;
-
 QMutex gRequestGapMutex;
 qint64 gLastRequestMs = 0;
+
+int getBestWorkerCount(int target = 8) {
+    int ideal = QThread::idealThreadCount();
+    if (ideal <= 0) return 1;
+    int count = target;
+    while (count > ideal && count > 1) {
+        count -= 2;
+    }
+    return qMax(1, count);
+}
 }
 
 PosDownloader::PosDownloader() = default;
@@ -88,7 +96,7 @@ PosDownloader::Result PosDownloader::downloadPartOfSpeechForWords(const QVector<
         return r;
     };
 
-    const int workerCount = qBound(1, kPosDownloadWorkers, qMax(1, QThread::idealThreadCount()));
+    const int workerCount = getBestWorkerCount(8);
     int cursor = 0;
     while (cursor < words.size()) {
         if (shouldCancel && shouldCancel()) {

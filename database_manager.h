@@ -87,7 +87,7 @@ public:
     QVector<WordItem> fetchCountabilityReviewBatch(const QDateTime &now, int limit) const;
     QVector<WordItem> fetchWordsForBook(int bookId) const;
     QVector<WordItem> fetchWordsMissingPartOfSpeechForBook(int bookId) const;
-    QVector<WordItem> fetchWordsForCountabilityDownload() const;
+    QVector<WordItem> fetchWordsForCountabilityDownload(int bookId = -1) const;
     bool updateWordPartOfSpeech(int wordId,
                                 const QString &partOfSpeech,
                                 const QString &source = QStringLiteral("dictionaryapi.dev"));

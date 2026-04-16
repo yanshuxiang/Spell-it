@@ -23,10 +23,19 @@ constexpr int kOxfordTimeoutMs = 15000;
 constexpr int kGlobalRequestGapMs = 900;
 constexpr int kMaxRetries = 2;
 constexpr int kRetryBackoffMs = 600;
-constexpr int kCountabilityDownloadWorkers = 3;
 
 QMutex gCountabilityGapMutex;
 qint64 gCountabilityLastRequestMs = 0;
+
+int getBestWorkerCount(int target = 8) {
+    int ideal = QThread::idealThreadCount();
+    if (ideal <= 0) return 1;
+    int count = target;
+    while (count > ideal && count > 1) {
+        count -= 2;
+    }
+    return qMax(1, count);
+}
 
 QString toLowerNoTags(QString s) {
     s = s.toLower();
@@ -53,7 +62,7 @@ CountabilityDownloader::Result CountabilityDownloader::downloadCountabilityForWo
     }
 
     if (onProgress) {
-        onProgress(0, words.size(), QStringLiteral("准备开始..."));
+        onProgress(0, words.size(), QStringLiteral("准备开始..."), Update{});
     }
 
     struct ItemResult {
@@ -123,7 +132,7 @@ CountabilityDownloader::Result CountabilityDownloader::downloadCountabilityForWo
         return r;
     };
 
-    const int workerCount = qBound(1, kCountabilityDownloadWorkers, qMax(1, QThread::idealThreadCount()));
+    const int workerCount = getBestWorkerCount(8);
     int cursor = 0;
     while (cursor < words.size()) {
         if (shouldCancel && shouldCancel()) {
@@ -169,7 +178,7 @@ CountabilityDownloader::Result CountabilityDownloader::downloadCountabilityForWo
 
             if (onProgress) {
                 const QString shownWord = r.update.word.isEmpty() ? QStringLiteral("(空单词)") : r.update.word;
-                onProgress(r.index, words.size(), shownWord);
+                onProgress(r.index, words.size(), shownWord, r.update);
             }
         }
 
@@ -177,7 +186,7 @@ CountabilityDownloader::Result CountabilityDownloader::downloadCountabilityForWo
     }
 
     if (onProgress && !result.cancelled) {
-        onProgress(words.size(), words.size(), QStringLiteral("下载完成"));
+        onProgress(words.size(), words.size(), QStringLiteral("下载完成"), Update{});
     }
     return result;
 }

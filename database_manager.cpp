@@ -1225,24 +1225,37 @@ QVector<WordItem> DatabaseManager::fetchWordsMissingPartOfSpeechForBook(int book
     return items;
 }
 
-QVector<WordItem> DatabaseManager::fetchWordsForCountabilityDownload() const {
+QVector<WordItem> DatabaseManager::fetchWordsForCountabilityDownload(int bookId) const {
     QVector<WordItem> items;
     if (!ensureDatabaseOpen()) {
         return items;
     }
 
     QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, part_of_speech, countability_label, countability_hash, "
-        "       ease_factor, interval, next_review, status, skip_forever "
-        "FROM words "
-        "WHERE skip_forever = 0 "
+    QString sql = QStringLiteral(
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.countability_label, w.countability_hash, "
+        "       w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever ");
+
+    if (bookId > 0) {
+        sql += QStringLiteral("FROM book_words bw JOIN words w ON w.id = bw.word_id WHERE bw.book_id = ? ");
+    } else {
+        sql += QStringLiteral("FROM words w WHERE 1=1 ");
+    }
+
+    sql += QStringLiteral(
+        "  AND w.skip_forever = 0 "
         "  AND ("
-        "       lower(COALESCE(part_of_speech, '')) LIKE '%noun%' "
-        "    OR lower(COALESCE(translation, '')) LIKE 'n.%' "
-        "    OR lower(COALESCE(translation, '')) LIKE '% n.%'"
+        "       lower(COALESCE(w.part_of_speech, '')) LIKE '%noun%' "
+        "    OR lower(COALESCE(w.translation, '')) LIKE 'n.%' "
+        "    OR lower(COALESCE(w.translation, '')) LIKE '% n.%'"
         "  ) "
-        "ORDER BY id"));
+        "ORDER BY w.id");
+
+    query.prepare(sql);
+    if (bookId > 0) {
+        query.bindValue(0, bookId);
+    }
+
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return items;
@@ -1255,11 +1268,15 @@ QVector<WordItem> DatabaseManager::fetchWordsForCountabilityDownload() const {
         const bool hasValidLabel = (label == QStringLiteral("C")
                                     || label == QStringLiteral("U")
                                     || label == QStringLiteral("B"));
+        
+        if (label == QStringLiteral("NA")) {
+            continue; // 已标记为无法获取，不再重复下载
+        }
+
         if (hasValidLabel) {
-            const QString expectedHash = countabilityHashFor(query.value("word").toString(), label).toLower();
-            if (!storedHash.isEmpty() && storedHash == expectedHash) {
-                continue; // 已下载且校验通过，不再下载
-            }
+            // 如果已经有合法的可数性标签，则认为已经存在，不再重复下载
+            // 避免覆盖用户手动导入的标签，也解决了断点续下时重复下载的问题
+            continue; 
         }
         items.push_back(readWordFromQuery(query));
     }
