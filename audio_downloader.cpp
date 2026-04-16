@@ -130,31 +130,46 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
 
         QByteArray dictionaryJson;
         QString fetchError;
-        const QUrl queryUrl(QStringLiteral("https://api.dictionaryapi.dev/api/v2/entries/en/%1")
-                                .arg(QString::fromLatin1(QUrl::toPercentEncoding(rawWord))));
+        const QString encodedWord = QString::fromLatin1(QUrl::toPercentEncoding(rawWord));
+        const QUrl dictionaryQueryUrl(QStringLiteral("https://api.dictionaryapi.dev/api/v2/entries/en/%1")
+                                          .arg(encodedWord));
+        const QUrl youdaoFallbackUrl(QStringLiteral("http://dict.youdao.com/dictvoice?type=1&audio=%1")
+                                         .arg(encodedWord));
 
-        if (!fetchUrl(queryUrl, dictionaryJson, fetchError, kDictionaryTimeoutMs)) {
-            itemResult.status = ItemResult::Status::Failed;
-            itemResult.errorText = fetchError;
-            return itemResult;
+        QString dictionaryMp3Url;
+        if (fetchUrl(dictionaryQueryUrl, dictionaryJson, fetchError, kDictionaryTimeoutMs)) {
+            dictionaryMp3Url = extractMp3Url(dictionaryJson);
         }
 
-        const QString mp3Url = extractMp3Url(dictionaryJson);
-        if (mp3Url.isEmpty()) {
-            itemResult.status = ItemResult::Status::NoMp3;
-            return itemResult;
+        QVector<QUrl> candidateAudioUrls;
+        if (!dictionaryMp3Url.isEmpty()) {
+            candidateAudioUrls.push_back(QUrl(dictionaryMp3Url));
         }
+        candidateAudioUrls.push_back(youdaoFallbackUrl);
 
         QByteArray audioBytes;
-        if (!fetchUrl(QUrl(mp3Url), audioBytes, fetchError, kAudioTimeoutMs)) {
-            itemResult.status = ItemResult::Status::Failed;
-            itemResult.errorText = fetchError;
-            return itemResult;
+        QStringList fetchErrors;
+        for (const QUrl &audioUrl : candidateAudioUrls) {
+            if (!audioUrl.isValid()) {
+                continue;
+            }
+            fetchError.clear();
+            audioBytes.clear();
+            if (fetchUrl(audioUrl, audioBytes, fetchError, kAudioTimeoutMs) && !audioBytes.isEmpty()) {
+                break;
+            }
+            if (!fetchError.trimmed().isEmpty()) {
+                fetchErrors.push_back(fetchError);
+            }
         }
 
         if (audioBytes.isEmpty()) {
-            itemResult.status = ItemResult::Status::Failed;
-            itemResult.errorText = QStringLiteral("下载到的音频为空");
+            if (dictionaryMp3Url.isEmpty()) {
+                itemResult.status = ItemResult::Status::NoMp3;
+            } else {
+                itemResult.status = ItemResult::Status::Failed;
+            }
+            itemResult.errorText = fetchErrors.join(QStringLiteral(" | "));
             return itemResult;
         }
 
