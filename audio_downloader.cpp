@@ -1,14 +1,20 @@
 #include "audio_downloader.h"
 
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QDebug>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QThread>
@@ -22,7 +28,16 @@
 namespace {
 constexpr int kDictionaryTimeoutMs = 12000;
 constexpr int kAudioTimeoutMs = 18000;
-constexpr int kAudioDownloadWorkers = 4;
+// 折中值：并发不要太高，避免 API 频繁拒绝。
+constexpr int kAudioDownloadWorkers = 2;
+// 全局请求最小间隔（毫秒），控制所有线程总频率。
+constexpr qint64 kGlobalRequestGapMs = 260;
+// 限流/网关抖动时的重试策略。
+constexpr int kMaxRetries = 3;
+constexpr int kRetryBaseBackoffMs = 450;
+
+QMutex gRequestGapMutex;
+qint64 gLastRequestMs = 0;
 }
 
 AudioDownloader::AudioDownloader() = default;
@@ -34,6 +49,7 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
                                                            QString &errorText) const {
     Result result;
     errorText.clear();
+    Q_UNUSED(bookId);
     result.totalWords = words.size();
     if (words.isEmpty()) {
         return result;
@@ -45,15 +61,13 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         return result;
     }
 
-    int startIndex = 0;
-    const int lastCompleted = loadLastCompletedIndex(bookId);
-    if (lastCompleted >= 0) {
-        startIndex = qBound(0, lastCompleted, words.size() - 1);
+    QHash<QString, QString> hashManifest;
+    if (!loadHashManifest(hashManifest, errorText)) {
+        return result;
     }
-    result.resumeStartIndex = startIndex;
 
     if (onProgress) {
-        onProgress(startIndex, words.size(), QStringLiteral("准备开始..."));
+        onProgress(0, words.size(), QStringLiteral("准备校验..."));
     }
 
     struct ItemResult {
@@ -61,21 +75,26 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
             Downloaded,
             Reused,
             NoMp3,
+            HashMismatch,
             Failed,
         };
 
         int index = -1;
         QString word;
+        QString manifestKey;
+        QString hashHex;
+        bool shouldPersistHash = false;
         Status status = Status::Failed;
         QString errorText;
     };
 
-    const auto downloadOne = [this, &dir](int index, const WordItem &item) -> ItemResult {
+    const auto downloadOne = [this, &dir, &hashManifest](int index, const WordItem &item) -> ItemResult {
         ItemResult itemResult;
         itemResult.index = index;
 
         const QString rawWord = item.word.trimmed();
         itemResult.word = rawWord;
+        itemResult.manifestKey = manifestKeyForWord(rawWord);
         if (rawWord.isEmpty()) {
             itemResult.status = ItemResult::Status::Failed;
             itemResult.errorText = QStringLiteral("(空单词)");
@@ -84,14 +103,29 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
 
         const QString fileName = safeAudioFileName(rawWord) + QStringLiteral(".mp3");
         const QString finalPath = dir.filePath(fileName);
+        const QString expectedHash = hashManifest.value(itemResult.manifestKey).trimmed();
 
-        QFile existing(finalPath);
-        if (existing.exists()) {
-            if (existing.size() > 0) {
+        QByteArray existingData;
+        QString readError;
+        const bool hasExistingFile = readFileBytes(finalPath, existingData, readError);
+        if (!readError.isEmpty()) {
+            itemResult.status = ItemResult::Status::Failed;
+            itemResult.errorText = readError;
+            return itemResult;
+        }
+        if (hasExistingFile && !existingData.isEmpty()) {
+            const QString existingHash = sha256Hex(existingData);
+            if (expectedHash.isEmpty()) {
+                // 历史文件首次纳入哈希清单，作为基准。
+                itemResult.status = ItemResult::Status::Reused;
+                itemResult.hashHex = existingHash;
+                itemResult.shouldPersistHash = true;
+                return itemResult;
+            }
+            if (QString::compare(existingHash, expectedHash, Qt::CaseInsensitive) == 0) {
                 itemResult.status = ItemResult::Status::Reused;
                 return itemResult;
             }
-            existing.remove();
         }
 
         QByteArray dictionaryJson;
@@ -131,12 +165,24 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
             return itemResult;
         }
 
+        const QString downloadedHash = sha256Hex(audioBytes);
+        if (!expectedHash.isEmpty()
+            && QString::compare(downloadedHash, expectedHash, Qt::CaseInsensitive) != 0) {
+            itemResult.status = ItemResult::Status::HashMismatch;
+            itemResult.hashHex = downloadedHash;
+            itemResult.errorText = QStringLiteral("哈希不匹配：expected=%1 actual=%2")
+                                       .arg(expectedHash, downloadedHash);
+            return itemResult;
+        }
+
         itemResult.status = ItemResult::Status::Downloaded;
+        itemResult.hashHex = downloadedHash;
+        itemResult.shouldPersistHash = true;
         return itemResult;
     };
 
     const int workerCount = qBound(1, kAudioDownloadWorkers, qMax(1, QThread::idealThreadCount()));
-    int cursor = startIndex;
+    int cursor = 0;
     while (cursor < words.size()) {
         if (shouldCancel && shouldCancel()) {
             result.cancelled = true;
@@ -160,17 +206,33 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         });
 
         for (const ItemResult &itemResult : batchResults) {
+            ++result.checked;
             if (itemResult.status == ItemResult::Status::Downloaded) {
                 ++result.downloaded;
             } else if (itemResult.status == ItemResult::Status::Reused) {
                 ++result.reused;
             } else if (itemResult.status == ItemResult::Status::NoMp3) {
                 ++result.noMp3;
+            } else if (itemResult.status == ItemResult::Status::HashMismatch) {
+                ++result.hashMismatched;
+                ++result.failed;
             } else {
                 ++result.failed;
             }
 
-            saveLastCompletedIndex(bookId, itemResult.index);
+            if (itemResult.shouldPersistHash
+                && !itemResult.manifestKey.isEmpty()
+                && !itemResult.hashHex.isEmpty()) {
+                hashManifest.insert(itemResult.manifestKey, itemResult.hashHex.toLower());
+            }
+
+            if ((itemResult.status == ItemResult::Status::Failed
+                 || itemResult.status == ItemResult::Status::HashMismatch)
+                && !itemResult.errorText.isEmpty()) {
+                qWarning().noquote() << QStringLiteral("[audio] %1 -> %2")
+                                            .arg(itemResult.word, itemResult.errorText);
+            }
+
             if (onProgress) {
                 const QString shownWord = itemResult.word.isEmpty() ? QStringLiteral("(空单词)") : itemResult.word;
                 onProgress(itemResult.index, words.size(), shownWord);
@@ -184,8 +246,8 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         onProgress(words.size(), words.size(), QStringLiteral("下载完成"));
     }
 
-    if (!result.cancelled) {
-        clearProgress(bookId);
+    if (!saveHashManifest(hashManifest, errorText)) {
+        return result;
     }
 
     return result;
@@ -195,35 +257,9 @@ QString AudioDownloader::audioDirPath() const {
     return QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/assets/audio");
 }
 
-QString AudioDownloader::progressFilePath(int bookId) const {
+QString AudioDownloader::hashManifestPath() const {
     return QStringLiteral(VIBESPELLER_SOURCE_DIR)
-           + QStringLiteral("/assets/audio/.download_progress_%1.txt").arg(bookId);
-}
-
-int AudioDownloader::loadLastCompletedIndex(int bookId) const {
-    QFile file(progressFilePath(bookId));
-    if (!file.exists()) {
-        return -1;
-    }
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return -1;
-    }
-    bool ok = false;
-    const int value = QString::fromUtf8(file.readAll()).trimmed().toInt(&ok);
-    return ok ? value : -1;
-}
-
-bool AudioDownloader::saveLastCompletedIndex(int bookId, int index) const {
-    QSaveFile file(progressFilePath(bookId));
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
-    file.write(QString::number(index).toUtf8());
-    return file.commit();
-}
-
-void AudioDownloader::clearProgress(int bookId) const {
-    QFile::remove(progressFilePath(bookId));
+           + QStringLiteral("/assets/audio/.hash_manifest.json");
 }
 
 QString AudioDownloader::safeAudioFileName(const QString &word) {
@@ -234,6 +270,15 @@ QString AudioDownloader::safeAudioFileName(const QString &word) {
         name = QStringLiteral("word");
     }
     return name;
+}
+
+QString AudioDownloader::manifestKeyForWord(const QString &word) {
+    return word.trimmed().toLower();
+}
+
+QString AudioDownloader::sha256Hex(const QByteArray &data) {
+    return QString::fromLatin1(
+        QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
 }
 
 QString AudioDownloader::extractMp3Url(const QByteArray &jsonData) {
@@ -275,36 +320,64 @@ bool AudioDownloader::fetchUrl(const QUrl &url,
         return false;
     }
 
-    QNetworkAccessManager manager;
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::UserAgentHeader,
-                      QStringLiteral("VibeSpeller/1.0 (Qt)"));
-
-    QEventLoop loop;
-    QNetworkReply *reply = manager.get(request);
-
-    QTimer timer;
-    timer.setSingleShot(true);
-    QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
-        if (reply && reply->isRunning()) {
-            reply->abort();
+    for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
+        {
+            // 全局节流：确保所有下载线程总请求频率可控。
+            QMutexLocker locker(&gRequestGapMutex);
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            const qint64 elapsed = nowMs - gLastRequestMs;
+            if (elapsed < kGlobalRequestGapMs) {
+                QThread::msleep(static_cast<unsigned long>(kGlobalRequestGapMs - elapsed));
+            }
+            gLastRequestMs = QDateTime::currentMSecsSinceEpoch();
         }
-    });
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    timer.start(timeoutMs);
-    loop.exec();
 
-    timer.stop();
+        QNetworkAccessManager manager;
+        QNetworkRequest request(url);
+        request.setHeader(QNetworkRequest::UserAgentHeader,
+                          QStringLiteral("VibeSpeller/1.0 (Qt)"));
 
-    if (reply->error() != QNetworkReply::NoError) {
-        errorText = reply->errorString();
+        QEventLoop loop;
+        QNetworkReply *reply = manager.get(request);
+
+        QTimer timer;
+        timer.setSingleShot(true);
+        QObject::connect(&timer, &QTimer::timeout, &loop, [&]() {
+            if (reply && reply->isRunning()) {
+                reply->abort();
+            }
+        });
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        timer.start(timeoutMs);
+        loop.exec();
+
+        timer.stop();
+
+        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool needRetryByStatus = (statusCode == 429 || statusCode == 500 || statusCode == 502
+                                        || statusCode == 503 || statusCode == 504);
+        const bool needRetryByError = (reply->error() == QNetworkReply::TimeoutError
+                                       || reply->error() == QNetworkReply::TemporaryNetworkFailureError
+                                       || reply->error() == QNetworkReply::OperationCanceledError);
+
+        if (reply->error() == QNetworkReply::NoError) {
+            data = reply->readAll();
+            reply->deleteLater();
+            return true;
+        }
+
+        const QString statusPart = (statusCode > 0) ? QStringLiteral("HTTP %1, ").arg(statusCode) : QString();
+        errorText = statusPart + reply->errorString();
         reply->deleteLater();
+
+        if (attempt < kMaxRetries && (needRetryByStatus || needRetryByError)) {
+            const int backoff = kRetryBaseBackoffMs * (attempt + 1);
+            QThread::msleep(static_cast<unsigned long>(backoff));
+            continue;
+        }
         return false;
     }
-
-    data = reply->readAll();
-    reply->deleteLater();
-    return true;
+    return false;
 }
 
 bool AudioDownloader::writeAudioAtomically(const QString &finalPath,
@@ -332,6 +405,72 @@ bool AudioDownloader::writeAudioAtomically(const QString &finalPath,
     QFile saved(finalPath);
     if (!saved.exists() || saved.size() <= 0) {
         errorText = QStringLiteral("音频文件保存后为空");
+        return false;
+    }
+    return true;
+}
+
+bool AudioDownloader::readFileBytes(const QString &path, QByteArray &data, QString &errorText) const {
+    data.clear();
+    errorText.clear();
+
+    QFile file(path);
+    if (!file.exists()) {
+        return false;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        errorText = QStringLiteral("读取音频失败：%1").arg(file.errorString());
+        return false;
+    }
+
+    data = file.readAll();
+    return true;
+}
+
+bool AudioDownloader::loadHashManifest(QHash<QString, QString> &manifest, QString &errorText) const {
+    manifest.clear();
+    errorText.clear();
+
+    QFile file(hashManifestPath());
+    if (!file.exists()) {
+        return true;
+    }
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        errorText = QStringLiteral("无法读取音频哈希清单：%1").arg(file.errorString());
+        return false;
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject()) {
+        errorText = QStringLiteral("音频哈希清单格式错误");
+        return false;
+    }
+
+    const QJsonObject obj = doc.object();
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        manifest.insert(it.key(), it.value().toString().trimmed().toLower());
+    }
+    return true;
+}
+
+bool AudioDownloader::saveHashManifest(const QHash<QString, QString> &manifest, QString &errorText) const {
+    errorText.clear();
+
+    QJsonObject obj;
+    for (auto it = manifest.constBegin(); it != manifest.constEnd(); ++it) {
+        if (!it.key().trimmed().isEmpty() && !it.value().trimmed().isEmpty()) {
+            obj.insert(it.key(), it.value().trimmed().toLower());
+        }
+    }
+
+    QSaveFile file(hashManifestPath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        errorText = QStringLiteral("无法写入音频哈希清单：%1").arg(file.errorString());
+        return false;
+    }
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        errorText = QStringLiteral("音频哈希清单保存失败：%1").arg(file.errorString());
         return false;
     }
     return true;

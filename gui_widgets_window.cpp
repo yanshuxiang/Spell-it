@@ -38,6 +38,8 @@ using namespace GuiWidgetsInternal;
 
 namespace {
 constexpr int kUnifiedCornerRadiusPx = 18;
+constexpr int kPageLaunchDurationMs = 300;
+constexpr int kCardBorderPx = 2;
 
 class LaunchSnapshotCard final : public QWidget {
 public:
@@ -486,7 +488,8 @@ void VibeSpellerWindow::onExitSession() {
 
     persistCurrentSession();
     refreshHomeCounts();
-    stack_->setCurrentWidget(homePage_);
+    const QRect launchRect = homePage_->launchRect(currentMode_ == SessionMode::Learning);
+    animateSpellingToHomeTransition(launchRect);
 }
 
 void VibeSpellerWindow::onSkipForeverCurrentWord() {
@@ -665,7 +668,7 @@ void VibeSpellerWindow::onDownloadAudio(int bookId) {
                 window->audioDownloadThread_ = nullptr;
             }
 
-            const int processed = result.resumeStartIndex + result.downloaded + result.reused + result.noMp3 + result.failed;
+            const int processed = result.checked;
             if (!errorText.isEmpty()) {
                 window->wordBooksPage_->setAudioDownloadStatus(
                     QStringLiteral("下载异常：%1").arg(errorText),
@@ -676,14 +679,15 @@ void VibeSpellerWindow::onDownloadAudio(int bookId) {
             }
 
             const QString finalText = result.cancelled
-                                          ? QStringLiteral("已暂停（%1/%2），下次会从上一个单词重下")
+                                          ? QStringLiteral("已暂停（%1/%2），下次将自动校验并补全缺失音频")
                                                 .arg(qMin(processed, result.totalWords))
                                                 .arg(result.totalWords)
-                                          : QStringLiteral("完成：新增%1 已有%2 无MP3%3 失败%4")
+                                          : QStringLiteral("完成：新增%1 已有%2 无MP3%3 失败%4（哈希不匹配%5）")
                                                 .arg(result.downloaded)
                                                 .arg(result.reused)
                                                 .arg(result.noMp3)
-                                                .arg(result.failed);
+                                                .arg(result.failed)
+                                                .arg(result.hashMismatched);
             window->wordBooksPage_->setAudioDownloadStatus(finalText,
                                                            qMin(processed, result.totalWords),
                                                            result.totalWords,
@@ -1075,8 +1079,6 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
         return;
     }
 
-    constexpr int kLaunchDurationMs = 700;
-    constexpr int kCardBorderPx = 2;
     constexpr int kCardCornerPx = kUnifiedCornerRadiusPx;
 
     // Render spelling page snapshot first, so page content scales together during launch.
@@ -1117,7 +1119,7 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
 
     auto *group = new QParallelAnimationGroup(this);
     auto *cardGeomAnim = new QPropertyAnimation(card, "geometry", group);
-    cardGeomAnim->setDuration(kLaunchDurationMs);
+    cardGeomAnim->setDuration(kPageLaunchDurationMs);
     cardGeomAnim->setStartValue(startRect);
     cardGeomAnim->setEndValue(endRect);
     cardGeomAnim->setEasingCurve(QEasingCurve::OutCubic);
@@ -1125,7 +1127,7 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
     auto *homeOpacity = ensureOpacityEffect(homePage_);
     homeOpacity->setOpacity(1.0);
     auto *homeFadeAnim = new QPropertyAnimation(homeOpacity, "opacity", group);
-    homeFadeAnim->setDuration(kLaunchDurationMs);
+    homeFadeAnim->setDuration(kPageLaunchDurationMs);
     homeFadeAnim->setStartValue(1.0);
     homeFadeAnim->setEndValue(0.0);
     homeFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
@@ -1135,6 +1137,98 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
         homeOpacity->setOpacity(1.0);
         stack_->setCurrentWidget(spellingPage_);
         spellingPage_->setFocus();
+        transitionHost->deleteLater();
+        group->deleteLater();
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateSpellingToHomeTransition(const QRect &targetRect) {
+    const QRect stackRect = stack_->geometry();
+    if (targetRect.isEmpty() || stack_->currentWidget() != spellingPage_ || stackRect.isEmpty()) {
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    QRect endRect(homePage_->mapTo(this, targetRect.topLeft()), targetRect.size());
+    endRect = endRect.intersected(rect());
+    if (endRect.isEmpty()) {
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    const QRect startRect = stackRect.intersected(rect());
+    if (startRect.isEmpty()) {
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    constexpr int kCardCornerPx = kUnifiedCornerRadiusPx;
+
+    spellingPage_->resize(startRect.size());
+    spellingPage_->ensurePolished();
+    if (spellingPage_->layout() != nullptr) {
+        spellingPage_->layout()->activate();
+    }
+
+    QPixmap snapshot(spellingPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        spellingPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+    if (snapshot.isNull()) {
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    auto *homeOpacity = ensureOpacityEffect(homePage_);
+    homeOpacity->setOpacity(0.0);
+    stack_->setCurrentWidget(homePage_);
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setStyleSheet(QStringLiteral("background: transparent;"));
+    transitionHost->setGeometry(rect());
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kCardCornerPx);
+    card->setBorderWidth(kCardBorderPx);
+    card->setGeometry(startRect);
+    card->show();
+
+    auto *cardOpacity = new QGraphicsOpacityEffect(card);
+    cardOpacity->setOpacity(1.0);
+    card->setGraphicsEffect(cardOpacity);
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *cardGeomAnim = new QPropertyAnimation(card, "geometry", group);
+    cardGeomAnim->setDuration(kPageLaunchDurationMs);
+    cardGeomAnim->setStartValue(startRect);
+    cardGeomAnim->setEndValue(endRect);
+    cardGeomAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    auto *cardFadeAnim = new QPropertyAnimation(cardOpacity, "opacity", group);
+    cardFadeAnim->setDuration(kPageLaunchDurationMs);
+    cardFadeAnim->setStartValue(1.0);
+    cardFadeAnim->setEndValue(0.0);
+    cardFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    auto *homeFadeAnim = new QPropertyAnimation(homeOpacity, "opacity", group);
+    homeFadeAnim->setDuration(kPageLaunchDurationMs);
+    homeFadeAnim->setStartValue(0.0);
+    homeFadeAnim->setEndValue(1.0);
+    homeFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this,
+            [group, transitionHost, homeOpacity]() {
+        homeOpacity->setOpacity(1.0);
         transitionHost->deleteLater();
         group->deleteLater();
     });

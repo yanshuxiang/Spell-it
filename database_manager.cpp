@@ -247,6 +247,35 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    const QString createBookWordsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS book_words ("
+        "book_id INTEGER NOT NULL,"
+        "word_id INTEGER NOT NULL,"
+        "PRIMARY KEY(book_id, word_id)"
+        ")");
+    if (!query.exec(createBookWordsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_book_words_book ON book_words(book_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_book_words_word ON book_words(word_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    // 兼容旧数据库：把 words.book_id 的历史关系回填到 book_words。
+    if (!query.exec(QStringLiteral(
+            "INSERT OR IGNORE INTO book_words(book_id, word_id) "
+            "SELECT book_id, id FROM words WHERE book_id IS NOT NULL AND book_id > 0"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     const QString createSessionSql = QStringLiteral(
         "CREATE TABLE IF NOT EXISTS session_progress ("
         "mode TEXT PRIMARY KEY,"
@@ -426,11 +455,18 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     }
     const int bookId = createBookQuery.lastInsertId().toInt();
 
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO words "
+    QSqlQuery findWordQuery(db);
+    findWordQuery.prepare(QStringLiteral("SELECT id FROM words WHERE word = ?"));
+
+    QSqlQuery insertWordQuery(db);
+    insertWordQuery.prepare(QStringLiteral(
+        "INSERT INTO words "
         "(word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever, book_id) "
         "VALUES (?, ?, ?, 2.5, 0, NULL, 0, 0, ?)"));
+
+    QSqlQuery linkWordQuery(db);
+    linkWordQuery.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO book_words(book_id, word_id) VALUES(?, ?)"));
 
     while (true) {
         const QString record = readCsvRecord(in);
@@ -456,19 +492,39 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
             continue;
         }
 
-        query.bindValue(0, word);
-        query.bindValue(1, phonetic);
-        query.bindValue(2, translation);
-        query.bindValue(3, bookId);
-
-        if (!query.exec()) {
+        int wordId = -1;
+        findWordQuery.bindValue(0, word);
+        if (!findWordQuery.exec()) {
             db.rollback();
-            lastError_ = query.lastError().text();
+            lastError_ = findWordQuery.lastError().text();
             return false;
         }
-
-        if (query.numRowsAffected() > 0) {
+        if (findWordQuery.next()) {
+            wordId = findWordQuery.value(0).toInt();
+        } else {
+            insertWordQuery.bindValue(0, word);
+            insertWordQuery.bindValue(1, phonetic);
+            insertWordQuery.bindValue(2, translation);
+            insertWordQuery.bindValue(3, bookId);
+            if (!insertWordQuery.exec()) {
+                db.rollback();
+                lastError_ = insertWordQuery.lastError().text();
+                return false;
+            }
+            wordId = insertWordQuery.lastInsertId().toInt();
             ++importedCount;
+        }
+
+        if (wordId <= 0) {
+            continue;
+        }
+
+        linkWordQuery.bindValue(0, bookId);
+        linkWordQuery.bindValue(1, wordId);
+        if (!linkWordQuery.exec()) {
+            db.rollback();
+            lastError_ = linkWordQuery.lastError().text();
+            return false;
         }
     }
 
@@ -489,10 +545,19 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
     QSqlQuery query(database());
     if (!query.exec(QStringLiteral(
             "SELECT b.id, b.name, b.is_active, "
-            "COUNT(w.id) AS word_count, "
-            "SUM(CASE WHEN w.status != 0 THEN 1 ELSE 0 END) AS learned_count "
+            "COUNT(bw.word_id) AS word_count, "
+            "SUM(CASE "
+            "      WHEN w.id IS NULL THEN 0 "
+            "      WHEN w.skip_forever = 1 "
+            "        OR w.status != 0 "
+            "        OR w.next_review IS NOT NULL "
+            "        OR COALESCE(ws.attempt_count, 0) > 0 "
+            "      THEN 1 ELSE 0 "
+            "    END) AS learned_count "
             "FROM word_books b "
-            "LEFT JOIN words w ON w.book_id = b.id "
+            "LEFT JOIN book_words bw ON bw.book_id = b.id "
+            "LEFT JOIN words w ON w.id = bw.word_id "
+            "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
             "GROUP BY b.id, b.name, b.is_active "
             "ORDER BY b.is_active DESC, b.id ASC"))) {
         lastError_ = query.lastError().text();
@@ -583,9 +648,37 @@ bool DatabaseManager::deleteWordBook(int bookId) {
         return false;
     }
 
-    query.prepare(QStringLiteral("DELETE FROM words WHERE book_id = ?"));
+    query.prepare(QStringLiteral("DELETE FROM book_words WHERE book_id = ?"));
     query.bindValue(0, bookId);
     if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    // 兼容旧字段：若原 book_id 指向被删除词书，则切到剩余关联中的最小 book_id。
+    query.prepare(QStringLiteral(
+        "UPDATE words "
+        "SET book_id = (SELECT MIN(bw.book_id) FROM book_words bw WHERE bw.word_id = words.id) "
+        "WHERE book_id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "DELETE FROM words "
+            "WHERE id NOT IN (SELECT DISTINCT word_id FROM book_words)"))) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "DELETE FROM word_spelling_stats "
+            "WHERE word_id NOT IN (SELECT id FROM words)"))) {
         db.rollback();
         lastError_ = query.lastError().text();
         return false;
@@ -655,7 +748,16 @@ int DatabaseManager::unlearnedCount() const {
     }
 
     QSqlQuery query(database());
-    query.prepare(QStringLiteral("SELECT COUNT(*) FROM words WHERE status = 0 AND skip_forever = 0 AND book_id = ?"));
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
+        "WHERE bw.book_id = ? "
+        "  AND w.skip_forever = 0 "
+        "  AND w.status = 0 "
+        "  AND w.next_review IS NULL "
+        "  AND COALESCE(ws.attempt_count, 0) = 0"));
     query.bindValue(0, activeBookId);
     if (!query.exec()) {
         lastError_ = query.lastError().text();
@@ -704,8 +806,17 @@ QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
-        "FROM words WHERE status = 0 AND skip_forever = 0 AND book_id = ? ORDER BY id LIMIT ?"));
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
+        "WHERE bw.book_id = ? "
+        "  AND w.skip_forever = 0 "
+        "  AND w.status = 0 "
+        "  AND w.next_review IS NULL "
+        "  AND COALESCE(ws.attempt_count, 0) = 0 "
+        "ORDER BY w.id "
+        "LIMIT ?"));
     query.bindValue(0, activeBookId);
     query.bindValue(1, qMax(1, limit));
 
@@ -765,8 +876,11 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
-        "FROM words WHERE skip_forever = 0 AND book_id = ? ORDER BY id"));
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "WHERE bw.book_id = ? AND w.skip_forever = 0 "
+        "ORDER BY w.id"));
     query.bindValue(0, targetBookId);
 
     if (!query.exec()) {

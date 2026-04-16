@@ -264,6 +264,7 @@ private:
     void playPronunciationForWord(const QString &word);
     qreal computeNormalizedVolume(const QString &audioFilePath);
     void animateHomeToSpellingTransition(const QRect &sourceRect);
+    void animateSpellingToHomeTransition(const QRect &targetRect);
     void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
