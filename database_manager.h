@@ -16,6 +16,7 @@ struct WordItem {
     QString phonetic;
     QString translation;
     QString partOfSpeech;
+    QString countabilityLabel;
     double easeFactor = 2.5;
     int interval = 0;
     QDateTime nextReview;
@@ -41,6 +42,12 @@ enum class SpellingResult {
     Mastered,
     Blurry,
     Unfamiliar,
+};
+
+enum class CountabilityAnswer {
+    Countable = 0,
+    Uncountable = 1,
+    Both = 2,
 };
 
 class DatabaseManager {
@@ -71,14 +78,22 @@ public:
 
     int unlearnedCount() const;
     int dueReviewCount(const QDateTime &now = QDateTime::currentDateTime()) const;
+    int countabilityUnlearnedCount() const;
+    int countabilityDueReviewCount(const QDateTime &now = QDateTime::currentDateTime()) const;
 
     QVector<WordItem> fetchLearningBatch(int limit) const;
     QVector<WordItem> fetchReviewBatch(const QDateTime &now, int limit) const;
+    QVector<WordItem> fetchCountabilityLearningBatch(int limit) const;
+    QVector<WordItem> fetchCountabilityReviewBatch(const QDateTime &now, int limit) const;
     QVector<WordItem> fetchWordsForBook(int bookId) const;
     QVector<WordItem> fetchWordsMissingPartOfSpeechForBook(int bookId) const;
+    QVector<WordItem> fetchWordsForCountabilityDownload() const;
     bool updateWordPartOfSpeech(int wordId,
                                 const QString &partOfSpeech,
                                 const QString &source = QStringLiteral("dictionaryapi.dev"));
+    bool updateWordCountability(int wordId,
+                                const QString &countabilityLabel,
+                                const QString &source = QStringLiteral("oxford"));
     bool saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex);
     bool loadSessionProgress(const QString &mode, QVector<WordItem> &words, int &currentIndex);
     bool clearSessionProgress(const QString &mode);
@@ -94,6 +109,9 @@ public:
                            SpellingResult result,
                            bool skipped,
                            const QDateTime &now = QDateTime::currentDateTime());
+    bool applyCountabilityResult(int wordId,
+                                 bool correct,
+                                 const QDateTime &now = QDateTime::currentDateTime());
 
     bool incrementDailyCount(bool isLearning, const QDate &date = QDate::currentDate());
     bool addDailyStudySeconds(int seconds, const QDate &date = QDate::currentDate());
@@ -124,6 +142,13 @@ private:
     int nextIntervalForMastered(int currentInterval) const;
     int nextIntervalForBlurry(int currentInterval) const;
     int nextIntervalForUnfamiliar() const;
+    bool applyTrainingReviewResult(int wordId,
+                                   const QString &trainingType,
+                                   SpellingResult result,
+                                   bool skipped,
+                                   const QDateTime &now = QDateTime::currentDateTime());
+    bool isCountabilityCandidate(const WordItem &word) const;
+    bool hasTrainingProgress(int wordId, const QString &trainingType) const;
 
     bool queryWordById(int wordId, WordItem &item) const;
     int activeWordBookIdInternal() const;

@@ -130,6 +130,8 @@ HomePageWidget::HomePageWidget(QWidget *parent)
 
     connect(learningButton_, &QPushButton::clicked, this, &HomePageWidget::startLearningClicked);
     connect(reviewButton_, &QPushButton::clicked, this, &HomePageWidget::startReviewClicked);
+    connect(countabilityLearnButton_, &QPushButton::clicked, this, &HomePageWidget::startCountabilityLearningClicked);
+    connect(countabilityReviewButton_, &QPushButton::clicked, this, &HomePageWidget::startCountabilityReviewClicked);
     connect(navBtn1, &QPushButton::clicked, this, &HomePageWidget::booksClicked);
     connect(navBtn3, &QPushButton::clicked, this, &HomePageWidget::statsClicked);
 }
@@ -137,18 +139,35 @@ HomePageWidget::HomePageWidget(QWidget *parent)
 void HomePageWidget::setCounts(int learningCount,
                                int reviewCount,
                                int todayLearningCount,
-                               int todayReviewCount) {
+                               int todayReviewCount,
+                               int countabilityLearningCount,
+                               int countabilityReviewCount) {
     learningButton_->setText(QStringLiteral("拼写学习\n%1").arg(learningCount));
     reviewButton_->setText(QStringLiteral("拼写复习\n%1").arg(reviewCount));
-    countabilityLearnButton_->setText(QStringLiteral("可数性辨析\n0"));
-    countabilityReviewButton_->setText(QStringLiteral("可数性复习\n0"));
+    countabilityLearnButton_->setText(QStringLiteral("可数性辨析\n%1").arg(countabilityLearningCount));
+    countabilityReviewButton_->setText(QStringLiteral("可数性复习\n%1").arg(countabilityReviewCount));
     learningCountLabel_->setText(
         QStringLiteral("今日已学 %1 词 · 今日复习 %2 词").arg(todayLearningCount).arg(todayReviewCount));
     reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));
 }
 
-QRect HomePageWidget::launchRect(bool learning) const {
-    const QPushButton *button = learning ? learningButton_ : reviewButton_;
+QRect HomePageWidget::launchRect(SessionMode mode) const {
+    const QPushButton *button = nullptr;
+    switch (mode) {
+    case SessionMode::Learning:
+        button = learningButton_;
+        break;
+    case SessionMode::Review:
+        button = reviewButton_;
+        break;
+    case SessionMode::CountabilityLearning:
+        button = countabilityLearnButton_;
+        break;
+    case SessionMode::CountabilityReview:
+        button = countabilityReviewButton_;
+        break;
+    }
+
     if (button == nullptr) {
         return QRect();
     }

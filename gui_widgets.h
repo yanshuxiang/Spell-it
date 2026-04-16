@@ -26,6 +26,13 @@ class QProcess;
 class QThread;
 class RoundedProgressStrip;
 
+enum class SessionMode {
+    Learning,
+    Review,
+    CountabilityLearning,
+    CountabilityReview,
+};
+
 struct PracticeRecord {
     WordItem word;
     SpellingResult result = SpellingResult::Unfamiliar;
@@ -41,12 +48,16 @@ public:
     void setCounts(int learningCount,
                    int reviewCount,
                    int todayLearningCount,
-                   int todayReviewCount);
-    QRect launchRect(bool learning) const;
+                   int todayReviewCount,
+                   int countabilityLearningCount = 0,
+                   int countabilityReviewCount = 0);
+    QRect launchRect(SessionMode mode) const;
 
 signals:
     void startLearningClicked();
     void startReviewClicked();
+    void startCountabilityLearningClicked();
+    void startCountabilityReviewClicked();
     void booksClicked();
     void statsClicked();
 
@@ -136,6 +147,34 @@ private:
     bool resetInputOnNextType_ = false;
     QPoint translationBasePos_;
     QPoint inputBasePos_;
+};
+
+class CountabilityPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit CountabilityPageWidget(QWidget *parent = nullptr);
+
+    void setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode);
+
+    void setOptionsEnabled(bool enabled);
+    void resetOptionStyles();
+    void showAnswerFeedback(CountabilityAnswer selected, CountabilityAnswer correct, bool isCorrect);
+
+signals:
+    void exitRequested();
+    void answerSubmitted(CountabilityAnswer answer);
+
+private:
+    QLabel *modeLabel_ = nullptr;
+    QLabel *progressLabel_ = nullptr;
+    QLabel *wordLabel_ = nullptr;
+    QLabel *hintLabel_ = nullptr;
+
+    QPushButton *exitButton_ = nullptr;
+    QPushButton *countableButton_ = nullptr;
+    QPushButton *uncountableButton_ = nullptr;
+    QPushButton *bothButton_ = nullptr;
+    QPushButton *buttonForAnswer(CountabilityAnswer answer) const;
 };
 
 class SummaryPageWidget : public QWidget {
@@ -238,7 +277,10 @@ public:
 private slots:
     void onStartLearning();
     void onStartReview();
+    void onStartCountabilityLearning();
+    void onStartCountabilityReview();
     void onSubmitAnswer(const QString &text);
+    void onCountabilityAnswer(CountabilityAnswer answer);
     void onProceedAfterFeedback();
     void onExitSession();
     void onSkipForeverCurrentWord();
@@ -256,10 +298,6 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
-    enum class SessionMode {
-        Learning,
-        Review,
-    };
 
     void initializeDatabase();
     void refreshHomeCounts();
@@ -274,8 +312,8 @@ private:
     bool tryResumeSession(SessionMode mode);
     void playPronunciationForWord(const QString &word);
     qreal computeNormalizedVolume(const QString &audioFilePath);
-    void animateHomeToSpellingTransition(const QRect &sourceRect);
-    void animateSpellingToHomeTransition(const QRect &targetRect);
+    void animateHomeToPageTransition(const QRect &sourceRect, QWidget *targetPage);
+    void animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect);
     void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
@@ -284,6 +322,7 @@ private:
     void persistCurrentSession();
     void clearSessionForMode(SessionMode mode);
     void moveToNextWord();
+    void moveToNextCountabilityWord();
     void finishSession();
     void continueNextGroup();
     QString modeKey(SessionMode mode) const;
@@ -297,6 +336,7 @@ private:
     HomePageWidget *homePage_ = nullptr;
     MappingPageWidget *mappingPage_ = nullptr;
     SpellingPageWidget *spellingPage_ = nullptr;
+    CountabilityPageWidget *countabilityPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
     StatisticsPageWidget *statisticsPage_ = nullptr;
     WordBooksPageWidget *wordBooksPage_ = nullptr;
@@ -307,6 +347,7 @@ private:
     QVector<PracticeRecord> records_;
     QHash<int, int> roundMistakeCounts_;
     QHash<int, QString> firstWrongInputs_;
+    QHash<int, int> countabilityWrongCounts_;
     int sessionWordTargetCount_ = 0;
     int currentIndex_ = 0;
     QRect pendingHomeLaunchRect_;

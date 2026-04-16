@@ -2,6 +2,7 @@
 #include "gui_widgets_internal.h"
 #include "audio_downloader.h"
 #include "pos_downloader.h"
+#include "countability_downloader.h"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -41,6 +42,36 @@ namespace {
 constexpr int kUnifiedCornerRadiusPx = 18;
 constexpr int kPageLaunchDurationMs = 300;
 constexpr int kCardBorderPx = 2;
+constexpr int kCountabilityFeedbackMs = 450;
+
+QString countabilityAnswerText(CountabilityAnswer answer) {
+    switch (answer) {
+    case CountabilityAnswer::Countable:
+        return QStringLiteral("可数");
+    case CountabilityAnswer::Uncountable:
+        return QStringLiteral("不可数");
+    case CountabilityAnswer::Both:
+        return QStringLiteral("可数且不可数");
+    }
+    return QStringLiteral("可数");
+}
+
+bool parseCountabilityLabel(const QString &label, CountabilityAnswer &answerOut) {
+    const QString normalized = label.trimmed().toUpper();
+    if (normalized == QStringLiteral("C")) {
+        answerOut = CountabilityAnswer::Countable;
+        return true;
+    }
+    if (normalized == QStringLiteral("U")) {
+        answerOut = CountabilityAnswer::Uncountable;
+        return true;
+    }
+    if (normalized == QStringLiteral("B")) {
+        answerOut = CountabilityAnswer::Both;
+        return true;
+    }
+    return false;
+}
 
 class LaunchSnapshotCard final : public QWidget {
 public:
@@ -133,6 +164,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     homePage_ = new HomePageWidget(this);
     mappingPage_ = new MappingPageWidget(this);
     spellingPage_ = new SpellingPageWidget(this);
+    countabilityPage_ = new CountabilityPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
     wordBooksPage_ = new WordBooksPageWidget(this);
@@ -143,6 +175,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     stack_->addWidget(homePage_);
     stack_->addWidget(mappingPage_);
     stack_->addWidget(spellingPage_);
+    stack_->addWidget(countabilityPage_);
     stack_->addWidget(summaryPage_);
     stack_->addWidget(statisticsPage_);
     stack_->addWidget(wordBooksPage_);
@@ -162,6 +195,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(homePage_, &HomePageWidget::startLearningClicked, this, &VibeSpellerWindow::onStartLearning);
     connect(homePage_, &HomePageWidget::startReviewClicked, this, &VibeSpellerWindow::onStartReview);
+    connect(homePage_, &HomePageWidget::startCountabilityLearningClicked, this, &VibeSpellerWindow::onStartCountabilityLearning);
+    connect(homePage_, &HomePageWidget::startCountabilityReviewClicked, this, &VibeSpellerWindow::onStartCountabilityReview);
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
         statisticsPage_->setLogs(db_.fetchWeeklyLogs());
@@ -220,6 +255,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(spellingPage_, &SpellingPageWidget::skipForeverRequested, this, &VibeSpellerWindow::onSkipForeverCurrentWord);
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
+    connect(countabilityPage_, &CountabilityPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
+    connect(countabilityPage_, &CountabilityPageWidget::answerSubmitted, this, &VibeSpellerWindow::onCountabilityAnswer);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -286,7 +323,7 @@ void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
 }
 
 void VibeSpellerWindow::onStartLearning() {
-    pendingHomeLaunchRect_ = homePage_->launchRect(true);
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Learning);
     if (tryResumeSession(SessionMode::Learning)) {
         return;
     }
@@ -306,7 +343,7 @@ void VibeSpellerWindow::onStartLearning() {
 }
 
 void VibeSpellerWindow::onStartReview() {
-    pendingHomeLaunchRect_ = homePage_->launchRect(false);
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Review);
     if (tryResumeSession(SessionMode::Review)) {
         return;
     }
@@ -321,6 +358,39 @@ void VibeSpellerWindow::onStartReview() {
     }
 
     startSession(SessionMode::Review, words, 0);
+}
+
+void VibeSpellerWindow::onStartCountabilityLearning() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityLearning);
+    if (tryResumeSession(SessionMode::CountabilityLearning)) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchCountabilityLearningBatch(kSessionBatchSize);
+    if (words.isEmpty()) {
+        showInfoPrompt(this,
+                       QStringLiteral("暂无辨析任务"),
+                       QStringLiteral("当前词书没有可进行可数性辨析的新词。"));
+        return;
+    }
+    startSession(SessionMode::CountabilityLearning, words, 0);
+}
+
+void VibeSpellerWindow::onStartCountabilityReview() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityReview);
+    if (tryResumeSession(SessionMode::CountabilityReview)) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+    if (words.isEmpty()) {
+        const int tomorrowCount = db_.countabilityDueReviewCount(QDateTime::currentDateTime().addDays(1));
+        showInfoPrompt(this,
+                       QStringLiteral("暂无复习任务"),
+                       QStringLiteral("今天已经完成可数性复习，明天需要复习%1个").arg(tomorrowCount));
+        return;
+    }
+    startSession(SessionMode::CountabilityReview, words, 0);
 }
 
 void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
@@ -477,6 +547,137 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
     persistCurrentSession();
 }
 
+void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
+    if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
+        return;
+    }
+    if (currentMode_ != SessionMode::CountabilityLearning
+        && currentMode_ != SessionMode::CountabilityReview) {
+        return;
+    }
+
+    markStudyUserActivity();
+
+    const WordItem current = currentWords_.at(currentIndex_);
+    CountabilityAnswer expected = CountabilityAnswer::Countable;
+    const bool hasExpected = parseCountabilityLabel(current.countabilityLabel, expected);
+    if (!hasExpected) {
+        if (countabilityPage_ != nullptr) {
+            countabilityPage_->setOptionsEnabled(false);
+        }
+        // 修复问题5：不在这里提前 persist，moveToNextCountabilityWord 内部会再次 persist，
+        // 两次 persist 的第一次保存的是当前（未推进的）index，纯属多余写库。
+        QPointer<VibeSpellerWindow> guard(this);
+        QTimer::singleShot(kCountabilityFeedbackMs, this, [guard]() {
+            if (!guard) {
+                return;
+            }
+            guard->moveToNextCountabilityWord();
+        });
+        return;
+    }
+    const bool correct = (answer == expected);
+    if (countabilityPage_ != nullptr) {
+        countabilityPage_->setOptionsEnabled(false);
+        countabilityPage_->showAnswerFeedback(answer, expected, correct);
+    }
+
+    const int existingMistakes = countabilityWrongCounts_.value(current.id, 0);
+    const auto hasSameWordAhead = [this, &current]() -> bool {
+        for (int i = currentIndex_ + 1; i < currentWords_.size(); ++i) {
+            if (currentWords_.at(i).id == current.id) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto removeSameWordAhead = [this, &current]() {
+        for (int i = currentWords_.size() - 1; i > currentIndex_; --i) {
+            if (currentWords_.at(i).id == current.id) {
+                currentWords_.removeAt(i);
+            }
+        }
+    };
+    const auto delayedAdvance = [this]() {
+        QPointer<VibeSpellerWindow> guard(this);
+        QTimer::singleShot(kCountabilityFeedbackMs, this, [guard]() {
+            if (!guard) {
+                return;
+            }
+            guard->moveToNextCountabilityWord();
+        });
+    };
+
+    if (correct) {
+        if (existingMistakes == 0) {
+            // 修复问题2：可数性训练的词数不写入拼写学习统计，避免 learning_count 被虚高。
+            if (!db_.applyCountabilityResult(current.id, true, QDateTime::currentDateTime())) {
+                showWarningPrompt(this,
+                                  QStringLiteral("更新失败"),
+                                  QStringLiteral("保存可数性结果失败：%1").arg(db_.lastError()));
+            }
+            PracticeRecord record;
+            record.word = current;
+            record.result = SpellingResult::Mastered;
+            record.userInput = countabilityAnswerText(answer);
+            records_.push_back(record);
+        } else if (!hasSameWordAhead()) {
+            // 本词本轮有过错误，这是最后一次出现且答对：统计为不熟悉（与拼写模块逻辑一致）。
+            PracticeRecord record;
+            record.word = current;
+            record.result = SpellingResult::Unfamiliar;
+            record.userInput = firstWrongInputs_.value(current.id, countabilityAnswerText(answer));
+            records_.push_back(record);
+        }
+        // 修复Bug#1：只有在「最终」出现时才清除追踪状态；若队列里还有同词（中间出现），
+        // 保留 countabilityWrongCounts_ / firstWrongInputs_ 以便下次出现能正确判断历史。
+        if (!hasSameWordAhead()) {
+            countabilityWrongCounts_.remove(current.id);
+            firstWrongInputs_.remove(current.id);
+        }
+        persistCurrentSession();
+        delayedAdvance();
+        return;
+    }
+
+    if (!firstWrongInputs_.contains(current.id)) {
+        firstWrongInputs_.insert(current.id, countabilityAnswerText(answer));
+    }
+    const int mistakeCount = existingMistakes + 1;
+    countabilityWrongCounts_.insert(current.id, mistakeCount);
+
+    if (mistakeCount == 1) {
+        // 修复问题2：首次答错时更新记忆曲线，但不写入拼写统计计数。
+        if (!db_.applyCountabilityResult(current.id, false, QDateTime::currentDateTime())) {
+            showWarningPrompt(this,
+                              QStringLiteral("更新失败"),
+                              QStringLiteral("保存可数性结果失败：%1").arg(db_.lastError()));
+        }
+    }
+
+    if (mistakeCount > 3) {
+        removeSameWordAhead();
+        PracticeRecord record;
+        record.word = current;
+        record.result = SpellingResult::Unfamiliar;
+        record.userInput = firstWrongInputs_.value(current.id, countabilityAnswerText(answer));
+        record.skipped = true;
+        records_.push_back(record);
+        countabilityWrongCounts_.remove(current.id);
+        firstWrongInputs_.remove(current.id);
+        persistCurrentSession();
+        delayedAdvance();
+        return;
+    }
+
+    if (!hasSameWordAhead()) {
+        currentWords_.push_back(current);
+    }
+
+    persistCurrentSession();
+    delayedAdvance();
+}
+
 void VibeSpellerWindow::onProceedAfterFeedback() {
     if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
         return;
@@ -492,8 +693,11 @@ void VibeSpellerWindow::onExitSession() {
 
     persistCurrentSession();
     refreshHomeCounts();
-    const QRect launchRect = homePage_->launchRect(currentMode_ == SessionMode::Learning);
-    animateSpellingToHomeTransition(launchRect);
+    QWidget *sourcePage = (currentMode_ == SessionMode::CountabilityLearning || currentMode_ == SessionMode::CountabilityReview)
+                             ? (QWidget *)countabilityPage_
+                             : (QWidget *)spellingPage_;
+    const QRect launchRect = homePage_->launchRect(currentMode_);
+    animatePageToHomeTransition(sourcePage, launchRect);
 }
 
 void VibeSpellerWindow::onSkipForeverCurrentWord() {
@@ -560,6 +764,7 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
     }
 
     clearSessionForMode(SessionMode::Learning);
+    clearSessionForMode(SessionMode::CountabilityLearning);
     refreshHomeCounts();
     refreshWordBooks();
 }
@@ -608,6 +813,8 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
 
     clearSessionForMode(SessionMode::Learning);
     clearSessionForMode(SessionMode::Review);
+    clearSessionForMode(SessionMode::CountabilityLearning);
+    clearSessionForMode(SessionMode::CountabilityReview);
     refreshHomeCounts();
     refreshWordBooks();
 }
@@ -713,36 +920,34 @@ void VibeSpellerWindow::onAudioDownloadStopRequested() {
 }
 
 void VibeSpellerWindow::onDownloadPos(int bookId) {
-    if (bookId <= 0) {
-        return;
-    }
+    Q_UNUSED(bookId);
     if (posDownloadRunning_) {
-        wordBooksPage_->setPosDownloadStatus(QStringLiteral("已有词性下载任务进行中"), -1, -1, true);
+        wordBooksPage_->setPosDownloadStatus(QStringLiteral("已有可数性下载任务进行中"), -1, -1, true);
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchWordsMissingPartOfSpeechForBook(bookId);
+    const QVector<WordItem> words = db_.fetchWordsForCountabilityDownload();
     if (words.isEmpty()) {
-        wordBooksPage_->setPosDownloadStatus(QStringLiteral("当前词书词性已是最新"), 0, 0, false);
+        wordBooksPage_->setPosDownloadStatus(QStringLiteral("数据库中无待处理名词"), 0, 0, false);
         return;
     }
 
     posDownloadRunning_ = true;
     posDownloadCancelRequested_.store(false);
-    wordBooksPage_->setPosDownloadStatus(QStringLiteral("准备下载词性..."), 0, words.size(), true);
+    wordBooksPage_->setPosDownloadStatus(QStringLiteral("准备下载可数性..."), 0, words.size(), true);
 
     QPointer<VibeSpellerWindow> window(this);
     auto *thread = QThread::create([window, words]() {
-        PosDownloader downloader;
+        CountabilityDownloader downloader;
         QString errorText;
-        const PosDownloader::Result result = downloader.downloadPartOfSpeechForWords(
+        const CountabilityDownloader::Result result = downloader.downloadCountabilityForWords(
             words,
             [window](int current, int total, const QString &word) {
                 if (!window) {
                     return;
                 }
                 const int displayIndex = qMin(total, qMax(1, current + 1));
-                const QString status = QStringLiteral("词性下载：%1（%2/%3）")
+                const QString status = QStringLiteral("可数性下载：%1（%2/%3）")
                                            .arg(word)
                                            .arg(displayIndex)
                                            .arg(total);
@@ -766,8 +971,8 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
                 return;
             }
 
-            for (const PosDownloader::Update &update : result.updates) {
-                window->db_.updateWordPartOfSpeech(update.wordId, update.partOfSpeech);
+            for (const CountabilityDownloader::Update &update : result.updates) {
+                window->db_.updateWordCountability(update.wordId, update.label, update.source);
             }
 
             window->posDownloadRunning_ = false;
@@ -779,7 +984,7 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
             const int processed = result.processed;
             if (!errorText.isEmpty() && !result.cancelled) {
                 window->wordBooksPage_->setPosDownloadStatus(
-                    QStringLiteral("词性下载异常：%1").arg(errorText),
+                    QStringLiteral("可数性下载异常：%1").arg(errorText),
                     qMin(processed, result.totalWords),
                     result.totalWords,
                     false);
@@ -787,10 +992,10 @@ void VibeSpellerWindow::onDownloadPos(int bookId) {
             }
 
             const QString finalText = result.cancelled
-                                          ? QStringLiteral("词性下载已暂停（%1/%2），可继续补全")
+                                          ? QStringLiteral("可数性下载已暂停（%1/%2），可继续补全")
                                                 .arg(qMin(processed, result.totalWords))
                                                 .arg(result.totalWords)
-                                          : QStringLiteral("词性完成：更新%1 跳过%2 失败%3")
+                                          : QStringLiteral("可数性完成：更新%1 跳过%2 失败%3")
                                                 .arg(result.updated)
                                                 .arg(result.skipped)
                                                 .arg(result.failed);
@@ -811,7 +1016,7 @@ void VibeSpellerWindow::onPosDownloadStopRequested() {
         return;
     }
     posDownloadCancelRequested_.store(true);
-    wordBooksPage_->setPosDownloadStatus(QStringLiteral("正在停止词性下载..."), -1, -1, true);
+    wordBooksPage_->setPosDownloadStatus(QStringLiteral("正在停止可数性下载..."), -1, -1, true);
 }
 
 void VibeSpellerWindow::playPronunciationForWord(const QString &word) {
@@ -902,7 +1107,8 @@ qreal VibeSpellerWindow::computeNormalizedVolume(const QString &audioFilePath) {
 
 void VibeSpellerWindow::updateStudyTimeTracking() {
     const bool shouldTrack = stack_ != nullptr
-                             && stack_->currentWidget() == spellingPage_
+                             && (stack_->currentWidget() == spellingPage_
+                                 || stack_->currentWidget() == countabilityPage_)
                              && isActiveWindow();
     const QDateTime now = QDateTime::currentDateTime();
 
@@ -947,7 +1153,8 @@ void VibeSpellerWindow::markStudyUserActivity() {
     lastStudyUserActionTime_ = now;
 
     const bool canTrack = stack_ != nullptr
-                          && stack_->currentWidget() == spellingPage_
+                          && (stack_->currentWidget() == spellingPage_
+                              || stack_->currentWidget() == countabilityPage_)
                           && isActiveWindow();
     if (canTrack && !isStudyTrackingActive_) {
         isStudyTrackingActive_ = true;
@@ -1013,6 +1220,8 @@ void VibeSpellerWindow::refreshHomeCounts() {
     // 学习 = 当前词书剩余未学总数；复习 = 今天到期需复习总数。
     const int learning = db_.unlearnedCount();
     const int review = db_.dueReviewCount(QDateTime::currentDateTime());
+    const int countabilityLearning = db_.countabilityUnlearnedCount();
+    const int countabilityReview = db_.countabilityDueReviewCount(QDateTime::currentDateTime());
 
     int todayLearning = 0;
     int todayReview = 0;
@@ -1022,7 +1231,12 @@ void VibeSpellerWindow::refreshHomeCounts() {
         todayReview = logs.last().reviewCount;
     }
 
-    homePage_->setCounts(learning, review, todayLearning, todayReview);
+    homePage_->setCounts(learning,
+                         review,
+                         todayLearning,
+                         todayReview,
+                         countabilityLearning,
+                         countabilityReview);
 }
 
 void VibeSpellerWindow::refreshWordBooks() {
@@ -1084,6 +1298,7 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     currentWords_ = std::move(words);
     records_.clear();
     roundMistakeCounts_.clear();
+    countabilityWrongCounts_.clear();
     firstWrongInputs_.clear();
     sessionWordTargetCount_ = 0;
 
@@ -1131,9 +1346,21 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     // 若不足每组目标数，按当前模式从池中补齐；不够就按实际数量开组。
     if (currentWords_.size() < kRoundLimit) {
         const int fetchLimit = 200;
-        const QVector<WordItem> candidates = (mode == SessionMode::Review)
-                                                 ? db_.fetchReviewBatch(QDateTime::currentDateTime(), fetchLimit)
-                                                 : db_.fetchLearningBatch(fetchLimit);
+        QVector<WordItem> candidates;
+        switch (mode) {
+        case SessionMode::Review:
+            candidates = db_.fetchReviewBatch(QDateTime::currentDateTime(), fetchLimit);
+            break;
+        case SessionMode::Learning:
+            candidates = db_.fetchLearningBatch(fetchLimit);
+            break;
+        case SessionMode::CountabilityLearning:
+            candidates = db_.fetchCountabilityLearningBatch(fetchLimit);
+            break;
+        case SessionMode::CountabilityReview:
+            candidates = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), fetchLimit);
+            break;
+        }
         for (const WordItem &candidate : candidates) {
             if (candidate.skipForever) {
                 continue;
@@ -1158,53 +1385,55 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
 
     persistCurrentSession();
     showCurrentWord();
-    animateHomeToSpellingTransition(pendingHomeLaunchRect_);
+    QWidget *targetPage = (mode == SessionMode::CountabilityLearning || mode == SessionMode::CountabilityReview)
+                             ? (QWidget *)countabilityPage_
+                             : (QWidget *)spellingPage_;
+    animateHomeToPageTransition(pendingHomeLaunchRect_, targetPage);
     pendingHomeLaunchRect_ = QRect();
 }
 
-void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect) {
+void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWidget *targetPage) {
     const QRect stackRect = stack_->geometry();
-    if (sourceRect.isEmpty() || stack_->currentWidget() != homePage_ || stackRect.isEmpty()) {
-        stack_->setCurrentWidget(spellingPage_);
-        spellingPage_->setFocus();
+    if (sourceRect.isEmpty() || stack_->currentWidget() != homePage_ || stackRect.isEmpty() || targetPage == nullptr) {
+        stack_->setCurrentWidget(targetPage);
+        targetPage->setFocus();
         return;
     }
 
     QRect startRect(homePage_->mapTo(this, sourceRect.topLeft()), sourceRect.size());
     startRect = startRect.intersected(rect());
     if (startRect.isEmpty()) {
-        stack_->setCurrentWidget(spellingPage_);
-        spellingPage_->setFocus();
+        stack_->setCurrentWidget(targetPage);
+        targetPage->setFocus();
         return;
     }
 
     const QRect endRect = stackRect.intersected(rect());
     if (endRect.isEmpty()) {
-        stack_->setCurrentWidget(spellingPage_);
-        spellingPage_->setFocus();
+        stack_->setCurrentWidget(targetPage);
+        targetPage->setFocus();
         return;
     }
 
     constexpr int kCardCornerPx = kUnifiedCornerRadiusPx;
 
-    // Render spelling page snapshot first, so page content scales together during launch.
-    spellingPage_->resize(endRect.size());
-    spellingPage_->ensurePolished();
-    if (spellingPage_->layout() != nullptr) {
-        spellingPage_->layout()->activate();
+    targetPage->resize(endRect.size());
+    targetPage->ensurePolished();
+    if (targetPage->layout() != nullptr) {
+        targetPage->layout()->activate();
     }
 
-    QPixmap snapshot(spellingPage_->size() * devicePixelRatioF());
+    QPixmap snapshot(targetPage->size() * devicePixelRatioF());
     snapshot.setDevicePixelRatio(devicePixelRatioF());
     snapshot.fill(Qt::transparent);
     {
         QPainter painter(&snapshot);
-        spellingPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+        targetPage->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
     }
 
     if (snapshot.isNull()) {
-        stack_->setCurrentWidget(spellingPage_);
-        spellingPage_->setFocus();
+        stack_->setCurrentWidget(targetPage);
+        targetPage->setFocus();
         return;
     }
 
@@ -1239,10 +1468,10 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
     homeFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
 
     connect(group, &QParallelAnimationGroup::finished, this,
-            [this, group, transitionHost, homeOpacity]() {
+            [this, group, transitionHost, homeOpacity, targetPage]() {
         homeOpacity->setOpacity(1.0);
-        stack_->setCurrentWidget(spellingPage_);
-        spellingPage_->setFocus();
+        stack_->setCurrentWidget(targetPage);
+        targetPage->setFocus();
         transitionHost->deleteLater();
         group->deleteLater();
     });
@@ -1250,9 +1479,9 @@ void VibeSpellerWindow::animateHomeToSpellingTransition(const QRect &sourceRect)
     group->start();
 }
 
-void VibeSpellerWindow::animateSpellingToHomeTransition(const QRect &targetRect) {
+void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect) {
     const QRect stackRect = stack_->geometry();
-    if (targetRect.isEmpty() || stack_->currentWidget() != spellingPage_ || stackRect.isEmpty()) {
+    if (targetRect.isEmpty() || stack_->currentWidget() != sourcePage || stackRect.isEmpty() || sourcePage == nullptr) {
         stack_->setCurrentWidget(homePage_);
         return;
     }
@@ -1272,18 +1501,18 @@ void VibeSpellerWindow::animateSpellingToHomeTransition(const QRect &targetRect)
 
     constexpr int kCardCornerPx = kUnifiedCornerRadiusPx;
 
-    spellingPage_->resize(startRect.size());
-    spellingPage_->ensurePolished();
-    if (spellingPage_->layout() != nullptr) {
-        spellingPage_->layout()->activate();
+    sourcePage->resize(startRect.size());
+    sourcePage->ensurePolished();
+    if (sourcePage->layout() != nullptr) {
+        sourcePage->layout()->activate();
     }
 
-    QPixmap snapshot(spellingPage_->size() * devicePixelRatioF());
+    QPixmap snapshot(sourcePage->size() * devicePixelRatioF());
     snapshot.setDevicePixelRatio(devicePixelRatioF());
     snapshot.fill(Qt::transparent);
     {
         QPainter painter(&snapshot);
-        spellingPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+        sourcePage->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
     }
     if (snapshot.isNull()) {
         stack_->setCurrentWidget(homePage_);
@@ -1351,11 +1580,18 @@ void VibeSpellerWindow::showCurrentWord() {
     const WordItem &word = currentWords_.at(currentIndex_);
     const int totalTarget = qMax(1, sessionWordTargetCount_);
     const int displayIndex = qMin(records_.size() + 1, totalTarget);
-    spellingPage_->setWord(word,
-                           displayIndex,
-                           totalTarget,
-                           currentMode_ == SessionMode::Review);
-    updateSpellingDebugInfo(word.id);
+    if (currentMode_ == SessionMode::Learning || currentMode_ == SessionMode::Review) {
+        spellingPage_->setWord(word,
+                               displayIndex,
+                               totalTarget,
+                               currentMode_ == SessionMode::Review);
+        updateSpellingDebugInfo(word.id);
+    } else {
+        countabilityPage_->setWord(word,
+                                   displayIndex,
+                                   totalTarget,
+                                   currentMode_ == SessionMode::CountabilityReview);
+    }
 }
 
 void VibeSpellerWindow::updateSpellingDebugInfo(int wordId) {
@@ -1402,19 +1638,76 @@ void VibeSpellerWindow::moveToNextWord() {
     showCurrentWord();
 }
 
+void VibeSpellerWindow::moveToNextCountabilityWord() {
+    ++currentIndex_;
+    if (currentIndex_ >= currentWords_.size()) {
+        finishSession();
+        return;
+    }
+    persistCurrentSession();
+    showCurrentWord();
+}
+
 void VibeSpellerWindow::finishSession() {
     clearSessionForMode(currentMode_);
-    summaryPage_->setSummary(records_, currentMode_ == SessionMode::Review);
+    const bool reviewMode = (currentMode_ == SessionMode::Review || currentMode_ == SessionMode::CountabilityReview);
+    summaryPage_->setSummary(records_, reviewMode);
     refreshHomeCounts();
     stack_->setCurrentWidget(summaryPage_);
 }
 
 void VibeSpellerWindow::continueNextGroup() {
+    // 修复问题6：finishSession() 已经清除了会话断点，此处直接拉取新一批词即可，
+    // 不需要经过 onStartXxx → tryResumeSession 的多余查询路径。
+    QVector<WordItem> words;
     if (currentMode_ == SessionMode::Review) {
-        onStartReview();
+        words = db_.fetchReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+        if (words.isEmpty()) {
+            const int tomorrowCount = db_.dueReviewCount(QDateTime::currentDateTime().addDays(1));
+            showInfoPrompt(this,
+                           QStringLiteral("暂无复习任务"),
+                           QStringLiteral("今天已经复习完，明天需要复习%1个").arg(tomorrowCount));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+    } else if (currentMode_ == SessionMode::CountabilityLearning) {
+        words = db_.fetchCountabilityLearningBatch(kSessionBatchSize);
+        if (words.isEmpty()) {
+            showInfoPrompt(this,
+                           QStringLiteral("暂无辨析任务"),
+                           QStringLiteral("当前词书没有可进行可数性辨析的新词。"));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+    } else if (currentMode_ == SessionMode::CountabilityReview) {
+        words = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+        if (words.isEmpty()) {
+            const int tomorrowCount = db_.countabilityDueReviewCount(QDateTime::currentDateTime().addDays(1));
+            showInfoPrompt(this,
+                           QStringLiteral("暂无复习任务"),
+                           QStringLiteral("今天已经完成可数性复习，明天需要复习%1个").arg(tomorrowCount));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
     } else {
-        onStartLearning();
+        words = db_.fetchLearningBatch(kSessionBatchSize);
+        if (words.isEmpty()) {
+            const bool answer = showQuestionPrompt(this,
+                                                   QStringLiteral("暂无学习任务"),
+                                                   QStringLiteral("当前没有未学习单词。现在导入 CSV 吗？"));
+            if (answer) {
+                pickCsvAndShowMapping(false);
+            } else {
+                refreshHomeCounts();
+                stack_->setCurrentWidget(homePage_);
+            }
+            return;
+        }
     }
+    startSession(currentMode_, std::move(words), 0);
 }
 
 QString VibeSpellerWindow::modeKey(SessionMode mode) const {
@@ -1423,6 +1716,10 @@ QString VibeSpellerWindow::modeKey(SessionMode mode) const {
         return QStringLiteral("learning");
     case SessionMode::Review:
         return QStringLiteral("review");
+    case SessionMode::CountabilityLearning:
+        return QStringLiteral("countability_learning");
+    case SessionMode::CountabilityReview:
+        return QStringLiteral("countability_review");
     }
     return QStringLiteral("learning");
 }

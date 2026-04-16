@@ -205,20 +205,23 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
         }
 
         const int batchEnd = qMin(words.size(), cursor + workerCount);
-        std::vector<std::future<ItemResult>> futures;
-        futures.reserve(static_cast<size_t>(batchEnd - cursor));
+        std::vector<QThread*> threads;
+        threads.reserve(static_cast<size_t>(batchEnd - cursor));
+        QVector<ItemResult> batchResults(batchEnd - cursor);
+
         for (int i = cursor; i < batchEnd; ++i) {
-            futures.emplace_back(std::async(std::launch::async, downloadOne, i, words.at(i)));
+            const int offset = i - cursor;
+            QThread *th = QThread::create([offset, i, &words, &batchResults, &downloadOne]() {
+                batchResults[offset] = downloadOne(i, words.at(i));
+            });
+            th->start();
+            threads.push_back(th);
         }
 
-        QVector<ItemResult> batchResults;
-        batchResults.reserve(batchEnd - cursor);
-        for (auto &future : futures) {
-            batchResults.push_back(future.get());
+        for (QThread *th : threads) {
+            th->wait();
+            th->deleteLater();
         }
-        std::sort(batchResults.begin(), batchResults.end(), [](const ItemResult &a, const ItemResult &b) {
-            return a.index < b.index;
-        });
 
         for (const ItemResult &itemResult : batchResults) {
             ++result.checked;
