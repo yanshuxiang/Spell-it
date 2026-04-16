@@ -1,6 +1,7 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
 #include "audio_downloader.h"
+#include "pos_downloader.h"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -235,7 +236,9 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(wordBooksPage_, &WordBooksPageWidget::wordBookSelected, this, &VibeSpellerWindow::onSelectWordBook);
     connect(wordBooksPage_, &WordBooksPageWidget::wordBookDeleteRequested, this, &VibeSpellerWindow::onDeleteWordBook);
     connect(wordBooksPage_, &WordBooksPageWidget::downloadAudioRequested, this, &VibeSpellerWindow::onDownloadAudio);
+    connect(wordBooksPage_, &WordBooksPageWidget::downloadPosRequested, this, &VibeSpellerWindow::onDownloadPos);
     connect(wordBooksPage_, &WordBooksPageWidget::audioDownloadStopRequested, this, &VibeSpellerWindow::onAudioDownloadStopRequested);
+    connect(wordBooksPage_, &WordBooksPageWidget::posDownloadStopRequested, this, &VibeSpellerWindow::onPosDownloadStopRequested);
 
     auto *importShortcut = new QShortcut(QKeySequence::Open, this);
     connect(importShortcut, &QShortcut::activated, this, [this]() {
@@ -278,6 +281,7 @@ void VibeSpellerWindow::changeEvent(QEvent *event) {
 void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
     flushStudyTimeTracking();
     audioDownloadCancelRequested_.store(true);
+    posDownloadCancelRequested_.store(true);
     QWidget::closeEvent(event);
 }
 
@@ -706,6 +710,108 @@ void VibeSpellerWindow::onAudioDownloadStopRequested() {
     }
     audioDownloadCancelRequested_.store(true);
     wordBooksPage_->setAudioDownloadStatus(QStringLiteral("正在停止..."), -1, -1, true);
+}
+
+void VibeSpellerWindow::onDownloadPos(int bookId) {
+    if (bookId <= 0) {
+        return;
+    }
+    if (posDownloadRunning_) {
+        wordBooksPage_->setPosDownloadStatus(QStringLiteral("已有词性下载任务进行中"), -1, -1, true);
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchWordsMissingPartOfSpeechForBook(bookId);
+    if (words.isEmpty()) {
+        wordBooksPage_->setPosDownloadStatus(QStringLiteral("当前词书词性已是最新"), 0, 0, false);
+        return;
+    }
+
+    posDownloadRunning_ = true;
+    posDownloadCancelRequested_.store(false);
+    wordBooksPage_->setPosDownloadStatus(QStringLiteral("准备下载词性..."), 0, words.size(), true);
+
+    QPointer<VibeSpellerWindow> window(this);
+    auto *thread = QThread::create([window, words]() {
+        PosDownloader downloader;
+        QString errorText;
+        const PosDownloader::Result result = downloader.downloadPartOfSpeechForWords(
+            words,
+            [window](int current, int total, const QString &word) {
+                if (!window) {
+                    return;
+                }
+                const int displayIndex = qMin(total, qMax(1, current + 1));
+                const QString status = QStringLiteral("词性下载：%1（%2/%3）")
+                                           .arg(word)
+                                           .arg(displayIndex)
+                                           .arg(total);
+                QMetaObject::invokeMethod(window.data(), [window, status, current, total]() {
+                    if (window && window->wordBooksPage_) {
+                        window->wordBooksPage_->setPosDownloadStatus(status, current, total, true);
+                    }
+                }, Qt::QueuedConnection);
+            },
+            [window]() {
+                return !window || window->posDownloadCancelRequested_.load();
+            },
+            errorText);
+
+        if (!window) {
+            return;
+        }
+
+        QMetaObject::invokeMethod(window.data(), [window, result, errorText]() {
+            if (!window) {
+                return;
+            }
+
+            for (const PosDownloader::Update &update : result.updates) {
+                window->db_.updateWordPartOfSpeech(update.wordId, update.partOfSpeech);
+            }
+
+            window->posDownloadRunning_ = false;
+            if (window->posDownloadThread_ != nullptr) {
+                window->posDownloadThread_->deleteLater();
+                window->posDownloadThread_ = nullptr;
+            }
+
+            const int processed = result.processed;
+            if (!errorText.isEmpty() && !result.cancelled) {
+                window->wordBooksPage_->setPosDownloadStatus(
+                    QStringLiteral("词性下载异常：%1").arg(errorText),
+                    qMin(processed, result.totalWords),
+                    result.totalWords,
+                    false);
+                return;
+            }
+
+            const QString finalText = result.cancelled
+                                          ? QStringLiteral("词性下载已暂停（%1/%2），可继续补全")
+                                                .arg(qMin(processed, result.totalWords))
+                                                .arg(result.totalWords)
+                                          : QStringLiteral("词性完成：更新%1 跳过%2 失败%3")
+                                                .arg(result.updated)
+                                                .arg(result.skipped)
+                                                .arg(result.failed);
+            window->wordBooksPage_->setPosDownloadStatus(finalText,
+                                                         qMin(processed, result.totalWords),
+                                                         result.totalWords,
+                                                         false);
+        }, Qt::QueuedConnection);
+    });
+
+    posDownloadThread_ = thread;
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+void VibeSpellerWindow::onPosDownloadStopRequested() {
+    if (!posDownloadRunning_) {
+        return;
+    }
+    posDownloadCancelRequested_.store(true);
+    wordBooksPage_->setPosDownloadStatus(QStringLiteral("正在停止词性下载..."), -1, -1, true);
 }
 
 void VibeSpellerWindow::playPronunciationForWord(const QString &word) {

@@ -48,6 +48,29 @@ HomePageWidget::HomePageWidget(QWidget *parent)
         "padding-left: 12px; "
         "border-radius: 12px;"));
 
+    countabilityLearnButton_ = new QPushButton(QStringLiteral("可数性辨析\n0"), this);
+    countabilityLearnButton_->setMinimumHeight(78);
+    countabilityLearnButton_->setStyleSheet(QStringLiteral(
+        "font-size: 16px; "
+        "font-weight: 700; "
+        "text-align: left; "
+        "padding-left: 12px; "
+        "border-radius: 12px;"));
+
+    countabilityReviewButton_ = new QPushButton(QStringLiteral("可数性复习\n0"), this);
+    countabilityReviewButton_->setMinimumHeight(78);
+    countabilityReviewButton_->setStyleSheet(QStringLiteral(
+        "font-size: 16px; "
+        "font-weight: 700; "
+        "text-align: left; "
+        "padding-left: 12px; "
+        "border-radius: 12px;"));
+
+    auto *countabilityCardsLayout = new QHBoxLayout();
+    countabilityCardsLayout->setSpacing(10);
+    countabilityCardsLayout->addWidget(countabilityLearnButton_, 1);
+    countabilityCardsLayout->addWidget(countabilityReviewButton_, 1);
+
     auto *cardsLayout = new QHBoxLayout();
     cardsLayout->setSpacing(10);
     cardsLayout->addWidget(learningButton_, 1);
@@ -96,9 +119,12 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     root->addStretch(1);
     root->addWidget(title);
     root->addStretch(6);
-    root->addWidget(reviewCountLabel_);
+    root->addLayout(countabilityCardsLayout);
+    root->addSpacing(8);
     root->addSpacing(4);
     root->addLayout(cardsLayout);
+    root->addSpacing(10);
+    root->addWidget(reviewCountLabel_);
     root->addSpacing(6);
     root->addLayout(navLayout);
 
@@ -112,8 +138,10 @@ void HomePageWidget::setCounts(int learningCount,
                                int reviewCount,
                                int todayLearningCount,
                                int todayReviewCount) {
-    learningButton_->setText(QStringLiteral("学习\n%1").arg(learningCount));
-    reviewButton_->setText(QStringLiteral("复习\n%1").arg(reviewCount));
+    learningButton_->setText(QStringLiteral("拼写学习\n%1").arg(learningCount));
+    reviewButton_->setText(QStringLiteral("拼写复习\n%1").arg(reviewCount));
+    countabilityLearnButton_->setText(QStringLiteral("可数性辨析\n0"));
+    countabilityReviewButton_->setText(QStringLiteral("可数性复习\n0"));
     learningCountLabel_->setText(
         QStringLiteral("今日已学 %1 词 · 今日复习 %2 词").arg(todayLearningCount).arg(todayReviewCount));
     reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));

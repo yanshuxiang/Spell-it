@@ -15,6 +15,7 @@ struct WordItem {
     QString word;
     QString phonetic;
     QString translation;
+    QString partOfSpeech;
     double easeFactor = 2.5;
     int interval = 0;
     QDateTime nextReview;
@@ -74,6 +75,10 @@ public:
     QVector<WordItem> fetchLearningBatch(int limit) const;
     QVector<WordItem> fetchReviewBatch(const QDateTime &now, int limit) const;
     QVector<WordItem> fetchWordsForBook(int bookId) const;
+    QVector<WordItem> fetchWordsMissingPartOfSpeechForBook(int bookId) const;
+    bool updateWordPartOfSpeech(int wordId,
+                                const QString &partOfSpeech,
+                                const QString &source = QStringLiteral("dictionaryapi.dev"));
     bool saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex);
     bool loadSessionProgress(const QString &mode, QVector<WordItem> &words, int &currentIndex);
     bool clearSessionProgress(const QString &mode);

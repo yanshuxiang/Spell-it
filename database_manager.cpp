@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QCryptographicHash>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -54,6 +55,7 @@ WordItem readWordFromQuery(const QSqlQuery &query) {
     item.word = query.value("word").toString();
     item.phonetic = query.value("phonetic").toString();
     item.translation = query.value("translation").toString();
+    item.partOfSpeech = query.value("part_of_speech").toString();
     item.easeFactor = query.value("ease_factor").toDouble();
     item.interval = query.value("interval").toInt();
     item.status = query.value("status").toInt();
@@ -177,6 +179,10 @@ bool DatabaseManager::initialize() {
 
     bool hasBookIdColumn = false;
     bool hasSkipForeverColumn = false;
+    bool hasPartOfSpeechColumn = false;
+    bool hasPosHashColumn = false;
+    bool hasPosSourceColumn = false;
+    bool hasPosUpdatedAtColumn = false;
     QSqlQuery tableInfo(database());
     if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
         lastError_ = tableInfo.lastError().text();
@@ -188,6 +194,18 @@ bool DatabaseManager::initialize() {
         }
         if (tableInfo.value(1).toString() == QStringLiteral("skip_forever")) {
             hasSkipForeverColumn = true;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("part_of_speech")) {
+            hasPartOfSpeechColumn = true;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("pos_hash")) {
+            hasPosHashColumn = true;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("pos_source")) {
+            hasPosSourceColumn = true;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("pos_updated_at")) {
+            hasPosUpdatedAtColumn = true;
         }
     }
     if (!hasBookIdColumn) {
@@ -202,6 +220,30 @@ bool DatabaseManager::initialize() {
             return false;
         }
         if (!query.exec(QStringLiteral("UPDATE words SET skip_forever = 0 WHERE skip_forever IS NULL"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+    if (!hasPartOfSpeechColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN part_of_speech TEXT"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+    if (!hasPosHashColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_hash TEXT"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+    if (!hasPosSourceColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_source TEXT"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+    if (!hasPosUpdatedAtColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_updated_at TEXT"))) {
             lastError_ = query.lastError().text();
             return false;
         }
@@ -806,7 +848,7 @@ QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
         "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
@@ -840,7 +882,7 @@ QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int li
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
+        "SELECT id, word, phonetic, translation, part_of_speech, ease_factor, interval, next_review, status, skip_forever "
         "FROM words "
         "WHERE status != 0 AND skip_forever = 0 AND next_review IS NOT NULL "
         "AND date(next_review) <= date(?) "
@@ -876,7 +918,7 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
         "WHERE bw.book_id = ? AND w.skip_forever = 0 "
@@ -892,6 +934,76 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
         items.push_back(readWordFromQuery(query));
     }
     return items;
+}
+
+QVector<WordItem> DatabaseManager::fetchWordsMissingPartOfSpeechForBook(int bookId) const {
+    QVector<WordItem> items;
+    if (!ensureDatabaseOpen()) {
+        return items;
+    }
+
+    int targetBookId = bookId;
+    if (targetBookId <= 0) {
+        targetBookId = activeWordBookIdInternal();
+    }
+    if (targetBookId <= 0) {
+        return items;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "WHERE bw.book_id = ? "
+        "  AND (w.part_of_speech IS NULL OR trim(w.part_of_speech) = '') "
+        "ORDER BY w.id"));
+    query.bindValue(0, targetBookId);
+
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return items;
+    }
+
+    while (query.next()) {
+        items.push_back(readWordFromQuery(query));
+    }
+    return items;
+}
+
+bool DatabaseManager::updateWordPartOfSpeech(int wordId,
+                                             const QString &partOfSpeech,
+                                             const QString &source) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+
+    const QString trimmedPos = partOfSpeech.trimmed();
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(trimmedPos.toUtf8(), QCryptographicHash::Sha256).toHex());
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "UPDATE words "
+        "SET part_of_speech = ?, "
+        "    pos_hash = ?, "
+        "    pos_source = ?, "
+        "    pos_updated_at = ? "
+        "WHERE id = ?"));
+    query.bindValue(0, trimmedPos);
+    query.bindValue(1, hash);
+    query.bindValue(2, source.trimmed());
+    query.bindValue(3, QDateTime::currentDateTime().toString(kDateTimeFormat));
+    query.bindValue(4, wordId);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
 }
 
 bool DatabaseManager::saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex) {
@@ -1500,7 +1612,7 @@ bool DatabaseManager::queryWordById(int wordId, WordItem &item) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever "
+        "SELECT id, word, phonetic, translation, part_of_speech, ease_factor, interval, next_review, status, skip_forever "
         "FROM words WHERE id = ?"));
     query.bindValue(0, wordId);
 

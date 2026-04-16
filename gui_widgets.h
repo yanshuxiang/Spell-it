@@ -17,7 +17,6 @@ class QCloseEvent;
 class QEvent;
 class QKeyEvent;
 class QMouseEvent;
-class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTableWidget;
@@ -25,6 +24,7 @@ class QTimer;
 class QVBoxLayout;
 class QProcess;
 class QThread;
+class RoundedProgressStrip;
 
 struct PracticeRecord {
     WordItem word;
@@ -53,6 +53,8 @@ signals:
 private:
     QLabel *learningCountLabel_ = nullptr;
     QLabel *reviewCountLabel_ = nullptr;
+    QPushButton *countabilityLearnButton_ = nullptr;
+    QPushButton *countabilityReviewButton_ = nullptr;
     QPushButton *learningButton_ = nullptr;
     QPushButton *reviewButton_ = nullptr;
 };
@@ -193,6 +195,7 @@ public:
 
     void setWordBooks(const QVector<WordBookItem> &books, int activeBookId);
     void setAudioDownloadStatus(const QString &text, int current, int total, bool running);
+    void setPosDownloadStatus(const QString &text, int current, int total, bool running);
 
 signals:
     void backClicked();
@@ -200,7 +203,9 @@ signals:
     void wordBookSelected(int bookId);
     void wordBookDeleteRequested(int bookId);
     void downloadAudioRequested(int bookId);
+    void downloadPosRequested(int bookId);
     void audioDownloadStopRequested();
+    void posDownloadStopRequested();
 
 private:
     void rebuildList();
@@ -217,8 +222,12 @@ private:
     QPushButton *addBookButton_ = nullptr;
     QWidget *audioStatusHost_ = nullptr;
     QLabel *audioStatusLabel_ = nullptr;
-    QProgressBar *audioProgressBar_ = nullptr;
+    RoundedProgressStrip *audioProgressBar_ = nullptr;
     QPushButton *audioStopButton_ = nullptr;
+    QWidget *posStatusHost_ = nullptr;
+    QLabel *posStatusLabel_ = nullptr;
+    RoundedProgressStrip *posProgressBar_ = nullptr;
+    QPushButton *posStopButton_ = nullptr;
 };
 
 class VibeSpellerWindow : public QWidget {
@@ -237,7 +246,9 @@ private slots:
     void onSelectWordBook(int bookId);
     void onDeleteWordBook(int bookId);
     void onDownloadAudio(int bookId);
+    void onDownloadPos(int bookId);
     void onAudioDownloadStopRequested();
+    void onPosDownloadStopRequested();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -307,6 +318,9 @@ private:
     bool audioDownloadRunning_ = false;
     std::atomic_bool audioDownloadCancelRequested_ {false};
     QThread *audioDownloadThread_ = nullptr;
+    bool posDownloadRunning_ = false;
+    std::atomic_bool posDownloadCancelRequested_ {false};
+    QThread *posDownloadThread_ = nullptr;
     bool debugMode_ = false;
     QProcess *pronunciationProcess_ = nullptr;
     QHash<QString, qreal> pronunciationVolumeCache_;
