@@ -14,7 +14,7 @@ MODEL = "deepseek-chat"
 
 INPUT_FILE = "雅思词汇大纲.csv"
 OUTPUT_FILE = "雅思词汇大纲_countability.csv"
-BATCH_SIZE = 50   # 提升至每批 50 个单词
+BATCH_SIZE = 100   # 提升至每批 50 个单词
 MAX_WORKERS = 4   # 并发线程数（根据 API 限制调整，建议 3-5）
 MAX_RETRIES = 3   # 单次请求失败重试次数
 
@@ -35,9 +35,12 @@ def get_countability_batch(word_list):
         "   - Mandatory if 'C' or 'B'. \n"
         "   - If singular and plural are the same (e.g., sheep), write 'word (单复数同形)'.\n"
         "   - If a word is almost always plural (e.g., clothes, assets), write 'plural (常用复数)'.\n"
-        "3. 'explanation' (Only for type 'B'): \n"
-        "   - MUST follow format: '[U]含义A; [C]含义B。写作建议: 雅思写作常用[U/C]'.\n"
-        "   - Example for 'security': '[U]安全保障; [C]证券。证券意义下常用[C]复数形式'.\n"
+        "3. 'explanation': \n"
+        "   - Brief definition or usage guide. \n"
+        "   - For type 'B', MUST explain the difference: '[U]含义A; [C]含义B'.\n"
+        "4. 'countable_example' & 'uncountable_example': \n"
+        "   - Provide a short, academic example sentence for each applicable case (especially for 'B').\n"
+        "   - Keep it concise (under 15 words).\n"
         "Return a JSON object with key 'results' containing an array of objects."
     )
     user_prompt = f"Words to process ({len(word_list)} in total): {prompt_words}"
@@ -55,11 +58,10 @@ def get_countability_batch(word_list):
             )
             data = json.loads(response.choices[0].message.content)
             results = data.get('results', [])
-            # 转为字典提高查找效率
             return {item['word'].lower(): item for item in results}
-        except Exception as e:
+        except Exception:
             if attempt < MAX_RETRIES - 1:
-                time.sleep(2 * (attempt + 1)) # 指数退避
+                time.sleep(2 * (attempt + 1))
             else:
                 return {}
 
@@ -72,10 +74,28 @@ def process_batch(batch, df_original, pbar):
         res = results_map.get(word.lower(), {})
         # 获取该行原始数据副本
         original_row = df_original[df_original['word'] == word].iloc[0].to_dict()
-        # 合并结果
-        original_row['countability'] = res.get('countability', 'NA')
-        original_row['plural'] = res.get('plural', '')
-        original_row['explanation'] = res.get('explanation', '')
+        
+        # 提取结果
+        countability = res.get('countability', 'NA')
+        plural = res.get('plural', '')
+        explanation = res.get('explanation', '')
+        c_ex = res.get('countable_example', '')
+        u_ex = res.get('uncountable_example', '')
+
+        # 格式化例句进 explanation
+        formatted_notes = explanation
+        if countability == 'B':
+            # 尝试精细化整合例句
+            formatted_notes = f"{explanation} [例(U)]: {u_ex} [例(C)]: {c_ex}"
+        elif countability == 'C' and c_ex:
+            formatted_notes = f"{explanation} [例]: {c_ex}"
+        elif countability == 'U' and u_ex:
+            formatted_notes = f"{explanation} [例]: {u_ex}"
+
+        # 合并结果到 CSV
+        original_row['countability'] = countability
+        original_row['plural'] = plural
+        original_row['explanation'] = formatted_notes
         batch_data.append(original_row)
 
     # 线程安全写入 CSV
