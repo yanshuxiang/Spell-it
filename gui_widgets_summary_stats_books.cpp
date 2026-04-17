@@ -597,54 +597,9 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     audioStatusLayout->addWidget(audioStatusLabel_);
     audioStatusLayout->addLayout(progressRow);
 
-    posStatusHost_ = new QWidget(this);
-    posStatusHost_->setFixedSize(240, 54);
-    posStatusHost_->setStyleSheet(QStringLiteral(
-        "background: transparent;"
-        "border: none;"));
-    auto *posStatusLayout = new QVBoxLayout(posStatusHost_);
-    posStatusLayout->setContentsMargins(0, 0, 0, 0);
-    posStatusLayout->setSpacing(3);
-
-    posStatusLabel_ = new QLabel(QStringLiteral("词性未下载"), posStatusHost_);
-    posStatusLabel_->setStyleSheet(QStringLiteral(
-        "font-size: 12px; color: #475569;"
-        "background: transparent; border: none;"));
-
-    posProgressBar_ = new RoundedProgressStrip(posStatusHost_);
-    posProgressBar_->setRange(0, 100);
-    posProgressBar_->setValue(0);
-    posProgressBar_->setFixedHeight(10);
-
-    posStopButton_ = new QPushButton(QStringLiteral("⏸"), posStatusHost_);
-    posStopButton_->setObjectName(QStringLiteral("posPauseEmojiButton"));
-    posStopButton_->setFixedSize(18, 18);
-    posStopButton_->setToolTip(QStringLiteral("暂停词性下载"));
-    posStopButton_->setStyleSheet(QStringLiteral(
-        "#posPauseEmojiButton {"
-        "  border: none;"
-        "  background: transparent;"
-        "  padding: 0;"
-        "  font-size: 12px;"
-        "  color: #64748b;"
-        "}"
-        "#posPauseEmojiButton:hover { color: #334155; }"
-        "#posPauseEmojiButton:disabled { color: #cbd5e1; }"));
-    posStopButton_->setEnabled(false);
-
-    auto *posProgressRow = new QHBoxLayout();
-    posProgressRow->setContentsMargins(0, 0, 0, 0);
-    posProgressRow->setSpacing(6);
-    posProgressRow->addWidget(posProgressBar_, 1);
-    posProgressRow->addWidget(posStopButton_, 0, Qt::AlignVCenter);
-
-    posStatusLayout->addWidget(posStatusLabel_);
-    posStatusLayout->addLayout(posProgressRow);
-
     auto *statusColumn = new QVBoxLayout();
     statusColumn->setContentsMargins(0, 0, 0, 0);
     statusColumn->setSpacing(4);
-    statusColumn->addWidget(posStatusHost_, 0, Qt::AlignRight);
     statusColumn->addWidget(audioStatusHost_, 0, Qt::AlignRight);
 
     header->addWidget(backButton_, 0, Qt::AlignTop);
@@ -691,9 +646,7 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     connect(backButton_, &QPushButton::clicked, this, &WordBooksPageWidget::backClicked);
     connect(addBookButton_, &QPushButton::clicked, this, &WordBooksPageWidget::addBookClicked);
     connect(audioStopButton_, &QPushButton::clicked, this, &WordBooksPageWidget::audioDownloadStopRequested);
-    connect(posStopButton_, &QPushButton::clicked, this, &WordBooksPageWidget::posDownloadStopRequested);
     setAudioDownloadStatus(QStringLiteral("音频未下载"), 0, 0, false);
-    setPosDownloadStatus(QStringLiteral("词性未下载"), 0, 0, false);
 }
 
 void WordBooksPageWidget::setAudioDownloadStatus(const QString &text, int current, int total, bool running) {
@@ -730,43 +683,6 @@ void WordBooksPageWidget::setAudioDownloadStatus(const QString &text, int curren
     }
     if (audioStopButton_) {
         audioStopButton_->setEnabled(running);
-    }
-}
-
-void WordBooksPageWidget::setPosDownloadStatus(const QString &text, int current, int total, bool running) {
-    if (posStatusHost_) {
-        posStatusHost_->setVisible(running);
-    }
-    if (!running) {
-        if (posStatusLabel_) {
-            posStatusLabel_->setText(QString());
-        }
-        if (posProgressBar_) {
-            posProgressBar_->setRange(0, 100);
-            posProgressBar_->setValue(0);
-        }
-        if (posStopButton_) {
-            posStopButton_->setEnabled(false);
-        }
-        return;
-    }
-
-    if (posStatusLabel_) {
-        posStatusLabel_->setText(text);
-    }
-    if (posProgressBar_) {
-        if (total < 0) {
-            posProgressBar_->setRange(0, 0);
-        } else if (total == 0) {
-            posProgressBar_->setRange(0, 100);
-            posProgressBar_->setValue(0);
-        } else if (total > 0) {
-            posProgressBar_->setRange(0, total);
-            posProgressBar_->setValue(qBound(0, current, total));
-        }
-    }
-    if (posStopButton_) {
-        posStopButton_->setEnabled(running);
     }
 }
 
@@ -944,24 +860,6 @@ void WordBooksPageWidget::rebuildList() {
             opsRow->addWidget(deleteButton);
             rightLayout->addLayout(opsRow);
         } else {
-            auto *downloadPosButton = new QPushButton(QStringLiteral("下载词性"), row);
-            downloadPosButton->setObjectName(QStringLiteral("bookDownloadPosButton"));
-            downloadPosButton->setFixedSize(92, 34);
-            downloadPosButton->setCursor(Qt::PointingHandCursor);
-            downloadPosButton->setToolTip(QStringLiteral("下载词性"));
-            downloadPosButton->setStyleSheet(QStringLiteral(
-                "#bookDownloadPosButton {"
-                "  font-size: 13px; font-weight: 700; border-radius: 17px;"
-                "  padding: 0 12px;"
-                "  border: 1px solid rgba(15,23,42,0.14);"
-                "  background: #f8fafc; color: #0f172a;"
-                "}"
-                "#bookDownloadPosButton:hover { background: #eef2f7; }"
-                "#bookDownloadPosButton:pressed { background: #e2e8f0; }"));
-            connect(downloadPosButton, &QPushButton::clicked, this, [this, book]() {
-                emit downloadPosRequested(book.id);
-            });
-
             auto *downloadButton = new QPushButton(QStringLiteral("下载音频"), row);
             downloadButton->setObjectName(QStringLiteral("bookDownloadButton"));
             downloadButton->setFixedSize(92, 34);
@@ -998,7 +896,6 @@ void WordBooksPageWidget::rebuildList() {
             downloadRow->setContentsMargins(0, 0, 0, 0);
             downloadRow->setSpacing(6);
             downloadRow->addStretch(1);
-            downloadRow->addWidget(downloadPosButton);
             downloadRow->addWidget(downloadButton);
 
             auto *deleteRow = new QHBoxLayout();

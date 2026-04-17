@@ -16,10 +16,6 @@ add_executable(VibeSpeller
     database_manager.cpp
     audio_downloader.h
     audio_downloader.cpp
-    pos_downloader.h
-    pos_downloader.cpp
-    countability_downloader.h
-    countability_downloader.cpp
     gui_widgets.h
     gui_widgets_internal.h
     gui_widgets.cpp

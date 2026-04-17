@@ -69,9 +69,16 @@ WordItem readWordFromQuery(const QSqlQuery &query) {
     if (query.record().indexOf("countability_label") >= 0) {
         item.countabilityLabel = query.value("countability_label").toString().trimmed().toUpper();
     }
+    if (query.record().indexOf("countability_plural") >= 0) {
+        item.countabilityPlural = query.value("countability_plural").toString().trimmed();
+    }
+    if (query.record().indexOf("countability_notes") >= 0) {
+        item.countabilityNotes = query.value("countability_notes").toString().trimmed();
+    }
     item.easeFactor = query.value("ease_factor").toDouble();
     item.interval = query.value("interval").toInt();
     item.status = query.value("status").toInt();
+    item.skipForever = query.value("skip_forever").toInt() == 1;
 
     const QString nextReviewText = query.value("next_review").toString();
     if (!nextReviewText.isEmpty()) {
@@ -156,6 +163,10 @@ bool DatabaseManager::initialize() {
         "word TEXT NOT NULL UNIQUE,"
         "phonetic TEXT,"
         "translation TEXT NOT NULL,"
+        "part_of_speech TEXT,"
+        "countability_label TEXT,"
+        "countability_plural TEXT,"
+        "countability_notes TEXT,"
         "ease_factor REAL DEFAULT 2.5,"
         "interval INTEGER DEFAULT 0,"
         "next_review TEXT,"
@@ -193,13 +204,9 @@ bool DatabaseManager::initialize() {
     bool hasBookIdColumn = false;
     bool hasSkipForeverColumn = false;
     bool hasPartOfSpeechColumn = false;
-    bool hasPosHashColumn = false;
-    bool hasPosSourceColumn = false;
-    bool hasPosUpdatedAtColumn = false;
     bool hasCountabilityLabelColumn = false;
-    bool hasCountabilitySourceColumn = false;
-    bool hasCountabilityUpdatedAtColumn = false;
-    bool hasCountabilityHashColumn = false;
+    bool hasCountabilityPluralColumn = false;
+    bool hasCountabilityNotesColumn = false;
     QSqlQuery tableInfo(database());
     if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
         lastError_ = tableInfo.lastError().text();
@@ -215,28 +222,17 @@ bool DatabaseManager::initialize() {
         if (tableInfo.value(1).toString() == QStringLiteral("part_of_speech")) {
             hasPartOfSpeechColumn = true;
         }
-        if (tableInfo.value(1).toString() == QStringLiteral("pos_hash")) {
-            hasPosHashColumn = true;
-        }
-        if (tableInfo.value(1).toString() == QStringLiteral("pos_source")) {
-            hasPosSourceColumn = true;
-        }
-        if (tableInfo.value(1).toString() == QStringLiteral("pos_updated_at")) {
-            hasPosUpdatedAtColumn = true;
-        }
         if (tableInfo.value(1).toString() == QStringLiteral("countability_label")) {
             hasCountabilityLabelColumn = true;
         }
-        if (tableInfo.value(1).toString() == QStringLiteral("countability_source")) {
-            hasCountabilitySourceColumn = true;
+        if (tableInfo.value(1).toString() == QStringLiteral("countability_plural")) {
+            hasCountabilityPluralColumn = true;
         }
-        if (tableInfo.value(1).toString() == QStringLiteral("countability_updated_at")) {
-            hasCountabilityUpdatedAtColumn = true;
-        }
-        if (tableInfo.value(1).toString() == QStringLiteral("countability_hash")) {
-            hasCountabilityHashColumn = true;
+        if (tableInfo.value(1).toString() == QStringLiteral("countability_notes")) {
+            hasCountabilityNotesColumn = true;
         }
     }
+
     if (!hasBookIdColumn) {
         if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN book_id INTEGER"))) {
             lastError_ = query.lastError().text();
@@ -248,31 +244,9 @@ bool DatabaseManager::initialize() {
             lastError_ = query.lastError().text();
             return false;
         }
-        if (!query.exec(QStringLiteral("UPDATE words SET skip_forever = 0 WHERE skip_forever IS NULL"))) {
-            lastError_ = query.lastError().text();
-            return false;
-        }
     }
     if (!hasPartOfSpeechColumn) {
         if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN part_of_speech TEXT"))) {
-            lastError_ = query.lastError().text();
-            return false;
-        }
-    }
-    if (!hasPosHashColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_hash TEXT"))) {
-            lastError_ = query.lastError().text();
-            return false;
-        }
-    }
-    if (!hasPosSourceColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_source TEXT"))) {
-            lastError_ = query.lastError().text();
-            return false;
-        }
-    }
-    if (!hasPosUpdatedAtColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN pos_updated_at TEXT"))) {
             lastError_ = query.lastError().text();
             return false;
         }
@@ -283,20 +257,14 @@ bool DatabaseManager::initialize() {
             return false;
         }
     }
-    if (!hasCountabilitySourceColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN countability_source TEXT"))) {
+    if (!hasCountabilityPluralColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN countability_plural TEXT"))) {
             lastError_ = query.lastError().text();
             return false;
         }
     }
-    if (!hasCountabilityUpdatedAtColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN countability_updated_at TEXT"))) {
-            lastError_ = query.lastError().text();
-            return false;
-        }
-    }
-    if (!hasCountabilityHashColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN countability_hash TEXT"))) {
+    if (!hasCountabilityNotesColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN countability_notes TEXT"))) {
             lastError_ = query.lastError().text();
             return false;
         }
@@ -519,6 +487,9 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
                                     int wordColumn,
                                     int translationColumn,
                                     int phoneticColumn,
+                                    int countabilityColumn,
+                                    int pluralColumn,
+                                    int notesColumn,
                                     int &importedCount) {
     importedCount = 0;
 
@@ -592,11 +563,11 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     QSqlQuery findWordQuery(db);
     findWordQuery.prepare(QStringLiteral("SELECT id FROM words WHERE word = ?"));
 
-    QSqlQuery insertWordQuery(db);
-    insertWordQuery.prepare(QStringLiteral(
-        "INSERT INTO words "
-        "(word, phonetic, translation, ease_factor, interval, next_review, status, skip_forever, book_id) "
-        "VALUES (?, ?, ?, 2.5, 0, NULL, 0, 0, ?)"));
+    QSqlQuery insertQuery(db);
+    insertQuery.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO words (word, translation, phonetic, "
+        "countability_label, countability_plural, countability_notes) "
+        "VALUES (?, ?, ?, ?, ?, ?)"));
 
     QSqlQuery linkWordQuery(db);
     linkWordQuery.prepare(QStringLiteral(
@@ -618,47 +589,74 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
 
         const QString word = columns[wordColumn].trimmed();
         const QString translation = columns[translationColumn].trimmed();
-        const QString phonetic = (phoneticColumn >= 0 && phoneticColumn < columns.size())
-                                     ? columns[phoneticColumn].trimmed()
-                                     : QString();
-
         if (word.isEmpty() || translation.isEmpty()) {
             continue;
         }
 
-        int wordId = -1;
-        findWordQuery.bindValue(0, word);
-        if (!findWordQuery.exec()) {
+        QString phonetic;
+        if (phoneticColumn >= 0 && phoneticColumn < columns.size()) {
+            phonetic = columns[phoneticColumn].trimmed();
+        }
+
+        QString countabilityLabel;
+        if (countabilityColumn >= 0 && countabilityColumn < columns.size()) {
+            countabilityLabel = columns[countabilityColumn].trimmed().toUpper();
+            if (countabilityLabel == QStringLiteral("COUNTABLE")) {
+                countabilityLabel = QStringLiteral("C");
+            } else if (countabilityLabel == QStringLiteral("UNCOUNTABLE")) {
+                countabilityLabel = QStringLiteral("U");
+            } else if (countabilityLabel == QStringLiteral("BOTH")) {
+                countabilityLabel = QStringLiteral("B");
+            }
+            if (countabilityLabel != QStringLiteral("C") &&
+                countabilityLabel != QStringLiteral("U") &&
+                countabilityLabel != QStringLiteral("B")) {
+                countabilityLabel.clear();
+            }
+        }
+
+        QString countabilityPlural;
+        if (pluralColumn >= 0 && pluralColumn < columns.size()) {
+            countabilityPlural = columns[pluralColumn].trimmed();
+        }
+
+        QString countabilityNotes;
+        if (notesColumn >= 0 && notesColumn < columns.size()) {
+            countabilityNotes = columns[notesColumn].trimmed();
+        }
+
+        insertQuery.bindValue(0, word);
+        insertQuery.bindValue(1, translation);
+        insertQuery.bindValue(2, phonetic);
+        insertQuery.bindValue(3, countabilityLabel);
+        insertQuery.bindValue(4, countabilityPlural);
+        insertQuery.bindValue(5, countabilityNotes);
+
+        if (!insertQuery.exec()) {
             db.rollback();
-            lastError_ = findWordQuery.lastError().text();
+            lastError_ = insertQuery.lastError().text();
             return false;
         }
-        if (findWordQuery.next()) {
-            wordId = findWordQuery.value(0).toInt();
+
+        int wordId = -1;
+        if (insertQuery.numRowsAffected() > 0) {
+            wordId = insertQuery.lastInsertId().toInt();
         } else {
-            insertWordQuery.bindValue(0, word);
-            insertWordQuery.bindValue(1, phonetic);
-            insertWordQuery.bindValue(2, translation);
-            insertWordQuery.bindValue(3, bookId);
-            if (!insertWordQuery.exec()) {
+            findWordQuery.bindValue(0, word);
+            if (findWordQuery.exec() && findWordQuery.next()) {
+                wordId = findWordQuery.value(0).toInt();
+            }
+        }
+
+        if (wordId > 0) {
+            linkWordQuery.bindValue(0, bookId);
+            linkWordQuery.bindValue(1, wordId);
+            if (!linkWordQuery.exec()) {
                 db.rollback();
-                lastError_ = insertWordQuery.lastError().text();
+                lastError_ = linkWordQuery.lastError().text();
                 return false;
             }
-            wordId = insertWordQuery.lastInsertId().toInt();
             ++importedCount;
-        }
-
-        if (wordId <= 0) {
-            continue;
-        }
-
-        linkWordQuery.bindValue(0, bookId);
-        linkWordQuery.bindValue(1, wordId);
-        if (!linkWordQuery.exec()) {
-            db.rollback();
-            lastError_ = linkWordQuery.lastError().text();
-            return false;
         }
     }
 
@@ -667,6 +665,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         return false;
     }
 
+    file.close();
     return true;
 }
 
@@ -804,7 +803,8 @@ bool DatabaseManager::deleteWordBook(int bookId) {
 
     if (!query.exec(QStringLiteral(
             "DELETE FROM words "
-            "WHERE id NOT IN (SELECT DISTINCT word_id FROM book_words)"))) {
+            "WHERE id NOT IN (SELECT DISTINCT word_id FROM book_words) "
+            "  AND id NOT IN (SELECT DISTINCT word_id FROM training_progress)"))) {
         db.rollback();
         lastError_ = query.lastError().text();
         return false;
@@ -1095,7 +1095,8 @@ QVector<WordItem> DatabaseManager::fetchCountabilityLearningBatch(int limit) con
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.countability_label, "
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, "
         "       2.5 AS ease_factor, 0 AS interval, NULL AS next_review, 0 AS status, w.skip_forever "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
@@ -1129,7 +1130,8 @@ QVector<WordItem> DatabaseManager::fetchCountabilityReviewBatch(const QDateTime 
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.countability_label, "
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, "
         "       tp.ease_factor AS ease_factor, tp.interval AS interval, tp.next_review AS next_review, tp.status AS status, "
         "       w.skip_forever "
         "FROM training_progress tp "
@@ -1172,7 +1174,9 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, "
+        "       w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
         "WHERE bw.book_id = ? AND w.skip_forever = 0 "
@@ -1188,190 +1192,6 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
         items.push_back(readWordFromQuery(query));
     }
     return items;
-}
-
-QVector<WordItem> DatabaseManager::fetchWordsMissingPartOfSpeechForBook(int bookId) const {
-    QVector<WordItem> items;
-    if (!ensureDatabaseOpen()) {
-        return items;
-    }
-
-    int targetBookId = bookId;
-    if (targetBookId <= 0) {
-        targetBookId = activeWordBookIdInternal();
-    }
-    if (targetBookId <= 0) {
-        return items;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
-        "FROM book_words bw "
-        "JOIN words w ON w.id = bw.word_id "
-        "WHERE bw.book_id = ? "
-        "  AND (w.part_of_speech IS NULL OR trim(w.part_of_speech) = '') "
-        "ORDER BY w.id"));
-    query.bindValue(0, targetBookId);
-
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return items;
-    }
-
-    while (query.next()) {
-        items.push_back(readWordFromQuery(query));
-    }
-    return items;
-}
-
-QVector<WordItem> DatabaseManager::fetchWordsForCountabilityDownload(int bookId) const {
-    QVector<WordItem> items;
-    if (!ensureDatabaseOpen()) {
-        return items;
-    }
-
-    QSqlQuery query(database());
-    QString sql = QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, w.countability_label, w.countability_hash, "
-        "       w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever ");
-
-    if (bookId > 0) {
-        sql += QStringLiteral("FROM book_words bw JOIN words w ON w.id = bw.word_id WHERE bw.book_id = ? ");
-    } else {
-        sql += QStringLiteral("FROM words w WHERE 1=1 ");
-    }
-
-    sql += QStringLiteral(
-        "  AND w.skip_forever = 0 "
-        "  AND ("
-        "       lower(COALESCE(w.part_of_speech, '')) LIKE '%noun%' "
-        "    OR lower(COALESCE(w.translation, '')) LIKE 'n.%' "
-        "    OR lower(COALESCE(w.translation, '')) LIKE '% n.%'"
-        "  ) "
-        "ORDER BY w.id");
-
-    query.prepare(sql);
-    if (bookId > 0) {
-        query.bindValue(0, bookId);
-    }
-
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return items;
-    }
-
-    while (query.next()) {
-        const QString label = query.value("countability_label").toString().trimmed().toUpper();
-        const QString storedHash = query.value("countability_hash").toString().trimmed().toLower();
-
-        const bool hasValidLabel = (label == QStringLiteral("C")
-                                    || label == QStringLiteral("U")
-                                    || label == QStringLiteral("B"));
-        
-        if (label == QStringLiteral("NA")) {
-            continue; // 已标记为无法获取，不再重复下载
-        }
-
-        if (hasValidLabel) {
-            // 如果已经有合法的可数性标签，则认为已经存在，不再重复下载
-            // 避免覆盖用户手动导入的标签，也解决了断点续下时重复下载的问题
-            continue; 
-        }
-        items.push_back(readWordFromQuery(query));
-    }
-    return items;
-}
-
-bool DatabaseManager::updateWordPartOfSpeech(int wordId,
-                                             const QString &partOfSpeech,
-                                             const QString &source) {
-    if (!ensureDatabaseOpen()) {
-        return false;
-    }
-    if (wordId <= 0) {
-        lastError_ = QStringLiteral("无效的单词 ID");
-        return false;
-    }
-
-    const QString trimmedPos = partOfSpeech.trimmed();
-    const QString hash = QString::fromLatin1(
-        QCryptographicHash::hash(trimmedPos.toUtf8(), QCryptographicHash::Sha256).toHex());
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "UPDATE words "
-        "SET part_of_speech = ?, "
-        "    pos_hash = ?, "
-        "    pos_source = ?, "
-        "    pos_updated_at = ? "
-        "WHERE id = ?"));
-    query.bindValue(0, trimmedPos);
-    query.bindValue(1, hash);
-    query.bindValue(2, source.trimmed());
-    query.bindValue(3, QDateTime::currentDateTime().toString(kDateTimeFormat));
-    query.bindValue(4, wordId);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-    return true;
-}
-
-bool DatabaseManager::updateWordCountability(int wordId,
-                                             const QString &countabilityLabel,
-                                             const QString &source) {
-    if (!ensureDatabaseOpen()) {
-        return false;
-    }
-    if (wordId <= 0) {
-        lastError_ = QStringLiteral("无效的单词 ID");
-        return false;
-    }
-
-    const QString normalized = countabilityLabel.trimmed().toUpper();
-    if (normalized != QStringLiteral("C")
-        && normalized != QStringLiteral("U")
-        && normalized != QStringLiteral("B")
-        && normalized != QStringLiteral("NA")) {
-        lastError_ = QStringLiteral("无效的可数性标记: %1").arg(countabilityLabel);
-        return false;
-    }
-
-    QSqlQuery wordQuery(database());
-    wordQuery.prepare(QStringLiteral("SELECT word FROM words WHERE id = ?"));
-    wordQuery.bindValue(0, wordId);
-    if (!wordQuery.exec()) {
-        lastError_ = wordQuery.lastError().text();
-        return false;
-    }
-    if (!wordQuery.next()) {
-        lastError_ = QStringLiteral("未找到指定单词 id=%1").arg(wordId);
-        return false;
-    }
-    const QString wordText = wordQuery.value(0).toString();
-    const QString hash = (normalized == QStringLiteral("NA"))
-                             ? QString()
-                             : countabilityHashFor(wordText, normalized);
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "UPDATE words "
-        "SET countability_label = ?, "
-        "    countability_source = ?, "
-        "    countability_updated_at = ?, "
-        "    countability_hash = ? "
-        "WHERE id = ?"));
-    query.bindValue(0, normalized);
-    query.bindValue(1, source.trimmed());
-    query.bindValue(2, QDateTime::currentDateTime().toString(kDateTimeFormat));
-    query.bindValue(3, hash);
-    query.bindValue(4, wordId);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-    return true;
 }
 
 bool DatabaseManager::saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex) {
@@ -2093,7 +1913,8 @@ bool DatabaseManager::queryWordById(int wordId, WordItem &item) const {
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT id, word, phonetic, translation, part_of_speech, countability_label, "
+        "SELECT id, word, phonetic, translation, part_of_speech, "
+        "       countability_label, countability_plural, countability_notes, "
         "       ease_factor, interval, next_review, status, skip_forever "
         "FROM words WHERE id = ?"));
     query.bindValue(0, wordId);

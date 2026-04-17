@@ -203,6 +203,10 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     wordCombo_ = new QComboBox(this);
     translationCombo_ = new QComboBox(this);
     phoneticCombo_ = new QComboBox(this);
+    countabilityCombo_ = new QComboBox(this);
+    pluralCombo_ = new QComboBox(this);
+    notesCombo_ = new QComboBox(this);
+
     const QString comboStyle = QStringLiteral(
         "QComboBox {"
         "  min-height: 44px;"
@@ -216,9 +220,16 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     wordCombo_->setStyleSheet(comboStyle);
     translationCombo_->setStyleSheet(comboStyle);
     phoneticCombo_->setStyleSheet(comboStyle);
+    countabilityCombo_->setStyleSheet(comboStyle);
+    pluralCombo_->setStyleSheet(comboStyle);
+    notesCombo_->setStyleSheet(comboStyle);
+
     wordCombo_->setMinimumWidth(260);
     translationCombo_->setMinimumWidth(260);
     phoneticCombo_->setMinimumWidth(260);
+    countabilityCombo_->setMinimumWidth(260);
+    pluralCombo_->setMinimumWidth(260);
+    notesCombo_->setMinimumWidth(260);
 
     auto *mappingRows = new QVBoxLayout();
     mappingRows->setSpacing(12);
@@ -240,7 +251,10 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     };
     mappingRows->addLayout(makeRow(QStringLiteral("单词列"), wordCombo_));
     mappingRows->addLayout(makeRow(QStringLiteral("释义列"), translationCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("音标列(可选)"), phoneticCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("音标列"), phoneticCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("可数性"), countabilityCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("复数形式"), pluralCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("用法备注"), notesCombo_));
 
     auto *previewTitle = new QLabel(QStringLiteral("CSV 样例预览"), this);
     previewTitle->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: #374151;"));
@@ -321,7 +335,12 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
         }
 
         const int phoneticColumn = phoneticCombo_->currentData().toInt();
-        emit importConfirmed(wordCombo_->currentIndex(), translationCombo_->currentIndex(), phoneticColumn);
+        const int countabilityColumn = countabilityCombo_->currentData().toInt();
+        const int pluralColumn = pluralCombo_->currentData().toInt();
+        const int notesColumn = notesCombo_->currentData().toInt();
+
+        emit importConfirmed(wordCombo_->currentIndex(), translationCombo_->currentIndex(), phoneticColumn,
+                             countabilityColumn, pluralColumn, notesColumn);
     });
 }
 
@@ -337,9 +356,16 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
     wordCombo_->addItems(headers);
     translationCombo_->addItems(headers);
 
-    phoneticCombo_->addItem(QStringLiteral("不使用音标列"), -1);
+    phoneticCombo_->addItem(QStringLiteral("不使用"), -1);
+    countabilityCombo_->addItem(QStringLiteral("不处理"), -1);
+    pluralCombo_->addItem(QStringLiteral("不处理"), -1);
+    notesCombo_->addItem(QStringLiteral("不处理"), -1);
+
     for (int i = 0; i < headers.size(); ++i) {
         phoneticCombo_->addItem(headers.at(i), i);
+        countabilityCombo_->addItem(headers.at(i), i);
+        pluralCombo_->addItem(headers.at(i), i);
+        notesCombo_->addItem(headers.at(i), i);
     }
 
     const QString bestWord = findBestColumn(headers, {QStringLiteral("word"), QStringLiteral("单词")});
@@ -362,11 +388,35 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
                                                 {QStringLiteral("phonetic"),
                                                  QStringLiteral("pronunciation"),
                                                  QStringLiteral("音标")});
-    if (!bestPhonetic.isEmpty()) {
+    if (bestPhonetic.isEmpty()) {
+        phoneticCombo_->setCurrentIndex(0);
+    } else {
         const int idx = phoneticCombo_->findText(bestPhonetic);
-        if (idx >= 0) {
-            phoneticCombo_->setCurrentIndex(idx);
-        }
+        if (idx >= 0) phoneticCombo_->setCurrentIndex(idx);
+    }
+
+    const QString bestCountability = findBestColumn(headers, {QStringLiteral("countability"), QStringLiteral("可数性")});
+    if (!bestCountability.isEmpty()) {
+        const int idx = countabilityCombo_->findText(bestCountability);
+        if (idx >= 0) countabilityCombo_->setCurrentIndex(idx);
+    } else {
+        countabilityCombo_->setCurrentIndex(0);
+    }
+
+    const QString bestPlural = findBestColumn(headers, {QStringLiteral("plural"), QStringLiteral("复数")});
+    if (!bestPlural.isEmpty()) {
+        const int idx = pluralCombo_->findText(bestPlural);
+        if (idx >= 0) pluralCombo_->setCurrentIndex(idx);
+    } else {
+        pluralCombo_->setCurrentIndex(0);
+    }
+
+    const QString bestNotes = findBestColumn(headers, {QStringLiteral("explanation"), QStringLiteral("notes"), QStringLiteral("备注")});
+    if (!bestNotes.isEmpty()) {
+        const int idx = notesCombo_->findText(bestNotes);
+        if (idx >= 0) notesCombo_->setCurrentIndex(idx);
+    } else {
+        notesCombo_->setCurrentIndex(0);
     }
 
     previewTable_->clear();

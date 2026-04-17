@@ -17,6 +17,8 @@ struct WordItem {
     QString translation;
     QString partOfSpeech;
     QString countabilityLabel;
+    QString countabilityPlural;
+    QString countabilityNotes;
     double easeFactor = 2.5;
     int interval = 0;
     QDateTime nextReview;
@@ -69,6 +71,9 @@ public:
                        int wordColumn,
                        int translationColumn,
                        int phoneticColumn,
+                       int countabilityColumn,
+                       int pluralColumn,
+                       int notesColumn,
                        int &importedCount);
 
     QVector<WordBookItem> fetchWordBooks() const;
@@ -86,14 +91,6 @@ public:
     QVector<WordItem> fetchCountabilityLearningBatch(int limit) const;
     QVector<WordItem> fetchCountabilityReviewBatch(const QDateTime &now, int limit) const;
     QVector<WordItem> fetchWordsForBook(int bookId) const;
-    QVector<WordItem> fetchWordsMissingPartOfSpeechForBook(int bookId) const;
-    QVector<WordItem> fetchWordsForCountabilityDownload(int bookId = -1) const;
-    bool updateWordPartOfSpeech(int wordId,
-                                const QString &partOfSpeech,
-                                const QString &source = QStringLiteral("dictionaryapi.dev"));
-    bool updateWordCountability(int wordId,
-                                const QString &countabilityLabel,
-                                const QString &source = QStringLiteral("oxford"));
     bool saveSessionProgress(const QString &mode, const QVector<WordItem> &words, int currentIndex);
     bool loadSessionProgress(const QString &mode, QVector<WordItem> &words, int &currentIndex);
     bool clearSessionProgress(const QString &mode);
