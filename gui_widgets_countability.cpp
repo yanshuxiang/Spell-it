@@ -354,27 +354,40 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
 
     // ── 4. 记录动画终点 ──
     QPoint endPos = contentHost_->pos();
+    QPoint usageFinalPos = usageDetailsHost_->pos(); // 记录详情区的最终布局位置
 
     // ── 5. 执行丝滑动画 ──
     contentHost_->move(startPos);   // 先归位，确保动画从正确起点出发
+    
+    // 详情区：起始位置向下偏移 30 像素，实现从下往上弹出的效果
+    usageDetailsHost_->move(usageFinalPos.x(), usageFinalPos.y() + 32);
 
     auto *group = new QParallelAnimationGroup(this);
 
-    // 位移：从居中滑向左上角
+    // 1. 单词标题：从居中滑向左上角
     auto *moveAnim = new QPropertyAnimation(contentHost_, "pos", group);
     moveAnim->setDuration(480);
     moveAnim->setStartValue(startPos);
     moveAnim->setEndValue(endPos);
     moveAnim->setEasingCurve(QEasingCurve::OutQuint);
 
-    // 详情区淡入
+    // 2. 详情区域：向上回弹动画
+    auto *usageMoveAnim = new QPropertyAnimation(usageDetailsHost_, "pos", group);
+    usageMoveAnim->setDuration(550);
+    usageMoveAnim->setStartValue(QPoint(usageFinalPos.x(), usageFinalPos.y() + 32));
+    usageMoveAnim->setEndValue(usageFinalPos);
+    usageMoveAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    // 3. 详情区域：淡入动画
     auto *fadeAnim = new QPropertyAnimation(opacityEffect, "opacity", group);
-    fadeAnim->setDuration(560);
+    fadeAnim->setDuration(580);
     fadeAnim->setStartValue(0.0);
     fadeAnim->setEndValue(1.0);
     fadeAnim->setEasingCurve(QEasingCurve::OutCubic);
 
-    connect(group, &QParallelAnimationGroup::finished, this, [group]() {
+    connect(group, &QParallelAnimationGroup::finished, this, [group, opacityEffect, this]() {
+        // 动画结束后清理，避免残留的 Effect 影响后续交互
+        usageDetailsHost_->setGraphicsEffect(nullptr);
         group->deleteLater();
     });
     group->start();
