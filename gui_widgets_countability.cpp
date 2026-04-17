@@ -1,19 +1,26 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
 
+#include <QEasingCurve>
+#include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QParallelAnimationGroup>
+#include <QPropertyAnimation>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSizePolicy>
+#include <QSpacerItem>
 #include <QVBoxLayout>
 
 using namespace GuiWidgetsInternal;
 
 CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     : QWidget(parent) {
-    auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(18, 16, 18, 20);
-    root->setSpacing(0);
+    rootLayout_ = new QVBoxLayout(this);
+    rootLayout_->setContentsMargins(28, 20, 28, 32);
+    rootLayout_->setSpacing(0);
 
     auto *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
@@ -45,20 +52,96 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     header->addStretch(1);
     header->addWidget(progressLabel_, 0, Qt::AlignRight);
 
+    rootLayout_->addLayout(header);
+
+    // ── 内容区：英文单词 + 中文释义（优先级最高，内容完整显示）──
+    contentHost_ = new QWidget(this);
+    contentLayout_ = new QVBoxLayout(contentHost_);
+    contentLayout_->setContentsMargins(0, 0, 0, 0);
+    contentLayout_->setSpacing(6);
+
     wordLabel_ = new QLabel(QStringLiteral("word"), this);
+    wordLabel_->setWordWrap(true);
     wordLabel_->setAlignment(Qt::AlignCenter);
-    wordLabel_->setMinimumHeight(64);
-    wordLabel_->setStyleSheet(QStringLiteral("font-size: 56px; font-weight: 700; color: #0f172a;"));
+    wordLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    wordLabel_->setStyleSheet(QStringLiteral("font-size: 42px; font-weight: 800; color: #0f172a;"));
 
     hintLabel_ = new QLabel(this);
     hintLabel_->setWordWrap(true);
     hintLabel_->setTextFormat(Qt::PlainText);
-    hintLabel_->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
-    hintLabel_->setMinimumHeight(120);
-    hintLabel_->setMaximumHeight(170);
-    hintLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    hintLabel_->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 600; color: #374151;"));
+    hintLabel_->setAlignment(Qt::AlignCenter);
+    hintLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    hintLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 600; color: #475569;"));
 
+    contentLayout_->addWidget(wordLabel_);
+    contentLayout_->addWidget(hintLabel_);
+
+    // 初始居中布局（答题模式）
+    topSpacer_ = new QSpacerItem(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    bottomSpacer_ = new QSpacerItem(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    rootLayout_->addSpacerItem(topSpacer_);
+    rootLayout_->addWidget(contentHost_, 0, Qt::AlignCenter);
+    rootLayout_->addSpacerItem(bottomSpacer_);
+
+    // ── 详情区：正确答案条 + 可滚动用法说明 + 继续按钮 ──
+    usageDetailsHost_ = new QWidget(this);
+    auto *detailsLayout = new QVBoxLayout(usageDetailsHost_);
+    detailsLayout->setContentsMargins(0, 8, 0, 0);
+    detailsLayout->setSpacing(10);
+
+    // 正确答案条（紧凑，固定高度）
+    usageDetailCorrectLabel_ = new QLabel(this);
+    usageDetailCorrectLabel_->setAlignment(Qt::AlignCenter);
+    usageDetailCorrectLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    usageDetailCorrectLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 15px; font-weight: 700; color: #166534; "
+        "background: rgba(134,239,172,0.15); border-radius: 10px; padding: 8px 16px;"));
+
+    // 用法说明 Label（宽度撑满、高度自适应）
+    usageDetailNotesLabel_ = new QLabel(this);
+    usageDetailNotesLabel_->setWordWrap(true);
+    usageDetailNotesLabel_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    usageDetailNotesLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    usageDetailNotesLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 15px; color: #1e293b; padding: 18px;"));
+
+    // 滚动区域包裹 notes，弹性填充剩余空间
+    auto *notesScroll = new QScrollArea(this);
+    notesScroll->setWidget(usageDetailNotesLabel_);
+    notesScroll->setWidgetResizable(true);
+    notesScroll->setFrameShape(QFrame::StyledPanel);
+    notesScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    notesScroll->setStyleSheet(QStringLiteral(
+        "QScrollArea {"
+        "  background: #ffffff;"
+        "  border: 1px solid #e2e8f0;"
+        "  border-radius: 14px;"
+        "}"
+        "QScrollArea > QWidget > QWidget { background: #ffffff; }"
+        "QScrollBar:vertical { width: 6px; background: transparent; }"
+        "QScrollBar::handle:vertical { background: #cbd5e1; border-radius: 3px; }"));
+
+    // 继续按钮（固定高度，始终可见）
+    usageContinueButton_ = new QPushButton(QStringLiteral("我已理解，继续"), this);
+    usageContinueButton_->setFixedSize(240, 52);
+    usageContinueButton_->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background: #0f172a;"
+        "  color: #ffffff;"
+        "  border-radius: 14px;"
+        "  font-size: 16px;"
+        "  font-weight: 700;"
+        "}"
+        "QPushButton:hover { background: #1e293b; }"));
+
+    detailsLayout->addWidget(usageDetailCorrectLabel_);
+    detailsLayout->addWidget(notesScroll, 1);   // stretch=1，弹性吸收剩余空间
+    detailsLayout->addSpacing(4);
+    detailsLayout->addWidget(usageContinueButton_, 0, Qt::AlignHCenter);
+    usageDetailsHost_->hide();
+
+    // 详情区 stretch=1，在竖向弹性分配
+    rootLayout_->addWidget(usageDetailsHost_, 1);
 
     countableButton_ = new QPushButton(QStringLiteral("可数"), this);
     uncountableButton_ = new QPushButton(QStringLiteral("不可数"), this);
@@ -66,35 +149,24 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     const QString answerButtonStyle = QStringLiteral(
         "QPushButton {"
         "  background: #f8fafc;"
-        "  border: 1px solid #d8e1ec;"
-        "  border-radius: 14px;"
+        "  border: 1px solid #cbd5e1;"
+        "  border-radius: 16px;"
         "  font-size: 18px;"
         "  font-weight: 700;"
         "  color: #0f172a;"
-        "  min-height: 54px;"
+        "  min-height: 60px;"
         "}"
-        "QPushButton:hover { background: #eef3f9; }"
+        "QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
         "QPushButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
     countableButton_->setStyleSheet(answerButtonStyle);
     uncountableButton_->setStyleSheet(answerButtonStyle);
     bothButton_->setStyleSheet(answerButtonStyle);
 
-    auto *centerHost = new QWidget(this);
-    auto *centerLayout = new QVBoxLayout(centerHost);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
-    centerLayout->setSpacing(14);
-    centerLayout->addWidget(wordLabel_, 0, Qt::AlignHCenter);
-    centerLayout->addWidget(hintLabel_, 0, Qt::AlignHCenter);
-
-    root->addLayout(header);
-    root->addStretch(3);
-    root->addWidget(centerHost, 0, Qt::AlignHCenter);
-    root->addStretch(3);
-    root->addWidget(countableButton_);
-    root->addSpacing(10);
-    root->addWidget(uncountableButton_);
-    root->addSpacing(10);
-    root->addWidget(bothButton_);
+    rootLayout_->addWidget(countableButton_);
+    rootLayout_->addSpacing(12);
+    rootLayout_->addWidget(uncountableButton_);
+    rootLayout_->addSpacing(12);
+    rootLayout_->addWidget(bothButton_);
 
     connect(exitButton_, &QPushButton::clicked, this, &CountabilityPageWidget::exitRequested);
     connect(countableButton_, &QPushButton::clicked, this,
@@ -103,12 +175,17 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
             [this]() { emit answerSubmitted(CountabilityAnswer::Uncountable); });
     connect(bothButton_, &QPushButton::clicked, this,
             [this]() { emit answerSubmitted(CountabilityAnswer::Both); });
+    connect(usageContinueButton_, &QPushButton::clicked, this, &CountabilityPageWidget::continueRequested);
 }
 
 void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
+    isDetailsMode_ = false;
     modeLabel_->setText(isReviewMode ? QStringLiteral("可数性复习") : QStringLiteral("可数性辨析"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(qMax(1, totalCount)));
+    
     wordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
+    wordLabel_->setAlignment(Qt::AlignCenter);
+    wordLabel_->setStyleSheet(QStringLiteral("font-size: 42px; font-weight: 800; color: #0f172a;"));
 
     QString hint = word.translation.trimmed();
     if (hint.isEmpty()) {
@@ -116,9 +193,22 @@ void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int
     } else if (hint.size() > 120) {
         hint = hint.left(120) + QStringLiteral("…");
     }
-    hintLabel_->setText(QStringLiteral("释义提示：%1").arg(hint));
+    hintLabel_->setText(hint);
+    hintLabel_->setAlignment(Qt::AlignCenter);
+
     resetOptionStyles();
     setOptionsEnabled(true);
+
+    usageDetailsHost_->hide();
+    countableButton_->show();
+    uncountableButton_->show();
+    bothButton_->show();
+
+    // 恢复居中布局
+    topSpacer_->changeSize(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    bottomSpacer_->changeSize(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
+    rootLayout_->setAlignment(contentHost_, Qt::AlignCenter);
+    rootLayout_->invalidate();
 }
 
 
@@ -185,7 +275,6 @@ void CountabilityPageWidget::showAnswerFeedback(CountabilityAnswer selected,
         "  color: #991b1b;"
         "  min-height: 54px;"
         "}");
-
     if (isCorrect) {
         if (selectedButton != nullptr) {
             selectedButton->setStyleSheet(greenStyle);
@@ -198,4 +287,99 @@ void CountabilityPageWidget::showAnswerFeedback(CountabilityAnswer selected,
             correctButton->setStyleSheet(greenStyle);
         }
     }
+}
+
+void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
+                                                   CountabilityAnswer correct,
+                                                   CountabilityAnswer selected) {
+    Q_UNUSED(selected);
+    if (isDetailsMode_) return;
+    isDetailsMode_ = true;
+
+    // ── 1. 填充内容 ──
+    QString correctText;
+    switch (correct) {
+    case CountabilityAnswer::Countable:   correctText = QStringLiteral("正确答案：可数 (C)");           break;
+    case CountabilityAnswer::Uncountable: correctText = QStringLiteral("正确答案：不可数 (U)");         break;
+    case CountabilityAnswer::Both:        correctText = QStringLiteral("正确答案：可数且不可数 (Both)"); break;
+    }
+    usageDetailCorrectLabel_->setText(correctText);
+
+    QString notes = word.countabilityNotes.trimmed();
+    if (notes.isEmpty()) {
+        notes = QStringLiteral("本词暂无详细用法说明。建议参考牛津或朗文词典。");
+    }
+    notes.replace(QStringLiteral("[例]"),    QStringLiteral("\n\xf0\x9f\x92\xa1 例:"));
+    notes.replace(QStringLiteral("[例(U)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(U):"));
+    notes.replace(QStringLiteral("[例(C)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(C):"));
+    usageDetailNotesLabel_->setText(notes);
+
+    // ── 2. 记录动画起点（当前居中位置）──
+    rootLayout_->activate();
+    QPoint startPos = contentHost_->pos();
+
+    // ── 3. 切换到「详情」布局 ──
+    // 隐藏答题按钮
+    countableButton_->hide();
+    uncountableButton_->hide();
+    bothButton_->hide();
+
+    // 顶部/底部弹性归零，让 contentHost 贴顶显示
+    topSpacer_->changeSize(0, 0, QSizePolicy::Fixed, QSizePolicy::Fixed);
+    bottomSpacer_->changeSize(0, 12, QSizePolicy::Minimum, QSizePolicy::Fixed);
+
+    // 中英文：左对齐，全宽展开，内容完整显示（不截断）
+    wordLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    wordLabel_->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 800; color: #0f172a;"));
+    wordLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    
+    hintLabel_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    hintLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: #475569;"));
+    hintLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+
+    // 强制更新字体并重新计算高度
+    wordLabel_->adjustSize();
+    hintLabel_->adjustSize();
+
+    // contentHost 撑满全宽，高度按内容计算最小值保证不被挤压
+    contentHost_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    rootLayout_->setAlignment(contentHost_, Qt::AlignLeft | Qt::AlignTop);
+
+    // 预先设置详情区不透明度为 0（动画起点）
+    auto *opacityEffect = new QGraphicsOpacityEffect(usageDetailsHost_);
+    usageDetailsHost_->setGraphicsEffect(opacityEffect);
+    opacityEffect->setOpacity(0.0);
+    usageDetailsHost_->show();
+    rootLayout_->activate();
+
+    // ── 4. 记录动画终点 ──
+    QPoint endPos = contentHost_->pos();
+
+    // ── 5. 执行丝滑动画 ──
+    contentHost_->move(startPos);   // 先归位，确保动画从正确起点出发
+
+    auto *group = new QParallelAnimationGroup(this);
+
+    // 位移：从居中滑向左上角
+    auto *moveAnim = new QPropertyAnimation(contentHost_, "pos", group);
+    moveAnim->setDuration(480);
+    moveAnim->setStartValue(startPos);
+    moveAnim->setEndValue(endPos);
+    moveAnim->setEasingCurve(QEasingCurve::OutQuint);
+
+    // 详情区淡入
+    auto *fadeAnim = new QPropertyAnimation(opacityEffect, "opacity", group);
+    fadeAnim->setDuration(560);
+    fadeAnim->setStartValue(0.0);
+    fadeAnim->setEndValue(1.0);
+    fadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [group]() {
+        group->deleteLater();
+    });
+    group->start();
+}
+
+void CountabilityPageWidget::refreshBasePositions() {
+    rootLayout_->activate();
 }

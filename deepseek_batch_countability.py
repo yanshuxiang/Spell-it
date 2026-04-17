@@ -14,8 +14,8 @@ MODEL = "deepseek-chat"
 
 INPUT_FILE = "雅思词汇大纲.csv"
 OUTPUT_FILE = "雅思词汇大纲_countability.csv"
-BATCH_SIZE = 100   # 提升至每批 50 个单词
-MAX_WORKERS = 4   # 并发线程数（根据 API 限制调整，建议 3-5）
+BATCH_SIZE = 30   # 提升至每批 50 个单词
+MAX_WORKERS = 3   # 并发线程数（根据 API 限制调整，建议 3-5）
 MAX_RETRIES = 3   # 单次请求失败重试次数
 
 # 初始化客户端

@@ -74,14 +74,14 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     translationLabel_->setAlignment(Qt::AlignCenter);
     translationLabel_->setWordWrap(true);
     translationLabel_->setFixedHeight(170);
-    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #111827;"));
 
     inputEdit_ = new QLineEdit(this);
     inputEdit_->setPlaceholderText(QString());
     inputEdit_->setAlignment(Qt::AlignCenter);
     inputEdit_->setFixedWidth(310);
     QFont spellingInputFont = inputEdit_->font();
-    spellingInputFont.setPixelSize(35);
+    spellingInputFont.setPixelSize(30);
     inputEdit_->setFont(spellingInputFont);
     const int inputHeight = qMax(64, QFontMetrics(spellingInputFont).height() + 26);
     inputEdit_->setFixedHeight(inputHeight);
@@ -163,7 +163,7 @@ void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int tot
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(totalCount));
     translationLabel_->setText(word.translation);
     inputEdit_->clear();
-    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    translationLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #111827;"));
     applyInputDefaultStyle();
     clearFeedback();
     setAwaitingProceed(false);
@@ -364,7 +364,7 @@ void SpellingPageWidget::playWrongShake() {
     auto *shakeWordLabel = new QLabel(inputEdit_->text(), this);
     shakeWordLabel->setAlignment(Qt::AlignCenter);
     shakeWordLabel->setGeometry(inputEdit_->geometry());
-    shakeWordLabel->setStyleSheet(QStringLiteral("font-size: 35px; font-weight: 500; color: #ef4444;"));
+    shakeWordLabel->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 500; color: #ef4444;"));
     shakeWordLabel->show();
 
     auto *group = new QParallelAnimationGroup(this);

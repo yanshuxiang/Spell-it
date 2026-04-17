@@ -255,6 +255,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
     connect(countabilityPage_, &CountabilityPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(countabilityPage_, &CountabilityPageWidget::answerSubmitted, this, &VibeSpellerWindow::onCountabilityAnswer);
+    connect(countabilityPage_, &CountabilityPageWidget::continueRequested, this, &VibeSpellerWindow::moveToNextCountabilityWord);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -661,7 +662,9 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
         countabilityWrongCounts_.remove(current.id);
         firstWrongInputs_.remove(current.id);
         persistCurrentSession();
-        delayedAdvance();
+        if (countabilityPage_) {
+            countabilityPage_->showDetailedFeedback(current, expected, answer);
+        }
         return;
     }
 
@@ -670,7 +673,9 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
     }
 
     persistCurrentSession();
-    delayedAdvance();
+    if (countabilityPage_) {
+        countabilityPage_->showDetailedFeedback(current, expected, answer);
+    }
 }
 
 void VibeSpellerWindow::onProceedAfterFeedback() {

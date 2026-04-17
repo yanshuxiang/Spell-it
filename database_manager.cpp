@@ -269,15 +269,7 @@ bool DatabaseManager::initialize() {
             return false;
         }
     }
-
-    if (!query.exec(QStringLiteral(
-            "INSERT INTO word_books(name, is_active, created_at) "
-            "SELECT '默认词书', 1, datetime('now','localtime') "
-            "WHERE NOT EXISTS (SELECT 1 FROM word_books)"))) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-
+    // 确保至少有一个活跃词书（在多词书场景下由用户切换）
     if (!query.exec(QStringLiteral(
             "UPDATE word_books "
             "SET is_active = 1 "
@@ -285,27 +277,7 @@ bool DatabaseManager::initialize() {
             "AND NOT EXISTS (SELECT 1 FROM word_books WHERE is_active = 1)"))) {
         lastError_ = query.lastError().text();
         return false;
-    }
-
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId > 0) {
-        QSqlQuery fillBookId(database());
-        fillBookId.prepare(QStringLiteral(
-            "UPDATE words SET book_id = ? "
-            "WHERE book_id IS NULL OR book_id <= 0"));
-        fillBookId.bindValue(0, activeBookId);
-        if (!fillBookId.exec()) {
-            lastError_ = fillBookId.lastError().text();
-            return false;
-        }
-    }
-
-    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_book ON words(book_id)"))) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-
-    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_skip_forever ON words(skip_forever)"))) {
+    }    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_skip_forever ON words(skip_forever)"))) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -327,14 +299,6 @@ bool DatabaseManager::initialize() {
     }
 
     if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_book_words_word ON book_words(word_id)"))) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-
-    // 兼容旧数据库：把 words.book_id 的历史关系回填到 book_words。
-    if (!query.exec(QStringLiteral(
-            "INSERT OR IGNORE INTO book_words(book_id, word_id) "
-            "SELECT book_id, id FROM words WHERE book_id IS NOT NULL AND book_id > 0"))) {
         lastError_ = query.lastError().text();
         return false;
     }

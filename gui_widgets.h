@@ -22,6 +22,7 @@ class QStackedWidget;
 class QTableWidget;
 class QTimer;
 class QVBoxLayout;
+class QSpacerItem;
 class QProcess;
 class QThread;
 class RoundedProgressStrip;
@@ -163,10 +164,12 @@ public:
     void setOptionsEnabled(bool enabled);
     void resetOptionStyles();
     void showAnswerFeedback(CountabilityAnswer selected, CountabilityAnswer correct, bool isCorrect);
+    void showDetailedFeedback(const WordItem &word, CountabilityAnswer correct, CountabilityAnswer selected);
 
 signals:
     void exitRequested();
     void answerSubmitted(CountabilityAnswer answer);
+    void continueRequested();
 
 private:
     QLabel *modeLabel_ = nullptr;
@@ -179,6 +182,21 @@ private:
     QPushButton *uncountableButton_ = nullptr;
     QPushButton *bothButton_ = nullptr;
     QPushButton *buttonForAnswer(CountabilityAnswer answer) const;
+
+    QWidget *usageDetailsHost_ = nullptr;
+    QLabel *usageDetailCorrectLabel_ = nullptr;
+    QLabel *usageDetailNotesLabel_ = nullptr;
+    QPushButton *usageContinueButton_ = nullptr;
+
+    // 布局与动画辅助
+    QVBoxLayout *rootLayout_ = nullptr;
+    QVBoxLayout *contentLayout_ = nullptr;
+    QWidget *contentHost_ = nullptr;
+    QSpacerItem *topSpacer_ = nullptr;
+    QSpacerItem *bottomSpacer_ = nullptr;
+    bool isDetailsMode_ = false;
+
+    void refreshBasePositions();
 };
 
 class SummaryPageWidget : public QWidget {
