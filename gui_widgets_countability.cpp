@@ -307,13 +307,23 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
     isDetailsMode_ = true;
 
     // ── 1. 填充内容 ──
-    QString correctText;
+    const bool isActuallyCorrect = (selected == correct);
+    QString prefix = isActuallyCorrect ? QStringLiteral("回答正确！") : QStringLiteral("正确答案：");
+    QString correctLabel;
     switch (correct) {
-    case CountabilityAnswer::Countable:   correctText = QStringLiteral("正确答案：可数 (C)");           break;
-    case CountabilityAnswer::Uncountable: correctText = QStringLiteral("正确答案：不可数 (U)");         break;
-    case CountabilityAnswer::Both:        correctText = QStringLiteral("正确答案：可数且不可数 (Both)"); break;
+    case CountabilityAnswer::Countable:   correctLabel = QStringLiteral("可数 (C)");           break;
+    case CountabilityAnswer::Uncountable: correctLabel = QStringLiteral("不可数 (U)");         break;
+    case CountabilityAnswer::Both:        correctLabel = QStringLiteral("可数且不可数 (Both)"); break;
     }
-    usageDetailCorrectLabel_->setText(correctText);
+    usageDetailCorrectLabel_->setText(prefix + correctLabel);
+    QString qss = QStringLiteral("font-size: 16px; font-weight: 700; padding: 12px 20px; border-radius: 14px;");
+    if (isActuallyCorrect) {
+        qss += QStringLiteral("color: #166534; background-color: #f0fdf4; border: 1px solid #bcf0da;");
+    } else {
+        qss += QStringLiteral("color: #991b1b; background-color: #fef2f2; border: 1px solid #fecaca;");
+    }
+    usageDetailCorrectLabel_->setStyleSheet(qss);
+    usageDetailCorrectLabel_->setAlignment(Qt::AlignCenter);
     usageDetailNotesLabel_->setTextFormat(Qt::RichText);
 
     QString rawNotes = word.countabilityNotes.trimmed();
@@ -327,57 +337,95 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
             QString html;
             html += QStringLiteral("<div style='line-height:1.4;'>");
 
-            // 1. 复数形式 (if any)
+            // 0. 核心考点 (exam_points) - 优先级最高，置顶显示
+            QString examPoints = obj.value(QStringLiteral("exam_points")).toString().trimmed();
+            if (!examPoints.isEmpty()) {
+                html += QStringLiteral("<div style='background:rgba(37,99,235,0.08); border-left:4px solid #2563eb; border-radius:4px; padding:12px; margin-bottom:14px;'>");
+                html += QStringLiteral("<b style='color:#1e40af;'>核心考点：</b><br/>%1").arg(examPoints);
+                html += QStringLiteral("</div>");
+            }
+
+            // 1. 复数形式 (仅对可数或 Both 显式提供)
+            QString countability = obj.value(QStringLiteral("countability")).toString().toUpper();
             QString plural = obj.value(QStringLiteral("plural")).toString().trimmed();
-            if (!plural.isEmpty()) {
-                html += QStringLiteral("<p><b style='color:#0f172a;'>复数形式：</b><code style='color:#2563eb;'>%1</code></p>").arg(plural);
+            bool hidePlural = (countability == QStringLiteral("U")) || 
+                             (plural.toUpper() == QStringLiteral("NA")) || 
+                             (plural.toUpper() == QStringLiteral("N/A")) ||
+                             plural.isEmpty();
+            
+            if (!hidePlural) {
+                html += QStringLiteral("<p style='margin-bottom:12px;'><b style='color:#0f172a;'>复数形式：</b><code style='color:#2563eb; background:#f1f5f9; padding:2px 6px; border-radius:4px;'>%1</code></p>").arg(plural);
             }
 
             // 2. 语义与可数性变化 (shifts)
             QJsonArray shifts = obj.value(QStringLiteral("shifts")).toArray();
             if (!shifts.isEmpty()) {
-                html += QStringLiteral("<p><b style='color:#0f172a;'>词义与用法变化：</b></p>");
+                html += QStringLiteral("<p><b style='color:#0f172a;'>用法解析：</b></p>");
                 html += QStringLiteral("<ul style='margin-top:4px;'>");
                 for (const QJsonValue &v : shifts) {
                     QJsonObject s = v.toObject();
                     QString sense = s.value(QStringLiteral("sense")).toString().trimmed();
+                    QString type = s.value(QStringLiteral("type")).toString().trimmed();
                     QString example = s.value(QStringLiteral("example")).toString().trimmed();
-                    html += QStringLiteral("<li style='margin-bottom:8px;'>");
+                    html += QStringLiteral("<li style='margin-bottom:10px;'>");
+                    if (!type.isEmpty()) {
+                        html += QStringLiteral("<b style='color:#2563eb;'>[%1] </b>").arg(type);
+                    }
                     html += sense;
                     if (!example.isEmpty()) {
-                        html += QStringLiteral("<br/><i style='color:#475569; font-size:14px;'>Example: %1</i>").arg(example);
+                        html += QStringLiteral("<br/><i style='color:#64748b; font-size:14px;'>%1</i>").arg(example);
                     }
                     html += QStringLiteral("</li>");
                 }
                 html += QStringLiteral("</ul>");
             }
 
-            // 3. 常见搭配 (classifiers)
-            QJsonArray classifiers = obj.value(QStringLiteral("classifiers")).toArray();
-            if (!classifiers.isEmpty()) {
-                QStringList clist;
-                for (const QJsonValue &v : classifiers) clist << v.toString();
-                html += QStringLiteral("<p><b style='color:#0f172a;'>常用搭配：</b><span style='color:#1e293b;'>%1</span></p>")
-                            .arg(clist.join(QStringLiteral("、")));
+            // 3. 常用搭配 (collocations / classifiers)
+            QJsonArray collocations = obj.value(QStringLiteral("collocations")).toArray();
+            if (collocations.isEmpty()) {
+                collocations = obj.value(QStringLiteral("classifiers")).toArray();
             }
 
-            // 4. 易错点 (chinese_trap)
+            if (!collocations.isEmpty()) {
+                html += QStringLiteral("<p><b style='color:#0f172a;'>常用搭配：</b></p>");
+                html += QStringLiteral("<ul style='margin-top:4px;'>");
+                for (const QJsonValue &v : collocations) {
+                    if (v.isObject()) {
+                        QJsonObject c = v.toObject();
+                        QString phrase = c.value(QStringLiteral("phrase")).toString().trimmed();
+                        QString example = c.value(QStringLiteral("example")).toString().trimmed();
+                        html += QStringLiteral("<li style='margin-bottom:10px;'>");
+                        html += QStringLiteral("<b style='color:#1e293b;'>%1</b>").arg(phrase);
+                        if (!example.isEmpty()) {
+                            html += QStringLiteral("<br/><i style='color:#64748b; font-size:14px;'>%1</i>").arg(example);
+                        }
+                        html += QStringLiteral("</li>");
+                    } else {
+                        html += QStringLiteral("<li style='margin-bottom:6px; color:#1e293b;'>%1</li>").arg(v.toString());
+                    }
+                }
+                html += QStringLiteral("</ul>");
+            }
+
+            // 4. 注意事项 (chinese_trap)
             QString trap = obj.value(QStringLiteral("chinese_trap")).toString().trimmed();
             if (!trap.isEmpty()) {
-                html += QStringLiteral("<div style='background:rgba(234,179,8,0.1); border-radius:8px; padding:12px; margin-top:10px;'>");
-                html += QStringLiteral("<b style='color:#854d0e;'>\xf0\x9f\x92\xa1 避坑指南：</b><br/>%1").arg(trap);
+                html += QStringLiteral("<div style='background:rgba(234,179,8,0.1); border-radius:10px; padding:14px; margin-top:14px;'>");
+                html += QStringLiteral("<b style='color:#854d0e;'>注意：</b><br/>%1").arg(trap);
                 html += QStringLiteral("</div>");
             }
 
-            // 5. 主谓一致 (agreement)
+            // 5. 主谓一致 (agreement) - 仅在有特殊规则时显示
             QJsonObject agr = obj.value(QStringLiteral("agreement")).toObject();
             QString rule = agr.value(QStringLiteral("rule")).toString().trimmed();
             if (!rule.isEmpty()) {
-                html += QStringLiteral("<p style='margin-top:12px;'><b style='color:#0f172a;'>主谓一致规则：</b><br/>%1</p>").arg(rule);
+                html += QStringLiteral("<div style='margin-top:16px; padding-top:12px; border-top:1px dashed #e2e8f0;'>");
+                html += QStringLiteral("<b style='color:#0f172a;'>特殊语法：</b><br/>%1").arg(rule);
                 QString agrEx = agr.value(QStringLiteral("example")).toString().trimmed();
                 if (!agrEx.isEmpty()) {
-                    html += QStringLiteral("<p style='color:#475569; font-size:14px; margin-top:2px;'><i>Example: %1</i></p>").arg(agrEx);
+                    html += QStringLiteral("<p style='color:#64748b; font-size:14px; margin-top:4px;'><i>%1</i></p>").arg(agrEx);
                 }
+                html += QStringLiteral("</div>");
             }
 
             html += QStringLiteral("</div>");
