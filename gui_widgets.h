@@ -170,6 +170,7 @@ signals:
     void exitRequested();
     void answerSubmitted(CountabilityAnswer answer);
     void continueRequested();
+    void userActivity();
 
 private:
     QLabel *modeLabel_ = nullptr;
@@ -244,6 +245,7 @@ private:
 
     QPushButton *backButton_ = nullptr;
     QLabel *hoverTip_ = nullptr;
+    
     QVector<DatabaseManager::DailyLog> logs_;
     QVector<HoverBarInfo> hoverBars_;
     int hoveredBarIndex_ = -1;

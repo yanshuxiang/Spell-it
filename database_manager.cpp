@@ -320,29 +320,32 @@ bool DatabaseManager::initialize() {
         "log_date TEXT PRIMARY KEY,"
         "learning_count INTEGER DEFAULT 0,"
         "review_count INTEGER DEFAULT 0,"
-        "study_seconds INTEGER DEFAULT 0"
+        "cb_learning_count INTEGER DEFAULT 0,"
+        "cb_review_count INTEGER DEFAULT 0,"
+        "study_seconds INTEGER DEFAULT 0,"
+        "spelling_seconds INTEGER DEFAULT 0,"
+        "cb_seconds INTEGER DEFAULT 0"
         ")");
     if (!query.exec(createLogsSql)) {
         lastError_ = query.lastError().text();
         return false;
     }
 
-    bool hasStudySecondsColumn = false;
-    QSqlQuery logsInfo(database());
-    if (!logsInfo.exec(QStringLiteral("PRAGMA table_info(learning_logs)"))) {
-        lastError_ = logsInfo.lastError().text();
-        return false;
-    }
-    while (logsInfo.next()) {
-        if (logsInfo.value(1).toString() == QStringLiteral("study_seconds")) {
-            hasStudySecondsColumn = true;
-            break;
+    QStringList needed = {
+        QStringLiteral("cb_learning_count"),
+        QStringLiteral("cb_review_count"),
+        QStringLiteral("spelling_seconds"),
+        QStringLiteral("cb_seconds")
+    };
+    for (const QString &col : needed) {
+        bool exists = false;
+        QSqlQuery ci(database());
+        ci.exec(QStringLiteral("PRAGMA table_info(learning_logs)"));
+        while (ci.next()) {
+            if (ci.value(1).toString() == col) { exists = true; break; }
         }
-    }
-    if (!hasStudySecondsColumn) {
-        if (!query.exec(QStringLiteral("ALTER TABLE learning_logs ADD COLUMN study_seconds INTEGER DEFAULT 0"))) {
-            lastError_ = query.lastError().text();
-            return false;
+        if (!exists) {
+            query.exec(QStringLiteral("ALTER TABLE learning_logs ADD COLUMN %1 INTEGER DEFAULT 0").arg(col));
         }
     }
 
@@ -1457,6 +1460,21 @@ bool DatabaseManager::applyTrainingReviewResult(int wordId,
         return false;
     }
 
+    // 在更新前查一下状态，判断是“学习”还是“复习”
+    bool isLearningRow = true;
+    QSqlQuery statusQuery(database());
+    statusQuery.prepare(QStringLiteral("SELECT status FROM training_progress WHERE word_id = ? AND training_type = ?"));
+    statusQuery.bindValue(0, wordId);
+    statusQuery.bindValue(1, type);
+    if (statusQuery.exec() && statusQuery.next()) {
+        const int oldStatus = statusQuery.value(0).toInt();
+        if (oldStatus != 0) { // status 0 = New/Unlearned in some conventions, check current logic.
+            isLearningRow = false;
+        }
+    }
+
+    const bool isCountability = (type == QString::fromLatin1(kTrainingTypeCountability));
+
     QSqlQuery progressQuery(database());
     progressQuery.prepare(QStringLiteral(
         "SELECT ease_factor, interval, next_review, status "
@@ -1536,64 +1554,54 @@ bool DatabaseManager::applyTrainingReviewResult(int wordId,
         lastError_ = query.lastError().text();
         return false;
     }
-    return true;
+    incrementDailyCount(isLearningRow, isCountability, now.date());    return true;
 }
 
-bool DatabaseManager::incrementDailyCount(bool isLearning, const QDate &date) {
-    if (!ensureDatabaseOpen()) {
-        return false;
-    }
-
+bool DatabaseManager::incrementDailyCount(bool isLearning, bool isCountability, const QDate &date) {
+    if (!ensureDatabaseOpen()) return false;
     const QString dateStr = date.toString(Qt::ISODate);
-    QSqlQuery query(database());
+    const QString col = isCountability ? (isLearning ? "cb_learning_count" : "cb_review_count")
+                                      : (isLearning ? "learning_count" : "review_count");
 
-    query.prepare(QStringLiteral("INSERT OR IGNORE INTO learning_logs (log_date) VALUES (?)"));
-    query.bindValue(0, dateStr);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
+    QSqlQuery check(database());
+    check.prepare(QStringLiteral("SELECT 1 FROM learning_logs WHERE log_date = ?"));
+    check.bindValue(0, dateStr);
+    if (!check.exec() || !check.next()) {
+        QSqlQuery ins(database());
+        ins.prepare(QStringLiteral("INSERT INTO learning_logs (log_date, %1) VALUES (?, 1)").arg(col));
+        ins.bindValue(0, dateStr);
+        return ins.exec();
     }
 
-    if (isLearning) {
-        query.prepare(QStringLiteral("UPDATE learning_logs SET learning_count = learning_count + 1 WHERE log_date = ?"));
-    } else {
-        query.prepare(QStringLiteral("UPDATE learning_logs SET review_count = review_count + 1 WHERE log_date = ?"));
-    }
-    query.bindValue(0, dateStr);
-
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-    return true;
+    QSqlQuery upd(database());
+    upd.prepare(QStringLiteral("UPDATE learning_logs SET %1 = %1 + 1 WHERE log_date = ?").arg(col));
+    upd.bindValue(0, dateStr);
+    return upd.exec();
 }
 
-bool DatabaseManager::addDailyStudySeconds(int seconds, const QDate &date) {
-    if (!ensureDatabaseOpen()) {
-        return false;
-    }
-    if (seconds <= 0) {
-        return true;
-    }
-
+bool DatabaseManager::addDailyStudySeconds(int seconds, bool isCountability, const QDate &date) {
+    if (!ensureDatabaseOpen() || seconds <= 0) return false;
     const QString dateStr = date.toString(Qt::ISODate);
-    QSqlQuery query(database());
+    const QString specificCol = isCountability ? "cb_seconds" : "spelling_seconds";
 
-    query.prepare(QStringLiteral("INSERT OR IGNORE INTO learning_logs (log_date) VALUES (?)"));
-    query.bindValue(0, dateStr);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
+    QSqlQuery check(database());
+    check.prepare(QStringLiteral("SELECT 1 FROM learning_logs WHERE log_date = ?"));
+    check.bindValue(0, dateStr);
+    if (!check.exec() || !check.next()) {
+        QSqlQuery ins(database());
+        ins.prepare(QStringLiteral("INSERT INTO learning_logs (log_date, study_seconds, %1) VALUES (?, ?, ?)").arg(specificCol));
+        ins.bindValue(0, dateStr);
+        ins.bindValue(1, seconds);
+        ins.bindValue(2, seconds);
+        return ins.exec();
     }
 
-    query.prepare(QStringLiteral("UPDATE learning_logs SET study_seconds = study_seconds + ? WHERE log_date = ?"));
-    query.bindValue(0, seconds);
-    query.bindValue(1, dateStr);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return false;
-    }
-    return true;
+    QSqlQuery upd(database());
+    upd.prepare(QStringLiteral("UPDATE learning_logs SET study_seconds = study_seconds + ?, %1 = %1 + ? WHERE log_date = ?").arg(specificCol));
+    upd.bindValue(0, seconds);
+    upd.bindValue(1, seconds);
+    upd.bindValue(2, dateStr);
+    return upd.exec();
 }
 
 QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate &endDate) const {
@@ -1605,7 +1613,9 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
     const QDate startDate = endDate.addDays(-6);
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
-        "SELECT log_date, learning_count, review_count, study_seconds "
+        "SELECT log_date, learning_count, review_count, "
+        "       cb_learning_count, cb_review_count, study_seconds, "
+        "       spelling_seconds, cb_seconds "
         "FROM learning_logs "
         "WHERE log_date >= ? AND log_date <= ? "
         "ORDER BY log_date ASC"));

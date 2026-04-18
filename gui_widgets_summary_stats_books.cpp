@@ -11,6 +11,7 @@
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QPaintEvent>
+#include <QComboBox>
 #include <QPainter>
 #include <QPen>
 #include <QPushButton>
@@ -289,26 +290,27 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
 
-    const QColor learningColor("#d38945"); // keep orange hue, lower saturation
-    const QColor reviewColor("#9c73cf");   // keep purple hue, lower saturation
-    const QColor accentColor("#d38945");
+    const QColor spellingLearnColor("#3b82f6");    // Blue 500
+    const QColor spellingReviewColor("#93c5fd");   // Blue 300
+    const QColor cbLearnColor("#10b981");          // Emerald 500
+    const QColor cbReviewColor("#a7f3d0");         // Emerald 200
+    const QColor totalLineColor("#94a3b8");        // Slate 400 (Grey)
     const QColor textPrimary("#111827");
-    const QColor textMuted("#6b7280");
-    const QColor gridColor("#e6e9ee");
-    const QColor lineColor("#c6c9cf");
-    const QColor cardBg("#fbfcfd");
-    const QColor cardBorder("#e7ebf0");
+    const QColor textMuted("#64748b");
+    const QColor gridColor("#f1f5f9");
+    const QColor cardBg("#ffffff");
+    const QColor cardBorder("#e2e8f0");
 
     const int marginX = 28;
     const int marginTop = 86;
-    const int marginBottom = 28;
     const int sectionGap = 18;
+    const int marginBottom = 28;
     const int contentWidth = this->width() - marginX * 2;
     const int contentHeight = this->height() - marginTop - marginBottom;
-    const int topHeight = (contentHeight - sectionGap) / 2;
+    const int actualTopHeight = (contentHeight - sectionGap) / 2;
 
-    QRect topRect(marginX, marginTop, contentWidth, topHeight);
-    QRect bottomRect(marginX, marginTop + topHeight + sectionGap, contentWidth, contentHeight - topHeight - sectionGap);
+    QRect topRect(marginX, marginTop, contentWidth, actualTopHeight);
+    QRect bottomRect(marginX, marginTop + actualTopHeight + sectionGap, contentWidth, contentHeight - actualTopHeight - sectionGap);
 
     painter.setPen(QPen(cardBorder, 1));
     painter.setBrush(cardBg);
@@ -318,166 +320,176 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     const QRect topCard = topRect.adjusted(14, 12, -14, -12);
     const QRect bottomCard = bottomRect.adjusted(14, 12, -14, -12);
 
-    // Top section: learning/review count bars.
-    painter.setPen(textPrimary);
-    painter.setFont(QFont(font().family(), 12, QFont::Bold));
-    painter.drawText(QRect(topCard.left(), topCard.top(), topCard.width(), 20),
-                     Qt::AlignCenter,
-                     QStringLiteral("单词数量"));
+    // --- TOP SECTION: Word Quantity (Side-by-side grouped bars) ---
+    painter.setPen(QPen(QColor("#1e293b"), 1)); 
+    painter.setFont(QFont(font().family(), 13, QFont::Bold));
+    painter.drawText(QRect(topCard.left(), topCard.top(), topCard.width(), 24), Qt::AlignCenter, QStringLiteral("学习数量统计"));
 
-    const QRect topPlot = topCard.adjusted(8, 34, -8, -66);
+    const QRect topPlot = topCard.adjusted(12, 88, -12, -56);
     int maxCount = 10;
     for (const auto &log : logs_) {
         maxCount = qMax(maxCount, log.learningCount + log.reviewCount);
+        maxCount = qMax(maxCount, log.countabilityLearningCount + log.countabilityReviewCount);
     }
+    maxCount = (maxCount * 12) / 10; // Extra headroom
 
-    const int barWidth = qMax(4, qMin(10, topPlot.width() / (logs_.size() * 4)));
+    const int dayWidth = topPlot.width() / logs_.size();
+    const int barWidth = qMax(6, qMin(12, dayWidth / 4));
+    
     for (int i = 0; i < logs_.size(); ++i) {
-        const DatabaseManager::DailyLog &log = logs_[i];
-        const int total = log.learningCount + log.reviewCount;
-        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
-        const int centerX = topPlot.left() + static_cast<int>(xRatio * topPlot.width());
-        const int fullHeight = static_cast<int>((static_cast<double>(total) / maxCount) * topPlot.height());
-        const int learningHeight = total > 0
-                                       ? static_cast<int>((static_cast<double>(log.learningCount) / total) * fullHeight)
-                                       : 0;
-        const int reviewHeight = fullHeight - learningHeight;
+        const auto &log = logs_[i];
+        const int centerX = topPlot.left() + (i + 0.5) * dayWidth;
         const int baseY = topPlot.bottom();
 
-        if (reviewHeight > 0) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(reviewColor);
-            painter.drawRoundedRect(QRect(centerX - barWidth / 2, baseY - fullHeight, barWidth, reviewHeight), 4, 4);
+        // Spelling Bar (Left)
+        const int spTotal = log.learningCount + log.reviewCount;
+        const int spH = static_cast<int>((static_cast<double>(spTotal) / maxCount) * topPlot.height());
+        const int spLearnH = spTotal > 0 ? (log.learningCount * spH / spTotal) : 0;
+        const int spReviewH = spH - spLearnH;
+        QRect spRect(centerX - barWidth - 2, baseY - spH, barWidth, spH);
+        
+        if (spReviewH > 0) {
+            painter.setBrush(spellingReviewColor);
+            painter.drawRoundedRect(QRect(spRect.left(), baseY - spH, barWidth, spReviewH), 3, 3);
         }
-        if (learningHeight > 0) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(learningColor);
-            painter.drawRoundedRect(QRect(centerX - barWidth / 2, baseY - learningHeight, barWidth, learningHeight), 4, 4);
-        }
-
-        if (fullHeight > 0) {
-            HoverBarInfo info;
-            const int hoverWidth = qMax(16, barWidth + 10);
-            const int hoverHeight = qMax(18, fullHeight);
-            info.rect = QRect(centerX - hoverWidth / 2, baseY - hoverHeight, hoverWidth, hoverHeight);
-            const QString dayText = (i == logs_.size() - 1) ? QStringLiteral("今日") : log.date;
-            info.text = QStringLiteral("%1\n学习：%2 词\n复习：%3 词\n合计：%4 词")
-                            .arg(dayText)
-                            .arg(log.learningCount)
-                            .arg(log.reviewCount)
-                            .arg(total);
-            hoverBars_.push_back(info);
+        if (spLearnH > 0) {
+            painter.setBrush(spellingLearnColor);
+            painter.drawRoundedRect(QRect(spRect.left(), baseY - spLearnH, barWidth, spLearnH), 3, 3);
         }
 
+        // Countability Bar (Right)
+        const int cbTotal = log.countabilityLearningCount + log.countabilityReviewCount;
+        const int cbH = static_cast<int>((static_cast<double>(cbTotal) / maxCount) * topPlot.height());
+        const int cbLearnH = cbTotal > 0 ? (log.countabilityLearningCount * cbH / cbTotal) : 0;
+        const int cbReviewH = cbH - cbLearnH;
+        QRect cbRect(centerX + 2, baseY - cbH, barWidth, cbH);
+
+        if (cbReviewH > 0) {
+            painter.setBrush(cbReviewColor);
+            painter.drawRoundedRect(QRect(cbRect.left(), baseY - cbH, barWidth, cbReviewH), 3, 3);
+        }
+        if (cbLearnH > 0) {
+            painter.setBrush(cbLearnColor);
+            painter.drawRoundedRect(QRect(cbRect.left(), baseY - cbLearnH, barWidth, cbLearnH), 3, 3);
+        }
+
+        // Hover areas
+        const QString dateLabel = (i == logs_.size() - 1) ? QStringLiteral("今日") : log.date.right(5);
+        HoverBarInfo spInfo;
+        spInfo.rect = spRect.adjusted(-2, -5, 2, 5);
+        spInfo.text = QStringLiteral("<b>%1·拼写练习</b><br/>新学: %2<br/>复习: %3<br/>共计: %4").arg(dateLabel).arg(log.learningCount).arg(log.reviewCount).arg(spTotal);
+        hoverBars_.push_back(spInfo);
+
+        HoverBarInfo cbInfo;
+        cbInfo.rect = cbRect.adjusted(-2, -5, 2, 5);
+        cbInfo.text = QStringLiteral("<b>%1·可数性练习</b><br/>新学: %2<br/>复习: %3<br/>共计: %4").arg(dateLabel).arg(log.countabilityLearningCount).arg(log.countabilityReviewCount).arg(cbTotal);
+        hoverBars_.push_back(cbInfo);
+
+        // Date labels
         painter.setPen(textMuted);
         painter.setFont(QFont(font().family(), 9));
-        QString dateStr = (i == logs_.size() - 1) ? QStringLiteral("今日") : log.date.right(5);
-        painter.drawText(QRect(centerX - 30, topPlot.bottom() + 6, 60, 18), Qt::AlignCenter, dateStr);
+        painter.drawText(QRect(centerX - dayWidth/2, topPlot.bottom() + 6, dayWidth, 18), Qt::AlignCenter, dateLabel);
     }
 
-    const DatabaseManager::DailyLog &today = logs_.last();
-    painter.setPen(textMuted);
-    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
-    painter.drawText(QRect(topCard.left(), topCard.bottom() - 34, topCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("当日学习"));
-    painter.drawText(QRect(topCard.center().x(), topCard.bottom() - 34, topCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("当日复习"));
-    painter.setPen(textPrimary);
-    painter.setFont(QFont(font().family(), 20, QFont::Bold));
-    painter.drawText(QRect(topCard.left(), topCard.bottom() - 16, topCard.width() / 2, 22), Qt::AlignCenter, QString::number(today.learningCount));
-    painter.drawText(QRect(topCard.center().x(), topCard.bottom() - 16, topCard.width() / 2, 22), Qt::AlignCenter, QString::number(today.reviewCount));
+    // Legend for quantity - Vertically stacked, Left-aligned at top-left
+    auto drawLegend = [&](int x, int y, QColor c1, QColor c2, QString label) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(c1); painter.drawEllipse(x, y, 9, 9);
+        painter.setBrush(c2); painter.drawEllipse(x + 12, y, 9, 9);
+        painter.setPen(textMuted); painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+        painter.drawText(x + 28, y + 9, label);
+    };
+    
+    int legX = topCard.left() + 8;
+    int legY = topCard.top() + 36; 
+    drawLegend(legX, legY, spellingLearnColor, spellingReviewColor, QStringLiteral("拼写练习"));
+    drawLegend(legX, legY + 20, cbLearnColor, cbReviewColor, QStringLiteral("可数性练习"));
 
-    // Top-right legend (muted colors).
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(learningColor);
-    painter.drawEllipse(QRect(topCard.right() - 112, topCard.top() + 4, 10, 10));
-    painter.setBrush(reviewColor);
-    painter.drawEllipse(QRect(topCard.right() - 50, topCard.top() + 4, 10, 10));
-    painter.setPen(textMuted);
-    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
-    painter.drawText(QRect(topCard.right() - 96, topCard.top() + 2, 38, 14), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("学习"));
-    painter.drawText(QRect(topCard.right() - 34, topCard.top() + 2, 38, 14), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("复习"));
-
-    // Bottom section: study time line chart (minutes).
+    // --- BOTTOM SECTION: Study Time (Line Chart with Filter) ---
     painter.setPen(textPrimary);
     painter.setFont(QFont(font().family(), 12, QFont::Bold));
-    painter.drawText(QRect(bottomCard.left(), bottomCard.top(), bottomCard.width(), 20),
-                     Qt::AlignCenter,
-                     QStringLiteral("学习时长（分钟）"));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.top(), bottomCard.width(), 24), Qt::AlignCenter, QStringLiteral("学习时长统计（分钟）"));
 
-    const QRect linePlot = bottomCard.adjusted(8, 34, -8, -76);
-    int maxMinutes = 10;
-    int weeklyMinutes = 0;
-    QVector<QPointF> points;
-    points.reserve(logs_.size());
-    for (int i = 0; i < logs_.size(); ++i) {
-        const int minutes = logs_[i].studyMinutes;
-        maxMinutes = qMax(maxMinutes, minutes);
-        weeklyMinutes += minutes;
+    const QRect linePlot = bottomCard.adjusted(12, 108, -12, -66);
+    int maxSecs = 600;
+    for (const auto &log : logs_) {
+        maxSecs = qMax(maxSecs, log.spellingSeconds + log.countabilitySeconds);
     }
+    maxSecs = (maxSecs * 11) / 10;
+
+    auto getPoints = [&](int type) { // 0:total, 1:spelling, 2:cb
+        QVector<QPointF> pts;
+        for (int i = 0; i < logs_.size(); ++i) {
+            int s = 0;
+            if (type == 0) s = logs_[i].spellingSeconds + logs_[i].countabilitySeconds;
+            else if (type == 1) s = logs_[i].spellingSeconds;
+            else s = logs_[i].countabilitySeconds;
+            double xr = (i + 0.5) / static_cast<double>(logs_.size());
+            int x = linePlot.left() + static_cast<int>(xr * linePlot.width());
+            int y = linePlot.bottom() - static_cast<int>(static_cast<double>(s) / maxSecs * linePlot.height());
+            pts.push_back(QPointF(x, y));
+        }
+        return pts;
+    };
 
     painter.setPen(QPen(gridColor, 1));
     for (int i = 0; i < logs_.size(); ++i) {
-        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
-        const int x = linePlot.left() + static_cast<int>(xRatio * linePlot.width());
+        int x = linePlot.left() + (i + 0.5) / logs_.size() * linePlot.width();
         painter.drawLine(x, linePlot.top(), x, linePlot.bottom());
     }
 
-    for (int i = 0; i < logs_.size(); ++i) {
-        const int minutes = logs_[i].studyMinutes;
-        const double xRatio = (i + 0.5) / static_cast<double>(logs_.size());
-        const int x = linePlot.left() + static_cast<int>(xRatio * linePlot.width());
-        const int y = linePlot.bottom() - static_cast<int>((static_cast<double>(minutes) / maxMinutes) * linePlot.height());
-        points.push_back(QPointF(x, y));
+    // Always Spelling
+    {
+        QPen p(spellingReviewColor, 1.5);
+        painter.setPen(p);
+        QVector<QPointF> pts = getPoints(1);
+        if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
+        for (auto &pt : pts) { painter.setBrush(spellingReviewColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 4, 4); }
+    }
+    // Always Countability
+    {
+        QPen p(cbReviewColor, 1.5);
+        painter.setPen(p);
+        QVector<QPointF> pts = getPoints(2);
+        if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
+        for (auto &pt : pts) { painter.setBrush(cbReviewColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 4, 4); }
+    }
+    // Always Total
+    {
+        QPen p(totalLineColor, 1.5);
+        painter.setPen(p);
+        QVector<QPointF> pts = getPoints(0);
+        if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
+        for (auto &pt : pts) { painter.setBrush(totalLineColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 5, 5); }
     }
 
-    painter.setPen(QPen(lineColor, 2.2));
-    painter.setBrush(Qt::NoBrush);
-    if (points.size() >= 2) {
-        painter.drawPolyline(points.data(), points.size());
-    }
-
-    painter.setFont(QFont(font().family(), 9, QFont::DemiBold));
-    for (int i = 0; i < points.size(); ++i) {
-        const bool isToday = (i == points.size() - 1);
-        const QColor pointColor = isToday ? accentColor : QColor("#cfd3d8");
+    // Legends for time chart - Vertically stacked, Left-aligned at top-left
+    auto drawTimeLegend = [&](int x, int y, QColor c, QString label) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(pointColor);
-        painter.drawEllipse(points[i], 5, 5);
+        painter.setBrush(c); painter.drawEllipse(x, y, 9, 9);
+        painter.setPen(textMuted); painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+        painter.drawText(x + 14, y + 9, label);
+    };
+    
+    int tLegX = bottomCard.left() + 8;
+    int tLegY = bottomCard.top() + 36;
+    drawTimeLegend(tLegX, tLegY, totalLineColor, QStringLiteral("总时长"));
+    drawTimeLegend(tLegX, tLegY + 20, spellingReviewColor, QStringLiteral("拼写时长"));
+    drawTimeLegend(tLegX, tLegY + 40, cbReviewColor, QStringLiteral("可数性时长"));
 
-        painter.setPen(isToday ? accentColor : textMuted);
-        painter.drawText(QRect(static_cast<int>(points[i].x()) - 22,
-                               static_cast<int>(points[i].y()) - 22,
-                               44,
-                               16),
-                         Qt::AlignCenter,
-                         QString::number(logs_[i].studyMinutes));
-    }
+    // Quick stats at bottom
+    const auto &today = logs_.last();
+    int todaySp = today.spellingSeconds / 60;
+    int todayCb = today.countabilitySeconds / 60;
+    int totalSp = 0, totalCb = 0;
+    for(auto &l : logs_) { totalSp += l.spellingSeconds; totalCb += l.countabilitySeconds; }
 
-    painter.setPen(textMuted);
-    painter.setFont(QFont(font().family(), 9));
-    for (int i = 0; i < points.size(); ++i) {
-        QString dateStr = (i == points.size() - 1) ? QStringLiteral("今日") : logs_[i].date.right(5);
-        painter.drawText(QRect(static_cast<int>(points[i].x()) - 24, linePlot.bottom() + 8, 48, 16),
-                         Qt::AlignCenter,
-                         dateStr);
-    }
-
-    painter.setPen(textMuted);
-    painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
-    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 46, bottomCard.width() / 2, 18),
-                     Qt::AlignCenter,
-                     QStringLiteral("当日学习时长"));
-    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 46, bottomCard.width() / 2, 18),
-                     Qt::AlignCenter,
-                     QStringLiteral("近7天总时长"));
-
-    painter.setPen(textPrimary);
-    painter.setFont(QFont(font().family(), 18, QFont::Bold));
-    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 24, bottomCard.width() / 2, 22),
-                     Qt::AlignCenter,
-                     QStringLiteral("%1 分钟").arg(today.studyMinutes));
-    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 24, bottomCard.width() / 2, 22),
-                     Qt::AlignCenter,
-                     QStringLiteral("%1 分钟").arg(weeklyMinutes));
+    painter.setPen(textMuted); painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("今日时长 (拼写|可数)"));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("7天汇总 (拼写|可数)"));
+    painter.setPen(textPrimary); painter.setFont(QFont(font().family(), 16, QFont::Bold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter, QStringLiteral("%1 | %2 min").arg(todaySp).arg(todayCb));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter, QStringLiteral("%1 | %2 min").arg(totalSp/60).arg(totalCb/60));
 }
 
 void StatisticsPageWidget::mouseMoveEvent(QMouseEvent *event) {

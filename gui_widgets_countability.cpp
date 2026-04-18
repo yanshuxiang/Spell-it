@@ -175,12 +175,15 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
 
     connect(exitButton_, &QPushButton::clicked, this, &CountabilityPageWidget::exitRequested);
     connect(countableButton_, &QPushButton::clicked, this,
-            [this]() { emit answerSubmitted(CountabilityAnswer::Countable); });
+            [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Countable); });
     connect(uncountableButton_, &QPushButton::clicked, this,
-            [this]() { emit answerSubmitted(CountabilityAnswer::Uncountable); });
+            [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Uncountable); });
     connect(bothButton_, &QPushButton::clicked, this,
-            [this]() { emit answerSubmitted(CountabilityAnswer::Both); });
-    connect(usageContinueButton_, &QPushButton::clicked, this, &CountabilityPageWidget::continueRequested);
+            [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Both); });
+    connect(usageContinueButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit continueRequested();
+    });
 }
 
 void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {

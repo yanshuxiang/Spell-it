@@ -1091,19 +1091,22 @@ void VibeSpellerWindow::accumulateStudyDuration(const QDateTime &start, const QD
         return;
     }
 
+    const bool isCountability = (currentMode_ == SessionMode::CountabilityLearning
+                                || currentMode_ == SessionMode::CountabilityReview);
+
     QDateTime cursor = start;
     while (cursor.date() < end.date()) {
         const QDateTime endOfDay(cursor.date(), QTime(23, 59, 59));
         const int seconds = static_cast<int>(cursor.secsTo(endOfDay) + 1);
         if (seconds > 0) {
-            db_.addDailyStudySeconds(seconds, cursor.date());
+            db_.addDailyStudySeconds(seconds, isCountability, cursor.date());
         }
         cursor = endOfDay.addSecs(1);
     }
 
     const int finalSeconds = static_cast<int>(cursor.secsTo(end));
     if (finalSeconds > 0) {
-        db_.addDailyStudySeconds(finalSeconds, cursor.date());
+        db_.addDailyStudySeconds(finalSeconds, isCountability, cursor.date());
     }
 }
 
