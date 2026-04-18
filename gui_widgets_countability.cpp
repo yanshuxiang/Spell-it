@@ -13,6 +13,9 @@
 #include <QSizePolicy>
 #include <QSpacerItem>
 #include <QVBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 using namespace GuiWidgetsInternal;
 
@@ -308,15 +311,85 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
     case CountabilityAnswer::Both:        correctText = QStringLiteral("正确答案：可数且不可数 (Both)"); break;
     }
     usageDetailCorrectLabel_->setText(correctText);
+    usageDetailNotesLabel_->setTextFormat(Qt::RichText);
 
-    QString notes = word.countabilityNotes.trimmed();
-    if (notes.isEmpty()) {
-        notes = QStringLiteral("本词暂无详细用法说明。建议参考牛津或朗文词典。");
+    QString rawNotes = word.countabilityNotes.trimmed();
+    if (rawNotes.isEmpty()) {
+        usageDetailNotesLabel_->setText(QStringLiteral("<p style='color:#64748b;'>本词暂无详细用法说明。</p>"));
+    } else if (rawNotes.startsWith(QLatin1Char('{'))) {
+        // 解析 JSON 格式的 Explanation
+        QJsonDocument doc = QJsonDocument::fromJson(rawNotes.toUtf8());
+        if (!doc.isNull() && doc.isObject()) {
+            QJsonObject obj = doc.object();
+            QString html;
+            html += QStringLiteral("<div style='line-height:1.4;'>");
+
+            // 1. 复数形式 (if any)
+            QString plural = obj.value(QStringLiteral("plural")).toString().trimmed();
+            if (!plural.isEmpty()) {
+                html += QStringLiteral("<p><b style='color:#0f172a;'>复数形式：</b><code style='color:#2563eb;'>%1</code></p>").arg(plural);
+            }
+
+            // 2. 语义与可数性变化 (shifts)
+            QJsonArray shifts = obj.value(QStringLiteral("shifts")).toArray();
+            if (!shifts.isEmpty()) {
+                html += QStringLiteral("<p><b style='color:#0f172a;'>词义与用法变化：</b></p>");
+                html += QStringLiteral("<ul style='margin-top:4px;'>");
+                for (const QJsonValue &v : shifts) {
+                    QJsonObject s = v.toObject();
+                    QString sense = s.value(QStringLiteral("sense")).toString().trimmed();
+                    QString example = s.value(QStringLiteral("example")).toString().trimmed();
+                    html += QStringLiteral("<li style='margin-bottom:8px;'>");
+                    html += sense;
+                    if (!example.isEmpty()) {
+                        html += QStringLiteral("<br/><i style='color:#475569; font-size:14px;'>Example: %1</i>").arg(example);
+                    }
+                    html += QStringLiteral("</li>");
+                }
+                html += QStringLiteral("</ul>");
+            }
+
+            // 3. 常见搭配 (classifiers)
+            QJsonArray classifiers = obj.value(QStringLiteral("classifiers")).toArray();
+            if (!classifiers.isEmpty()) {
+                QStringList clist;
+                for (const QJsonValue &v : classifiers) clist << v.toString();
+                html += QStringLiteral("<p><b style='color:#0f172a;'>常用搭配：</b><span style='color:#1e293b;'>%1</span></p>")
+                            .arg(clist.join(QStringLiteral("、")));
+            }
+
+            // 4. 易错点 (chinese_trap)
+            QString trap = obj.value(QStringLiteral("chinese_trap")).toString().trimmed();
+            if (!trap.isEmpty()) {
+                html += QStringLiteral("<div style='background:rgba(234,179,8,0.1); border-radius:8px; padding:12px; margin-top:10px;'>");
+                html += QStringLiteral("<b style='color:#854d0e;'>\xf0\x9f\x92\xa1 避坑指南：</b><br/>%1").arg(trap);
+                html += QStringLiteral("</div>");
+            }
+
+            // 5. 主谓一致 (agreement)
+            QJsonObject agr = obj.value(QStringLiteral("agreement")).toObject();
+            QString rule = agr.value(QStringLiteral("rule")).toString().trimmed();
+            if (!rule.isEmpty()) {
+                html += QStringLiteral("<p style='margin-top:12px;'><b style='color:#0f172a;'>主谓一致规则：</b><br/>%1</p>").arg(rule);
+                QString agrEx = agr.value(QStringLiteral("example")).toString().trimmed();
+                if (!agrEx.isEmpty()) {
+                    html += QStringLiteral("<p style='color:#475569; font-size:14px; margin-top:2px;'><i>Example: %1</i></p>").arg(agrEx);
+                }
+            }
+
+            html += QStringLiteral("</div>");
+            usageDetailNotesLabel_->setText(html);
+        } else {
+            // 解析失败按原样显示
+            usageDetailNotesLabel_->setText(rawNotes);
+        }
+    } else {
+        // 原有纯文本逻辑
+        rawNotes.replace(QStringLiteral("[例]"),    QStringLiteral("\n\xf0\x9f\x92\xa1 例:"));
+        rawNotes.replace(QStringLiteral("[例(U)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(U):"));
+        rawNotes.replace(QStringLiteral("[例(C)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(C):"));
+        usageDetailNotesLabel_->setText(rawNotes);
     }
-    notes.replace(QStringLiteral("[例]"),    QStringLiteral("\n\xf0\x9f\x92\xa1 例:"));
-    notes.replace(QStringLiteral("[例(U)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(U):"));
-    notes.replace(QStringLiteral("[例(C)]"), QStringLiteral("\n\xf0\x9f\x92\xa1 例(C):"));
-    usageDetailNotesLabel_->setText(notes);
 
     // ── 2. 记录动画起点（当前居中位置）──
     rootLayout_->activate();
