@@ -253,6 +253,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(spellingPage_, &SpellingPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(spellingPage_, &SpellingPageWidget::skipForeverRequested, this, &VibeSpellerWindow::onSkipForeverCurrentWord);
     connect(spellingPage_, &SpellingPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
+    connect(countabilityPage_, &CountabilityPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
     connect(countabilityPage_, &CountabilityPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(countabilityPage_, &CountabilityPageWidget::answerSubmitted, this, &VibeSpellerWindow::onCountabilityAnswer);
     connect(countabilityPage_, &CountabilityPageWidget::continueRequested, this, &VibeSpellerWindow::moveToNextCountabilityWord);
@@ -509,8 +510,6 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
                               QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
-        } else {
-            db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
         }
     }
 
@@ -1553,6 +1552,7 @@ void VibeSpellerWindow::moveToNextWord() {
 }
 
 void VibeSpellerWindow::moveToNextCountabilityWord() {
+    markStudyUserActivity();
     ++currentIndex_;
     if (currentIndex_ >= currentWords_.size()) {
         finishSession();

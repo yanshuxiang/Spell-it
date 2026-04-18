@@ -1633,8 +1633,14 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
         log.date = query.value(0).toString();
         log.learningCount = query.value(1).toInt();
         log.reviewCount = query.value(2).toInt();
-        const int seconds = query.value(3).toInt();
-        log.studyMinutes = seconds > 0 ? (seconds + 59) / 60 : 0;
+        log.countabilityLearningCount = query.value(3).toInt();
+        log.countabilityReviewCount = query.value(4).toInt();
+        
+        const int totalSeconds = query.value(5).toInt();
+        log.studyMinutes = totalSeconds > 0 ? (totalSeconds + 59) / 60 : 0;
+        log.spellingSeconds = query.value(6).toInt();
+        log.countabilitySeconds = query.value(7).toInt();
+        
         logMap.insert(log.date, log);
     }
 
