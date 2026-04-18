@@ -615,7 +615,6 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
 
     if (correct) {
         if (existingMistakes == 0) {
-            // 修复问题2：可数性训练的词数不写入拼写学习统计，避免 learning_count 被虚高。
             if (!db_.applyCountabilityResult(current.id, true, QDateTime::currentDateTime())) {
                 showWarningPrompt(this,
                                   QStringLiteral("更新失败"),
@@ -627,21 +626,20 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
             record.userInput = countabilityAnswerText(answer);
             records_.push_back(record);
         } else if (!hasSameWordAhead()) {
-            // 本词本轮有过错误，这是最后一次出现且答对：统计为不熟悉（与拼写模块逻辑一致）。
             PracticeRecord record;
             record.word = current;
             record.result = SpellingResult::Unfamiliar;
             record.userInput = firstWrongInputs_.value(current.id, countabilityAnswerText(answer));
             records_.push_back(record);
         }
-        // 修复Bug#1：只有在「最终」出现时才清除追踪状态；若队列里还有同词（中间出现），
-        // 保留 countabilityWrongCounts_ / firstWrongInputs_ 以便下次出现能正确判断历史。
         if (!hasSameWordAhead()) {
             countabilityWrongCounts_.remove(current.id);
             firstWrongInputs_.remove(current.id);
         }
         persistCurrentSession();
-        delayedAdvance();
+        if (countabilityPage_) {
+            delayedShowDetails();
+        }
         return;
     }
 

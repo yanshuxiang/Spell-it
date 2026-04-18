@@ -272,12 +272,16 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
     setAwaitingProceed(false);
 
     refreshAnimationBasePositions();
+    const int leftSpace = translationBasePos_.x();
+    const int rightSpace = width() - (translationBasePos_.x() + translationLabel_->width());
+    const int safeShift = qMax(0, qMin(kTransitionShiftPx, qMin(leftSpace, rightSpace)));
 
     auto *currentTranslation = new QLabel(translationLabel_->text(), this);
     currentTranslation->setAlignment(Qt::AlignCenter);
     currentTranslation->setWordWrap(true);
+    currentTranslation->setMargin(translationLabel_->margin());
     currentTranslation->setGeometry(translationLabel_->geometry());
-    currentTranslation->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    currentTranslation->setStyleSheet(translationLabel_->styleSheet());
     auto *currentTransOpacity = new QGraphicsOpacityEffect(currentTranslation);
     currentTransOpacity->setOpacity(1.0);
     currentTranslation->setGraphicsEffect(currentTransOpacity);
@@ -286,19 +290,19 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
     auto *nextTranslation = new QLabel(nextWord.translation, this);
     nextTranslation->setAlignment(Qt::AlignCenter);
     nextTranslation->setWordWrap(true);
+    nextTranslation->setMargin(translationLabel_->margin());
     nextTranslation->setGeometry(translationLabel_->geometry());
-    nextTranslation->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+    nextTranslation->setStyleSheet(translationLabel_->styleSheet());
     auto *nextTranslationOpacity = new QGraphicsOpacityEffect(nextTranslation);
     nextTranslationOpacity->setOpacity(0.0);
     nextTranslation->setGraphicsEffect(nextTranslationOpacity);
-    nextTranslation->move(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
+    nextTranslation->move(translationBasePos_ + QPoint(safeShift, 0));
     nextTranslation->show();
 
     modeLabel_->setText(isReviewMode ? QStringLiteral("复习模式") : QStringLiteral("学习模式"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(nextIndex).arg(totalCount));
     resetInputOnNextType_ = false;
     clearFeedback();
-    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
     applyInputDefaultStyle();
     inputEdit_->clear();
     // 保持布局内真实控件可见，避免 setVisible(false) 触发布局重排导致“瞬移”。
@@ -312,7 +316,7 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
     auto *outTransMove = new QPropertyAnimation(currentTranslation, "pos", group);
     outTransMove->setDuration(kCorrectTransitionMs);
     outTransMove->setStartValue(translationBasePos_);
-    outTransMove->setEndValue(translationBasePos_ - QPoint(kTransitionShiftPx, 0));
+    outTransMove->setEndValue(translationBasePos_ - QPoint(safeShift, 0));
 
     auto *outTransFade = new QPropertyAnimation(currentTransOpacity, "opacity", group);
     outTransFade->setDuration(kCorrectTransitionMs);
@@ -322,7 +326,7 @@ void SpellingPageWidget::playCorrectTransition(const WordItem &currentWord,
 
     auto *inTransMove = new QPropertyAnimation(nextTranslation, "pos", group);
     inTransMove->setDuration(kCorrectTransitionMs);
-    inTransMove->setStartValue(translationBasePos_ + QPoint(kTransitionShiftPx, 0));
+    inTransMove->setStartValue(translationBasePos_ + QPoint(safeShift, 0));
     inTransMove->setEndValue(translationBasePos_);
 
     auto *inTransFade = new QPropertyAnimation(nextTranslationOpacity, "opacity", group);
@@ -358,7 +362,6 @@ void SpellingPageWidget::playWrongShake() {
     refreshAnimationBasePositions();
     resetInputOnNextType_ = true;
 
-    translationLabel_->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
     inputEdit_->setStyleSheet(QStringLiteral(
         "border: none;"
         "border-bottom: 2px solid #e5e7eb;"
