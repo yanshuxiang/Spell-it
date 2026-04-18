@@ -554,6 +554,10 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
     markStudyUserActivity();
 
     const WordItem current = currentWords_.at(currentIndex_);
+    
+    // 不论正确与否，点击即播放音频
+    playPronunciationForWord(current.word);
+
     CountabilityAnswer expected = CountabilityAnswer::Countable;
     const bool hasExpected = parseCountabilityLabel(current.countabilityLabel, expected);
     if (!hasExpected) {
