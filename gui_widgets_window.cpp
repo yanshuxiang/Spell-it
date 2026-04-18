@@ -604,6 +604,16 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
         });
     };
 
+    const auto delayedShowDetails = [this, current, expected, answer]() {
+        QPointer<VibeSpellerWindow> guard(this);
+        QTimer::singleShot(kCountabilityFeedbackMs, this, [guard, current, expected, answer]() {
+            if (!guard || !guard->countabilityPage_) {
+                return;
+            }
+            guard->countabilityPage_->showDetailedFeedback(current, expected, answer);
+        });
+    };
+
     if (correct) {
         if (existingMistakes == 0) {
             // 修复问题2：可数性训练的词数不写入拼写学习统计，避免 learning_count 被虚高。
@@ -663,7 +673,7 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
         firstWrongInputs_.remove(current.id);
         persistCurrentSession();
         if (countabilityPage_) {
-            countabilityPage_->showDetailedFeedback(current, expected, answer);
+            delayedShowDetails();
         }
         return;
     }
@@ -674,7 +684,7 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
 
     persistCurrentSession();
     if (countabilityPage_) {
-        countabilityPage_->showDetailedFeedback(current, expected, answer);
+        delayedShowDetails();
     }
 }
 

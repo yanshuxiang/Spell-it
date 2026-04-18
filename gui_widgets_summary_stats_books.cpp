@@ -88,7 +88,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
 
     auto *topTitle = new QLabel(QStringLiteral("小结"), this);
     topTitle->setAlignment(Qt::AlignCenter);
-    topTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #222222;"));
+    topTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #222222; padding-bottom: 2px;"));
 
     auto *spacer = new QWidget(this);
     spacer->setFixedSize(32, 32);
@@ -105,7 +105,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
 
     accuracyLabel_ = new QLabel(this);
     accuracyLabel_->setAlignment(Qt::AlignCenter);
-    accuracyLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #222222;"));
+    accuracyLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #222222; padding-top: 2px; padding-bottom: 4px;"));
 
     statsLabel_ = new QLabel(this);
     statsLabel_->setAlignment(Qt::AlignCenter);
@@ -118,7 +118,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
     listLayout->setSpacing(0);
 
     auto *wrongTitle = new QLabel(QStringLiteral("本组拼写"), listFrame);
-    wrongTitle->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700; color: #222222;"));
+    wrongTitle->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700; color: #222222; padding-bottom: 2px;"));
 
     wrongWordsList_ = new QListWidget(listFrame);
     wrongWordsList_->setFrameShape(QFrame::NoFrame);
@@ -542,7 +542,7 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
         "QPushButton:hover { background: #e9ebef; }"));
 
     auto *title = new QLabel(QStringLiteral("词书"), this);
-    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a;"));
+    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a; padding-bottom: 4px;"));
 
     metaLabel_ = new QLabel(QStringLiteral("管理词书与当前学习进度"), this);
     metaLabel_->setStyleSheet(QStringLiteral("font-size: 15px; color: #6b7280;"));
@@ -770,6 +770,7 @@ void WordBooksPageWidget::rebuildList() {
                                  .arg(coverTop, coverBottom));
 
         auto *title = new QLabel(book.name, row);
+        title->setMargin(6);
         title->setStyleSheet(QStringLiteral(
             "font-size: 20px; font-weight: 700; color: #0f172a;"
             "background: transparent; border: none;"));

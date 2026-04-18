@@ -63,6 +63,8 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     wordLabel_ = new QLabel(QStringLiteral("word"), this);
     wordLabel_->setWordWrap(true);
     wordLabel_->setAlignment(Qt::AlignCenter);
+    wordLabel_->setMargin(10);
+    wordLabel_->setMinimumHeight(100);
     wordLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
     wordLabel_->setStyleSheet(QStringLiteral("font-size: 42px; font-weight: 800; color: #0f172a;"));
 
@@ -185,6 +187,8 @@ void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int
     
     wordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
     wordLabel_->setAlignment(Qt::AlignCenter);
+    wordLabel_->setMargin(10);
+    wordLabel_->setMinimumHeight(100);
     wordLabel_->setStyleSheet(QStringLiteral("font-size: 42px; font-weight: 800; color: #0f172a;"));
 
     QString hint = word.translation.trimmed();
@@ -330,6 +334,8 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
 
     // 中英文：左对齐，全宽展开，内容完整显示（不截断）
     wordLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    wordLabel_->setMargin(8);
+    wordLabel_->setMinimumHeight(68);
     wordLabel_->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 800; color: #0f172a;"));
     wordLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
     

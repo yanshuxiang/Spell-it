@@ -20,7 +20,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
 
     auto *title = new QLabel(QStringLiteral("Spell it"), this);
     title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; letter-spacing: 0.2px;"));
+    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; letter-spacing: 0.2px; padding-bottom: 4px;"));
 
     learningCountLabel_ = new QLabel(this);
     learningCountLabel_->setAlignment(Qt::AlignCenter);
@@ -243,7 +243,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
         auto *label = new QLabel(text, this);
         label->setFixedWidth(leftLabelWidth);
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        label->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827;"));
+        label->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827; padding-bottom: 4px;"));
 
         row->addWidget(label);
         row->addWidget(field, 1);

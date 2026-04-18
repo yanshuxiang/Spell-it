@@ -73,7 +73,8 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     translationLabel_ = new QLabel(this);
     translationLabel_->setAlignment(Qt::AlignCenter);
     translationLabel_->setWordWrap(true);
-    translationLabel_->setFixedHeight(170);
+    translationLabel_->setFixedHeight(200);
+    translationLabel_->setMargin(8);
     translationLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #111827;"));
 
     inputEdit_ = new QLineEdit(this);
@@ -162,6 +163,8 @@ void SpellingPageWidget::setWord(const WordItem &word, int currentIndex, int tot
     modeLabel_->setText(isReviewMode ? QStringLiteral("复习模式") : QStringLiteral("学习模式"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(totalCount));
     translationLabel_->setText(word.translation);
+    translationLabel_->setFixedHeight(200);
+    translationLabel_->setMargin(8);
     inputEdit_->clear();
     translationLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #111827;"));
     applyInputDefaultStyle();
@@ -194,8 +197,10 @@ void SpellingPageWidget::refreshAnimationBasePositions() {
 
 void SpellingPageWidget::showFeedback(const QString &text, const QString &colorHex) {
     feedbackLabel_->setText(text);
+    feedbackLabel_->setMargin(8);
+    feedbackLabel_->setMinimumHeight(44);
     feedbackLabel_->setStyleSheet(
-        QStringLiteral("font-size: 20px; font-weight: 700; color: %1; padding-top: 4px;").arg(colorHex));
+        QStringLiteral("font-size: 20px; font-weight: 700; color: %1;").arg(colorHex));
 }
 
 void SpellingPageWidget::clearFeedback() {
@@ -364,6 +369,8 @@ void SpellingPageWidget::playWrongShake() {
     auto *shakeWordLabel = new QLabel(inputEdit_->text(), this);
     shakeWordLabel->setAlignment(Qt::AlignCenter);
     shakeWordLabel->setGeometry(inputEdit_->geometry());
+    shakeWordLabel->setMargin(10);
+    shakeWordLabel->setMinimumHeight(60);
     shakeWordLabel->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 500; color: #ef4444;"));
     shakeWordLabel->show();
 

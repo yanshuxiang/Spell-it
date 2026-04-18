@@ -262,7 +262,8 @@ QWidget *createSummaryRow(const PracticeRecord &record, bool reviewMode) {
     rowWidget->setStyleSheet(QStringLiteral("background: transparent;"));
 
     auto *leftLabel = new QLabel(record.word.word, rowWidget);
-    leftLabel->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #111827;"));
+    leftLabel->setMargin(4);
+    leftLabel->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #111827; padding-bottom: 3px;"));
 
     auto *rightLabel = new QLabel(summaryRightText(record, reviewMode), rowWidget);
     rightLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
