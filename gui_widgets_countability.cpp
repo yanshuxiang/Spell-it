@@ -187,6 +187,13 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
 }
 
 void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
+    if (detailsTransitionGroup_ != nullptr) {
+        detailsTransitionGroup_->stop();
+        detailsTransitionGroup_->deleteLater();
+        detailsTransitionGroup_ = nullptr;
+    }
+    usageDetailsHost_->setGraphicsEffect(nullptr);
+
     isDetailsMode_ = false;
     modeLabel_->setText(isReviewMode ? QStringLiteral("可数性复习") : QStringLiteral("可数性辨析"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(qMax(1, totalCount)));
@@ -205,6 +212,7 @@ void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int
     }
     hintLabel_->setText(hint);
     hintLabel_->setAlignment(Qt::AlignCenter);
+    hintLabel_->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 600; color: #475569;"));
 
     resetOptionStyles();
     setOptionsEnabled(true);
@@ -219,6 +227,7 @@ void CountabilityPageWidget::setWord(const WordItem &word, int currentIndex, int
     bottomSpacer_->changeSize(20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding);
     rootLayout_->setAlignment(contentHost_, Qt::AlignCenter);
     rootLayout_->invalidate();
+    rootLayout_->activate();
 }
 
 
@@ -304,6 +313,11 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
                                                    CountabilityAnswer selected) {
     Q_UNUSED(selected);
     if (isDetailsMode_) return;
+    if (detailsTransitionGroup_ != nullptr) {
+        detailsTransitionGroup_->stop();
+        detailsTransitionGroup_->deleteLater();
+        detailsTransitionGroup_ = nullptr;
+    }
     isDetailsMode_ = true;
 
     // ── 1. 填充内容 ──
@@ -493,6 +507,7 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
     usageDetailsHost_->move(usageFinalPos.x(), usageFinalPos.y() + 32);
 
     auto *group = new QParallelAnimationGroup(this);
+    detailsTransitionGroup_ = group;
 
     // 1. 单词标题：从居中滑向左上角
     auto *moveAnim = new QPropertyAnimation(contentHost_, "pos", group);
@@ -518,6 +533,9 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
     connect(group, &QParallelAnimationGroup::finished, this, [group, opacityEffect, this]() {
         // 动画结束后清理，避免残留的 Effect 影响后续交互
         usageDetailsHost_->setGraphicsEffect(nullptr);
+        if (detailsTransitionGroup_ == group) {
+            detailsTransitionGroup_ = nullptr;
+        }
         group->deleteLater();
     });
     group->start();

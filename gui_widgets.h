@@ -26,6 +26,7 @@ class QSpacerItem;
 class QProcess;
 class QThread;
 class RoundedProgressStrip;
+class QParallelAnimationGroup;
 
 enum class SessionMode {
     Learning,
@@ -195,6 +196,7 @@ private:
     QWidget *contentHost_ = nullptr;
     QSpacerItem *topSpacer_ = nullptr;
     QSpacerItem *bottomSpacer_ = nullptr;
+    QParallelAnimationGroup *detailsTransitionGroup_ = nullptr;
     bool isDetailsMode_ = false;
 
     void refreshBasePositions();
