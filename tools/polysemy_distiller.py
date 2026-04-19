@@ -34,30 +34,30 @@ MAX_RETRIES = 3
 csv_lock = threading.Lock()
 
 def get_system_prompt():
-    """熟词僻义蒸馏专用指令集 (V1: 高价值筛选版)"""
+    """熟词僻义蒸馏专用指令集 (V2: 极高门槛筛选版)"""
     return (
-        "You are a Senior IELTS/TOEFL/CET-6 Examiner and Philip-Award-Winning Lexicographer.\n"
-        "Your goal: Distill 'High-Value Polysemy' (熟词僻义) for common English words.\n\n"
+        "You are a World-Class Lexicographer and Elite IELTS/TOEFL Examiner.\n"
+        "Your goal: Identify ONLY the most 'Surprising & Exam-Critical' secondary meanings (金蝉脱壳) for common English words.\n\n"
         
-        "CRITICAL RULES:\n"
-        "1. THE GEM FILTER: ONLY return a result if the word has a secondary meaning that is: \n"
-        "   - Frequently tested in IELTS/TOEFL/CET-6.\n"
-        "   - Substantially different from its primary common meaning.\n"
-        "   - Often missed or misunderstood by intermediate students.\n"
-        "2. SEMANTIC GAP: If the secondary meaning is just a slight variation of the primary one, return 'has_gem': false.\n"
-        "3. DICTIONARY FORMAT: 'gem_meaning' MUST start with standard abbreviations like 'v.', 'n.', 'adj.', 'vt.' etc.\n"
-        "4. NO FILLER: 'exam_value' must be extremely concise. Focus ONLY on the exam context (e.g., 'IELTS Reading distraction point'). NEVER use filler phrases like 'significantly different from original' or 'easy to confuse'.\n"
-        "5. NO JUNK: If a word is 99% used in its basic sense (e.g. 'apple'), return 'has_gem': false. Even if 50 words in a row have no gem, that's fine. Quality over quantity.\n"
-        "6. INPUT CONTRAST: I will provide the current known meanings. Do NOT return those. Focus on what's missing and EXAM-CRITICAL.\n\n"
+        "ULTRA-STRICT FILTERING RULES:\n"
+        "1. THE 1:15 RATIO GUIDELINE: Expect a yield of around 5-7% (approx. 1 out of 15 words). Most words should return 'has_gem': false.\n"
+        "2. THE SURPRISE THRESHOLD: A 'Gem' must be a meaning that makes a learner say 'I didn't know the word could mean THAT!'. It must be a radical departure, not just a related nuance.\n"
+        "   - BAD: 'bank' (n.) vs 'bank' (v. to deposit) -> NOT A GEM.\n"
+        "   - BAD: 'book' (n.) vs 'book' (v. to reserve) -> NOT A GEM (too common).\n"
+        "   - GOOD: 'check' (v. to stop/hinder), 'weather' (v. to survive), 'husband' (v. to conserve).\n"
+        "3. NO PART-OF-SPEECH TRAPS: Simply changing from a noun to a related verb is ALMOST NEVER a gem unless the meaning changes significantly (like 'husband').\n"
+        "4. EXAM FATALITY: Only include meanings that are known 'traps' in high-level reading (IELTS/TOEFL/GRE/SAT).\n"
+        "5. NO FILLER: 'exam_value' must be a sharp 1-sentence analysis of WHY this is a trap. NEVER explain things like 'it's easy to confuse'.\n"
+        "6. AGGRESSIVE NEGATION: When in doubt, return 'has_gem': false. It is much better to skip a word than to provide a mediocre result.\n\n"
         
         "JSON SCHEMA:\n"
         "{\n"
         "  'results': [{\n"
         "    'word': 'str',\n"
         "    'has_gem': bool,\n"
-        "    'gem_meaning': '极简中文释义 (only if has_gem is true)',\n"
-        "    'exam_value': '考点说明: 解释在什么考试中如何出现 (only if has_gem is true)',\n"
-        "    'example': 'A natural, exam-style English example (only if has_gem is true)'\n"
+        "    'gem_meaning': '极简中文释义 (like \"v. 节制；节俭\")',\n"
+        "    'exam_value': '考点说明 (like \"阅读常考其动词义，干扰考生往已知常识去脑补\")',\n"
+        "    'example': 'A convincing, academic context example sentence.'\n"
         "  }]\n"
         "}"
     )
@@ -73,10 +73,10 @@ def get_polysemy_batch(words_with_meanings, client, model_name):
                 model=model_name,
                 messages=[
                     {"role": "system", "content": get_system_prompt()},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": f"{user_prompt}\n\nREMEMBER: I only want the RARE gems (approx 1 per 15 words). Most results should have 'has_gem': false."},
                 ],
                 response_format={'type': 'json_object'},
-                temperature=0.3
+                temperature=0.1
             )
             data = json.loads(response.choices[0].message.content)
             results = data.get('results', [])
