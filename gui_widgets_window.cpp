@@ -260,7 +260,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::managementClicked, this, [this]() {
-        openWordBooksForTraining(QStringLiteral("none"));
+        animateWordBooksRise(QStringLiteral("none"));
     });
     connect(homePage_, &HomePageWidget::statsClicked, this, &VibeSpellerWindow::animateStatisticsPageRise);
 
@@ -351,10 +351,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
         stack_->setCurrentWidget(homePage_);
     });
     connect(summaryPage_, &SummaryPageWidget::nextGroupClicked, this, &VibeSpellerWindow::continueNextGroup);
-    connect(wordBooksPage_, &WordBooksPageWidget::backClicked, this, [this]() {
-        restoreHomeCardIndex(true);
-        stack_->setCurrentWidget(homePage_);
-    });
+    connect(wordBooksPage_, &WordBooksPageWidget::backClicked, this, &VibeSpellerWindow::animateWordBooksBack);
     connect(wordBooksPage_, &WordBooksPageWidget::addBookClicked, this, [this]() {
         pickCsvAndShowMapping(true);
     });
@@ -1014,13 +1011,13 @@ void VibeSpellerWindow::onOpenWordBooks() {
                     QStringLiteral("open word books from dashboard, index=%1, mode=%2")
                         .arg(index)
                         .arg(sessionModeName(mode)));
-    openWordBooksForTraining(trainingTypeForMode(mode));
+    animateWordBooksRise(trainingTypeForMode(mode));
 }
 
 void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
     AppLogger::step(QStringLiteral("BookBinding"),
                     QStringLiteral("change book requested, trainingType=%1").arg(trainingType));
-    openWordBooksForTraining(trainingType);
+    animateWordBooksRise(trainingType);
 }
 
 void VibeSpellerWindow::onSelectWordBook(int bookId) {
@@ -2240,6 +2237,152 @@ void VibeSpellerWindow::animateStatisticsPageBack() {
         group->deleteLater();
         inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats back finished"));
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateWordBooksRise(const QString &trainingType) {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("wordbooks rise begin"));
+    
+    if (stack_ != nullptr && stack_->currentWidget() == homePage_) {
+        rememberHomeCardIndex();
+    }
+    pendingBookSelectionTrainingType_ = trainingType;
+    refreshWordBooks();
+
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || wordBooksPage_ == nullptr) {
+        stack_->setCurrentWidget(wordBooksPage_);
+        wordBooksPage_->setFocus();
+        inTransition_ = false;
+        return;
+    }
+
+    const QRect startRect(0, windowRect.height(), windowRect.width(), windowRect.height());
+    const QRect endRect(0, 0, windowRect.width(), windowRect.height());
+
+    wordBooksPage_->resize(windowRect.size());
+    wordBooksPage_->ensurePolished();
+    if (wordBooksPage_->layout() != nullptr) {
+        wordBooksPage_->layout()->activate();
+    }
+
+    QPixmap snapshot(wordBooksPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        wordBooksPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        stack_->setCurrentWidget(wordBooksPage_);
+        wordBooksPage_->setFocus();
+        inTransition_ = false;
+        return;
+    }
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0); 
+    card->setGeometry(startRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *riseAnim = new QPropertyAnimation(card, "geometry", group);
+    riseAnim->setDuration(kPageLaunchDurationMs + 100); 
+    riseAnim->setStartValue(startRect);
+    riseAnim->setEndValue(endRect);
+    riseAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost]() {
+        stack_->setCurrentWidget(wordBooksPage_);
+        wordBooksPage_->setFocus();
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        inTransition_ = false;
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("wordbooks rise finished"));
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateWordBooksBack() {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("wordbooks back begin"));
+    
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || wordBooksPage_ == nullptr || homePage_ == nullptr) {
+        restoreHomeCardIndex(true);
+        stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
+        return;
+    }
+
+    QPixmap snapshot(wordBooksPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        wordBooksPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        restoreHomeCardIndex(true);
+        stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
+        return;
+    }
+
+    restoreHomeCardIndex(true);
+    stack_->setCurrentWidget(homePage_);
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0); 
+    card->setGeometry(windowRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *backAnim = new QPropertyAnimation(card, "geometry", group);
+    backAnim->setDuration(kPageLaunchDurationMs); 
+    backAnim->setStartValue(windowRect);
+    backAnim->setEndValue(QRect(0, windowRect.height(), windowRect.width(), windowRect.height()));
+    backAnim->setEasingCurve(QEasingCurve::InCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost]() {
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        inTransition_ = false;
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("wordbooks back finished"));
     });
 
     group->start();

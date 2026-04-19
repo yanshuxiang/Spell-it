@@ -409,6 +409,8 @@ private:
     void animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect);
     void animateStatisticsPageRise();
     void animateStatisticsPageBack();
+    void animateWordBooksRise(const QString &trainingType);
+    void animateWordBooksBack();
     void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
