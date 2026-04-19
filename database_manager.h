@@ -19,6 +19,7 @@ struct WordItem {
     QString countabilityLabel;
     QString countabilityPlural;
     QString countabilityNotes;
+    QString polysemyJson;
     double easeFactor = 2.5;
     int interval = 0;
     QDateTime nextReview;
@@ -32,6 +33,9 @@ struct WordBookItem {
     int wordCount = 0;
     int learnedCount = 0;
     bool isActive = false;
+    bool boundSpelling = false;
+    bool boundCountability = false;
+    bool boundPolysemy = false;
 };
 
 struct WordDebugStats {
@@ -73,6 +77,7 @@ public:
                        int phoneticColumn,
                        int countabilityColumn,
                        int pluralColumn,
+                       int polysemyColumn,
                        int notesColumn,
                        int &importedCount);
 
@@ -109,6 +114,32 @@ public:
     bool applyCountabilityResult(int wordId,
                                  bool correct,
                                  const QDateTime &now = QDateTime::currentDateTime());
+    bool applyPolysemyResult(int wordId,
+                             SpellingResult result,
+                             bool skipped,
+                             const QDateTime &now = QDateTime::currentDateTime());
+    bool applyTrainingReviewResult(int wordId,
+                                   const QString &trainingType,
+                                   SpellingResult result,
+                                   bool skipped,
+                                   const QDateTime &now = QDateTime::currentDateTime());
+
+    int activeBookIdForTraining(const QString &trainingType) const;
+    bool setActiveBookIdForTraining(const QString &trainingType, int bookId);
+    int lastDashboardCardIndex() const;
+    bool setLastDashboardCardIndex(int index);
+    bool isCsvPromptHandled() const;
+    bool markCsvPromptHandled();
+
+    int totalWordCountForTraining(const QString &trainingType) const;
+    int masteredWordCountForTraining(const QString &trainingType) const;
+    int unlearnedCountForTraining(const QString &trainingType) const;
+    int dueReviewCountForTraining(const QString &trainingType,
+                                  const QDateTime &now = QDateTime::currentDateTime()) const;
+    QVector<WordItem> fetchLearningBatchForTraining(const QString &trainingType, int limit) const;
+    QVector<WordItem> fetchReviewBatchForTraining(const QString &trainingType,
+                                                  const QDateTime &now,
+                                                  int limit) const;
 
     bool incrementDailyCount(bool isLearning, bool isCountability = false, const QDate &date = QDate::currentDate());
     bool addDailyStudySeconds(int seconds, bool isCountability = false, const QDate &date = QDate::currentDate());
@@ -143,11 +174,10 @@ private:
     int nextIntervalForMastered(int currentInterval) const;
     int nextIntervalForBlurry(int currentInterval) const;
     int nextIntervalForUnfamiliar() const;
-    bool applyTrainingReviewResult(int wordId,
-                                   const QString &trainingType,
-                                   SpellingResult result,
-                                   bool skipped,
-                                   const QDateTime &now = QDateTime::currentDateTime());
+    bool isValidTrainingType(const QString &trainingType) const;
+    bool upsertSetting(const QString &key, const QString &value);
+    QString settingValue(const QString &key, const QString &defaultValue = QString()) const;
+    QString activeBookNameForTraining(const QString &trainingType) const;
     bool isCountabilityCandidate(const WordItem &word) const;
     bool hasTrainingProgress(int wordId, const QString &trainingType) const;
 

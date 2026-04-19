@@ -163,6 +163,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     mappingPage_ = new MappingPageWidget(this);
     spellingPage_ = new SpellingPageWidget(this);
     countabilityPage_ = new CountabilityPageWidget(this);
+    polysemyPage_ = new PolysemyPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
     wordBooksPage_ = new WordBooksPageWidget(this);
@@ -174,6 +175,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     stack_->addWidget(mappingPage_);
     stack_->addWidget(spellingPage_);
     stack_->addWidget(countabilityPage_);
+    stack_->addWidget(polysemyPage_);
     stack_->addWidget(summaryPage_);
     stack_->addWidget(statisticsPage_);
     stack_->addWidget(wordBooksPage_);
@@ -195,6 +197,12 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(homePage_, &HomePageWidget::startReviewClicked, this, &VibeSpellerWindow::onStartReview);
     connect(homePage_, &HomePageWidget::startCountabilityLearningClicked, this, &VibeSpellerWindow::onStartCountabilityLearning);
     connect(homePage_, &HomePageWidget::startCountabilityReviewClicked, this, &VibeSpellerWindow::onStartCountabilityReview);
+    connect(homePage_, &HomePageWidget::startPolysemyLearningClicked, this, &VibeSpellerWindow::onStartPolysemyLearning);
+    connect(homePage_, &HomePageWidget::startPolysemyReviewClicked, this, &VibeSpellerWindow::onStartPolysemyReview);
+    connect(homePage_, &HomePageWidget::changeBookRequested, this, &VibeSpellerWindow::onChangeBookForTraining);
+    connect(homePage_, &HomePageWidget::dashboardIndexChanged, this, [this](int index) {
+        db_.setLastDashboardCardIndex(index);
+    });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
         statisticsPage_->setLogs(db_.fetchWeeklyLogs());
@@ -216,7 +224,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
 
     connect(mappingPage_, &MappingPageWidget::importConfirmed, this,
-            [this](int wordCol, int transCol, int phoCol, int countCol, int plurCol, int noteCol) {
+            [this](int wordCol, int transCol, int phoCol, int countCol, int plurCol, int noteCol, int polyCol) {
                 if (pendingCsvPath_.isEmpty()) {
                     showWarningPrompt(this,
                                       QStringLiteral("导入失败"),
@@ -225,7 +233,15 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
                 }
 
                 int importedCount = 0;
-                if (!db_.importFromCsv(pendingCsvPath_, wordCol, transCol, phoCol, countCol, plurCol, noteCol, importedCount)) {
+                if (!db_.importFromCsv(pendingCsvPath_,
+                                       wordCol,
+                                       transCol,
+                                       phoCol,
+                                       countCol,
+                                       plurCol,
+                                       polyCol,
+                                       noteCol,
+                                       importedCount)) {
                     showErrorPrompt(this,
                                     QStringLiteral("导入失败"),
                                     QStringLiteral("CSV 导入失败：%1").arg(db_.lastError()));
@@ -257,6 +273,9 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(countabilityPage_, &CountabilityPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(countabilityPage_, &CountabilityPageWidget::answerSubmitted, this, &VibeSpellerWindow::onCountabilityAnswer);
     connect(countabilityPage_, &CountabilityPageWidget::continueRequested, this, &VibeSpellerWindow::moveToNextCountabilityWord);
+    connect(polysemyPage_, &PolysemyPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
+    connect(polysemyPage_, &PolysemyPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
+    connect(polysemyPage_, &PolysemyPageWidget::ratingSubmitted, this, &VibeSpellerWindow::onPolysemyRated);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -325,14 +344,15 @@ void VibeSpellerWindow::onStartLearning() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchLearningBatch(kSessionBatchSize);
+    if (!ensureActiveBookForTraining(QStringLiteral("spelling"), QStringLiteral("拼写学习"))) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("spelling"), kSessionBatchSize);
     if (words.isEmpty()) {
-        const bool answer = showQuestionPrompt(this,
-                                               QStringLiteral("暂无学习任务"),
-                                               QStringLiteral("当前没有未学习单词。现在导入 CSV 吗？"));
-        if (answer) {
-            pickCsvAndShowMapping(false);
-        }
+        showInfoPrompt(this,
+                       QStringLiteral("暂无学习任务"),
+                       QStringLiteral("当前词书没有可学习的新词。"));
         return;
     }
 
@@ -345,9 +365,14 @@ void VibeSpellerWindow::onStartReview() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+    const QVector<WordItem> words = db_.fetchReviewBatchForTraining(
+        QStringLiteral("spelling"),
+        QDateTime::currentDateTime(),
+        kSessionBatchSize);
     if (words.isEmpty()) {
-        const int tomorrowCount = db_.dueReviewCount(QDateTime::currentDateTime().addDays(1));
+        const int tomorrowCount = db_.dueReviewCountForTraining(
+            QStringLiteral("spelling"),
+            QDateTime::currentDateTime().addDays(1));
         showInfoPrompt(this,
                        QStringLiteral("暂无复习任务"),
                        QStringLiteral("今天已经复习完，明天需要复习%1个").arg(tomorrowCount));
@@ -363,7 +388,12 @@ void VibeSpellerWindow::onStartCountabilityLearning() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchCountabilityLearningBatch(kSessionBatchSize);
+    if (!ensureActiveBookForTraining(QStringLiteral("countability"), QStringLiteral("可数性辨析"))) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("countability"),
+                                                                       kSessionBatchSize);
     if (words.isEmpty()) {
         showInfoPrompt(this,
                        QStringLiteral("暂无辨析任务"),
@@ -379,15 +409,63 @@ void VibeSpellerWindow::onStartCountabilityReview() {
         return;
     }
 
-    const QVector<WordItem> words = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+    const QVector<WordItem> words = db_.fetchReviewBatchForTraining(
+        QStringLiteral("countability"),
+        QDateTime::currentDateTime(),
+        kSessionBatchSize);
     if (words.isEmpty()) {
-        const int tomorrowCount = db_.countabilityDueReviewCount(QDateTime::currentDateTime().addDays(1));
+        const int tomorrowCount = db_.dueReviewCountForTraining(
+            QStringLiteral("countability"),
+            QDateTime::currentDateTime().addDays(1));
         showInfoPrompt(this,
                        QStringLiteral("暂无复习任务"),
                        QStringLiteral("今天已经完成可数性复习，明天需要复习%1个").arg(tomorrowCount));
         return;
     }
     startSession(SessionMode::CountabilityReview, words, 0);
+}
+
+void VibeSpellerWindow::onStartPolysemyLearning() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyLearning);
+    if (tryResumeSession(SessionMode::PolysemyLearning)) {
+        return;
+    }
+
+    if (!ensureActiveBookForTraining(QStringLiteral("polysemy"), QStringLiteral("熟词生义学习"))) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("polysemy"),
+                                                                       kSessionBatchSize);
+    if (words.isEmpty()) {
+        showInfoPrompt(this,
+                       QStringLiteral("暂无学习任务"),
+                       QStringLiteral("当前词书没有可进行熟词生义学习的新词。"));
+        return;
+    }
+    startSession(SessionMode::PolysemyLearning, words, 0);
+}
+
+void VibeSpellerWindow::onStartPolysemyReview() {
+    pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyReview);
+    if (tryResumeSession(SessionMode::PolysemyReview)) {
+        return;
+    }
+
+    const QVector<WordItem> words = db_.fetchReviewBatchForTraining(
+        QStringLiteral("polysemy"),
+        QDateTime::currentDateTime(),
+        kSessionBatchSize);
+    if (words.isEmpty()) {
+        const int tomorrowCount = db_.dueReviewCountForTraining(
+            QStringLiteral("polysemy"),
+            QDateTime::currentDateTime().addDays(1));
+        showInfoPrompt(this,
+                       QStringLiteral("暂无复习任务"),
+                       QStringLiteral("今天已经完成熟词生义复习，明天需要复习%1个").arg(tomorrowCount));
+        return;
+    }
+    startSession(SessionMode::PolysemyReview, words, 0);
 }
 
 void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
@@ -471,8 +549,6 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
                               QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
-        } else {
-            db_.incrementDailyCount(currentMode_ == SessionMode::Learning);
         }
 
         PracticeRecord record;
@@ -689,6 +765,43 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
     }
 }
 
+void VibeSpellerWindow::onPolysemyRated(SpellingResult result) {
+    if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
+        return;
+    }
+    if (currentMode_ != SessionMode::PolysemyLearning
+        && currentMode_ != SessionMode::PolysemyReview) {
+        return;
+    }
+
+    markStudyUserActivity();
+    const WordItem current = currentWords_.at(currentIndex_);
+    if (polysemyPage_ != nullptr) {
+        polysemyPage_->setOptionsEnabled(false);
+    }
+
+    if (!db_.applyPolysemyResult(current.id, result, false, QDateTime::currentDateTime())) {
+        showWarningPrompt(this,
+                          QStringLiteral("更新失败"),
+                          QStringLiteral("保存熟词生义结果失败：%1").arg(db_.lastError()));
+    }
+
+    PracticeRecord record;
+    record.word = current;
+    record.result = result;
+    record.userInput = briefResult(result);
+    records_.push_back(record);
+    persistCurrentSession();
+
+    QPointer<VibeSpellerWindow> guard(this);
+    QTimer::singleShot(180, this, [guard]() {
+        if (!guard) {
+            return;
+        }
+        guard->moveToNextWord();
+    });
+}
+
 void VibeSpellerWindow::onProceedAfterFeedback() {
     if (currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
         return;
@@ -704,9 +817,14 @@ void VibeSpellerWindow::onExitSession() {
 
     persistCurrentSession();
     refreshHomeCounts();
-    QWidget *sourcePage = (currentMode_ == SessionMode::CountabilityLearning || currentMode_ == SessionMode::CountabilityReview)
-                             ? (QWidget *)countabilityPage_
-                             : (QWidget *)spellingPage_;
+    QWidget *sourcePage = spellingPage_;
+    if (currentMode_ == SessionMode::CountabilityLearning
+        || currentMode_ == SessionMode::CountabilityReview) {
+        sourcePage = countabilityPage_;
+    } else if (currentMode_ == SessionMode::PolysemyLearning
+               || currentMode_ == SessionMode::PolysemyReview) {
+        sourcePage = polysemyPage_;
+    }
     const QRect launchRect = homePage_->launchRect(currentMode_);
     animatePageToHomeTransition(sourcePage, launchRect);
 }
@@ -747,37 +865,48 @@ void VibeSpellerWindow::onSkipForeverCurrentWord() {
 }
 
 void VibeSpellerWindow::onOpenWordBooks() {
-    refreshWordBooks();
-    stack_->setCurrentWidget(wordBooksPage_);
+    const int index = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
+    const SessionMode mode = modeForDashboardRequest(index, false);
+    openWordBooksForTraining(trainingTypeForMode(mode));
+}
+
+void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
+    openWordBooksForTraining(trainingType);
 }
 
 void VibeSpellerWindow::onSelectWordBook(int bookId) {
     if (bookId <= 0) {
         return;
     }
-    if (bookId == db_.activeWordBookId()) {
+
+    const QString trainingType = pendingBookSelectionTrainingType_.isEmpty()
+                                     ? QStringLiteral("spelling")
+                                     : pendingBookSelectionTrainingType_;
+    if (bookId == db_.activeBookIdForTraining(trainingType)) {
+        stack_->setCurrentWidget(homePage_);
         return;
     }
 
     const bool confirmSwitch = showQuestionPrompt(
         this,
         QStringLiteral("切换词书"),
-        QStringLiteral("是否切换词书？当前词书进度会保留，已学单词正常推送复习"));
+        QStringLiteral("是否将“%1”切换到新词书？\n当前模式进度会保留，已学习单词仍会继续推送复习。")
+            .arg(trainingDisplayName(trainingType)));
     if (!confirmSwitch) {
         return;
     }
 
-    if (!db_.setActiveWordBook(bookId)) {
+    if (!db_.setActiveBookIdForTraining(trainingType, bookId)) {
         showWarningPrompt(this,
                           QStringLiteral("切换失败"),
                           QStringLiteral("切换当前词书失败：%1").arg(db_.lastError()));
         return;
     }
 
-    clearSessionForMode(SessionMode::Learning);
-    clearSessionForMode(SessionMode::CountabilityLearning);
+    clearSessionForMode(learningModeForTraining(trainingType));
     refreshHomeCounts();
     refreshWordBooks();
+    stack_->setCurrentWidget(homePage_);
 }
 
 void VibeSpellerWindow::onDeleteWordBook(int bookId) {
@@ -826,6 +955,8 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     clearSessionForMode(SessionMode::Review);
     clearSessionForMode(SessionMode::CountabilityLearning);
     clearSessionForMode(SessionMode::CountabilityReview);
+    clearSessionForMode(SessionMode::PolysemyLearning);
+    clearSessionForMode(SessionMode::PolysemyReview);
     refreshHomeCounts();
     refreshWordBooks();
 }
@@ -1020,7 +1151,8 @@ qreal VibeSpellerWindow::computeNormalizedVolume(const QString &audioFilePath) {
 void VibeSpellerWindow::updateStudyTimeTracking() {
     const bool shouldTrack = stack_ != nullptr
                              && (stack_->currentWidget() == spellingPage_
-                                 || stack_->currentWidget() == countabilityPage_)
+                                 || stack_->currentWidget() == countabilityPage_
+                                 || stack_->currentWidget() == polysemyPage_)
                              && isActiveWindow();
     const QDateTime now = QDateTime::currentDateTime();
 
@@ -1066,7 +1198,8 @@ void VibeSpellerWindow::markStudyUserActivity() {
 
     const bool canTrack = stack_ != nullptr
                           && (stack_->currentWidget() == spellingPage_
-                              || stack_->currentWidget() == countabilityPage_)
+                              || stack_->currentWidget() == countabilityPage_
+                              || stack_->currentWidget() == polysemyPage_)
                           && isActiveWindow();
     if (canTrack && !isStudyTrackingActive_) {
         isStudyTrackingActive_ = true;
@@ -1130,43 +1263,80 @@ void VibeSpellerWindow::initializeDatabase() {
 
 void VibeSpellerWindow::refreshHomeCounts() {
     db_.reconcileFirstDayDailyLog();
+    const QVector<WordBookItem> books = db_.fetchWordBooks();
+    QHash<int, WordBookItem> booksById;
+    for (const WordBookItem &book : books) {
+        booksById.insert(book.id, book);
+    }
 
-    // 首页展示“总任务量”：
-    // 学习 = 当前词书剩余未学总数；复习 = 今天到期需复习总数。
-    const int learning = db_.unlearnedCount();
-    const int review = db_.dueReviewCount(QDateTime::currentDateTime());
-    const int countabilityLearning = db_.countabilityUnlearnedCount();
-    const int countabilityReview = db_.countabilityDueReviewCount(QDateTime::currentDateTime());
+    const auto buildCard = [&](const QString &trainingType,
+                               const QString &title,
+                               const QString &themeColor) {
+        DashboardCardState card;
+        card.trainingType = trainingType;
+        card.modeTitle = title;
+        card.themeColor = themeColor;
+        card.activeBookId = db_.activeBookIdForTraining(trainingType);
+        card.hasActiveBook = card.activeBookId > 0;
+        if (card.hasActiveBook && booksById.contains(card.activeBookId)) {
+            card.bookName = booksById.value(card.activeBookId).name;
+        }
+        card.coverName = coverTextForBook(card.bookName);
+        card.totalWords = db_.totalWordCountForTraining(trainingType);
+        card.masteredWords = db_.masteredWordCountForTraining(trainingType);
+        card.unlearnedCount = db_.unlearnedCountForTraining(trainingType);
+        card.dueReviewCount = db_.dueReviewCountForTraining(trainingType, QDateTime::currentDateTime());
+        card.learningEnabled = card.hasActiveBook && card.unlearnedCount > 0;
+        card.reviewEnabled = card.dueReviewCount > 0;
+        return card;
+    };
+
+    QVector<DashboardCardState> cards;
+    cards.reserve(3);
+    cards.push_back(buildCard(QStringLiteral("spelling"), QStringLiteral("拼写"), QStringLiteral("#0f172a")));
+    cards.push_back(buildCard(QStringLiteral("countability"), QStringLiteral("可数性辨析"), QStringLiteral("#0ea5a4")));
+    cards.push_back(buildCard(QStringLiteral("polysemy"), QStringLiteral("熟词生义"), QStringLiteral("#f59e0b")));
 
     int todayLearning = 0;
     int todayReview = 0;
+    int todayStudyMinutes = 0;
     const QVector<DatabaseManager::DailyLog> logs = db_.fetchWeeklyLogs();
     if (!logs.isEmpty()) {
-        todayLearning = logs.last().learningCount;
-        todayReview = logs.last().reviewCount;
+        const DatabaseManager::DailyLog &today = logs.last();
+        todayLearning = today.learningCount + today.countabilityLearningCount;
+        todayReview = today.reviewCount + today.countabilityReviewCount;
+        todayStudyMinutes = today.studyMinutes;
     }
 
-    homePage_->setCounts(learning,
-                         review,
-                         todayLearning,
-                         todayReview,
-                         countabilityLearning,
-                         countabilityReview);
+    const int dashboardIndex = qBound(0, db_.lastDashboardCardIndex(), 2);
+    homePage_->setDashboardCards(cards, dashboardIndex, todayLearning, todayReview, todayStudyMinutes);
 }
 
 void VibeSpellerWindow::refreshWordBooks() {
-    wordBooksPage_->setWordBooks(db_.fetchWordBooks(), db_.activeWordBookId());
+    QString trainingType = pendingBookSelectionTrainingType_;
+    if (trainingType.isEmpty()) {
+        const int dashboardIndex = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
+        trainingType = trainingTypeForMode(modeForDashboardRequest(dashboardIndex, false));
+    }
+    const int activeBookId = db_.activeBookIdForTraining(trainingType);
+    wordBooksPage_->setWordBooks(db_.fetchWordBooks(),
+                                 activeBookId,
+                                 trainingType,
+                                 trainingDisplayName(trainingType));
 }
 
 void VibeSpellerWindow::requestCsvImportIfNeeded() {
-    const int totalWords = db_.unlearnedCount() + db_.dueReviewCount(QDateTime::currentDateTime());
-    if (totalWords > 0) {
+    if (db_.isCsvPromptHandled()) {
+        return;
+    }
+    db_.markCsvPromptHandled();
+    if (!db_.fetchWordBooks().isEmpty()) {
         return;
     }
 
     const bool answer = showQuestionPrompt(this,
                                            QStringLiteral("导入词库"),
-                                           QStringLiteral("首次使用需要导入 CSV 词库。现在导入吗？"));
+                                           QStringLiteral("当前还没有词书。现在导入 CSV 吗？"));
     if (answer) {
         pickCsvAndShowMapping(false);
     }
@@ -1264,16 +1434,28 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
         QVector<WordItem> candidates;
         switch (mode) {
         case SessionMode::Review:
-            candidates = db_.fetchReviewBatch(QDateTime::currentDateTime(), fetchLimit);
+            candidates = db_.fetchReviewBatchForTraining(QStringLiteral("spelling"),
+                                                         QDateTime::currentDateTime(),
+                                                         fetchLimit);
             break;
         case SessionMode::Learning:
-            candidates = db_.fetchLearningBatch(fetchLimit);
+            candidates = db_.fetchLearningBatchForTraining(QStringLiteral("spelling"), fetchLimit);
             break;
         case SessionMode::CountabilityLearning:
-            candidates = db_.fetchCountabilityLearningBatch(fetchLimit);
+            candidates = db_.fetchLearningBatchForTraining(QStringLiteral("countability"), fetchLimit);
             break;
         case SessionMode::CountabilityReview:
-            candidates = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), fetchLimit);
+            candidates = db_.fetchReviewBatchForTraining(QStringLiteral("countability"),
+                                                         QDateTime::currentDateTime(),
+                                                         fetchLimit);
+            break;
+        case SessionMode::PolysemyLearning:
+            candidates = db_.fetchLearningBatchForTraining(QStringLiteral("polysemy"), fetchLimit);
+            break;
+        case SessionMode::PolysemyReview:
+            candidates = db_.fetchReviewBatchForTraining(QStringLiteral("polysemy"),
+                                                         QDateTime::currentDateTime(),
+                                                         fetchLimit);
             break;
         }
         for (const WordItem &candidate : candidates) {
@@ -1300,9 +1482,12 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
 
     persistCurrentSession();
     showCurrentWord();
-    QWidget *targetPage = (mode == SessionMode::CountabilityLearning || mode == SessionMode::CountabilityReview)
-                             ? (QWidget *)countabilityPage_
-                             : (QWidget *)spellingPage_;
+    QWidget *targetPage = spellingPage_;
+    if (mode == SessionMode::CountabilityLearning || mode == SessionMode::CountabilityReview) {
+        targetPage = countabilityPage_;
+    } else if (mode == SessionMode::PolysemyLearning || mode == SessionMode::PolysemyReview) {
+        targetPage = polysemyPage_;
+    }
     animateHomeToPageTransition(pendingHomeLaunchRect_, targetPage);
     pendingHomeLaunchRect_ = QRect();
 }
@@ -1501,11 +1686,17 @@ void VibeSpellerWindow::showCurrentWord() {
                                totalTarget,
                                currentMode_ == SessionMode::Review);
         updateSpellingDebugInfo(word.id);
-    } else {
+    } else if (currentMode_ == SessionMode::CountabilityLearning
+               || currentMode_ == SessionMode::CountabilityReview) {
         countabilityPage_->setWord(word,
                                    displayIndex,
                                    totalTarget,
                                    currentMode_ == SessionMode::CountabilityReview);
+    } else {
+        polysemyPage_->setWord(word,
+                               displayIndex,
+                               totalTarget,
+                               currentMode_ == SessionMode::PolysemyReview);
     }
 }
 
@@ -1566,7 +1757,9 @@ void VibeSpellerWindow::moveToNextCountabilityWord() {
 
 void VibeSpellerWindow::finishSession() {
     clearSessionForMode(currentMode_);
-    const bool reviewMode = (currentMode_ == SessionMode::Review || currentMode_ == SessionMode::CountabilityReview);
+    const bool reviewMode = (currentMode_ == SessionMode::Review
+                             || currentMode_ == SessionMode::CountabilityReview
+                             || currentMode_ == SessionMode::PolysemyReview);
     summaryPage_->setSummary(records_, reviewMode);
     refreshHomeCounts();
     stack_->setCurrentWidget(summaryPage_);
@@ -1577,9 +1770,13 @@ void VibeSpellerWindow::continueNextGroup() {
     // 不需要经过 onStartXxx → tryResumeSession 的多余查询路径。
     QVector<WordItem> words;
     if (currentMode_ == SessionMode::Review) {
-        words = db_.fetchReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+        words = db_.fetchReviewBatchForTraining(QStringLiteral("spelling"),
+                                                QDateTime::currentDateTime(),
+                                                kSessionBatchSize);
         if (words.isEmpty()) {
-            const int tomorrowCount = db_.dueReviewCount(QDateTime::currentDateTime().addDays(1));
+            const int tomorrowCount = db_.dueReviewCountForTraining(
+                QStringLiteral("spelling"),
+                QDateTime::currentDateTime().addDays(1));
             showInfoPrompt(this,
                            QStringLiteral("暂无复习任务"),
                            QStringLiteral("今天已经复习完，明天需要复习%1个").arg(tomorrowCount));
@@ -1588,7 +1785,12 @@ void VibeSpellerWindow::continueNextGroup() {
             return;
         }
     } else if (currentMode_ == SessionMode::CountabilityLearning) {
-        words = db_.fetchCountabilityLearningBatch(kSessionBatchSize);
+        if (!ensureActiveBookForTraining(QStringLiteral("countability"), QStringLiteral("可数性辨析"))) {
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+        words = db_.fetchLearningBatchForTraining(QStringLiteral("countability"), kSessionBatchSize);
         if (words.isEmpty()) {
             showInfoPrompt(this,
                            QStringLiteral("暂无辨析任务"),
@@ -1598,9 +1800,13 @@ void VibeSpellerWindow::continueNextGroup() {
             return;
         }
     } else if (currentMode_ == SessionMode::CountabilityReview) {
-        words = db_.fetchCountabilityReviewBatch(QDateTime::currentDateTime(), kSessionBatchSize);
+        words = db_.fetchReviewBatchForTraining(QStringLiteral("countability"),
+                                                QDateTime::currentDateTime(),
+                                                kSessionBatchSize);
         if (words.isEmpty()) {
-            const int tomorrowCount = db_.countabilityDueReviewCount(QDateTime::currentDateTime().addDays(1));
+            const int tomorrowCount = db_.dueReviewCountForTraining(
+                QStringLiteral("countability"),
+                QDateTime::currentDateTime().addDays(1));
             showInfoPrompt(this,
                            QStringLiteral("暂无复习任务"),
                            QStringLiteral("今天已经完成可数性复习，明天需要复习%1个").arg(tomorrowCount));
@@ -1608,18 +1814,49 @@ void VibeSpellerWindow::continueNextGroup() {
             stack_->setCurrentWidget(homePage_);
             return;
         }
-    } else {
-        words = db_.fetchLearningBatch(kSessionBatchSize);
+    } else if (currentMode_ == SessionMode::PolysemyLearning) {
+        if (!ensureActiveBookForTraining(QStringLiteral("polysemy"), QStringLiteral("熟词生义学习"))) {
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+        words = db_.fetchLearningBatchForTraining(QStringLiteral("polysemy"), kSessionBatchSize);
         if (words.isEmpty()) {
-            const bool answer = showQuestionPrompt(this,
-                                                   QStringLiteral("暂无学习任务"),
-                                                   QStringLiteral("当前没有未学习单词。现在导入 CSV 吗？"));
-            if (answer) {
-                pickCsvAndShowMapping(false);
-            } else {
-                refreshHomeCounts();
-                stack_->setCurrentWidget(homePage_);
-            }
+            showInfoPrompt(this,
+                           QStringLiteral("暂无学习任务"),
+                           QStringLiteral("当前词书没有可进行熟词生义学习的新词。"));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+    } else if (currentMode_ == SessionMode::PolysemyReview) {
+        words = db_.fetchReviewBatchForTraining(QStringLiteral("polysemy"),
+                                                QDateTime::currentDateTime(),
+                                                kSessionBatchSize);
+        if (words.isEmpty()) {
+            const int tomorrowCount = db_.dueReviewCountForTraining(
+                QStringLiteral("polysemy"),
+                QDateTime::currentDateTime().addDays(1));
+            showInfoPrompt(this,
+                           QStringLiteral("暂无复习任务"),
+                           QStringLiteral("今天已经完成熟词生义复习，明天需要复习%1个").arg(tomorrowCount));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+    } else {
+        if (!ensureActiveBookForTraining(QStringLiteral("spelling"), QStringLiteral("拼写学习"))) {
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
+            return;
+        }
+        words = db_.fetchLearningBatchForTraining(QStringLiteral("spelling"), kSessionBatchSize);
+        if (words.isEmpty()) {
+            showInfoPrompt(this,
+                           QStringLiteral("暂无学习任务"),
+                           QStringLiteral("当前词书没有可学习的新词。"));
+            refreshHomeCounts();
+            stack_->setCurrentWidget(homePage_);
             return;
         }
     }
@@ -1636,8 +1873,95 @@ QString VibeSpellerWindow::modeKey(SessionMode mode) const {
         return QStringLiteral("countability_learning");
     case SessionMode::CountabilityReview:
         return QStringLiteral("countability_review");
+    case SessionMode::PolysemyLearning:
+        return QStringLiteral("polysemy_learning");
+    case SessionMode::PolysemyReview:
+        return QStringLiteral("polysemy_review");
     }
     return QStringLiteral("learning");
+}
+
+QString VibeSpellerWindow::trainingTypeForMode(SessionMode mode) const {
+    switch (mode) {
+    case SessionMode::Learning:
+    case SessionMode::Review:
+        return QStringLiteral("spelling");
+    case SessionMode::CountabilityLearning:
+    case SessionMode::CountabilityReview:
+        return QStringLiteral("countability");
+    case SessionMode::PolysemyLearning:
+    case SessionMode::PolysemyReview:
+        return QStringLiteral("polysemy");
+    }
+    return QStringLiteral("spelling");
+}
+
+QString VibeSpellerWindow::trainingDisplayName(const QString &trainingType) const {
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QStringLiteral("countability")) {
+        return QStringLiteral("可数性辨析");
+    }
+    if (type == QStringLiteral("polysemy")) {
+        return QStringLiteral("熟词生义");
+    }
+    return QStringLiteral("拼写");
+}
+
+SessionMode VibeSpellerWindow::reviewModeForTraining(const QString &trainingType) const {
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QStringLiteral("countability")) {
+        return SessionMode::CountabilityReview;
+    }
+    if (type == QStringLiteral("polysemy")) {
+        return SessionMode::PolysemyReview;
+    }
+    return SessionMode::Review;
+}
+
+SessionMode VibeSpellerWindow::learningModeForTraining(const QString &trainingType) const {
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QStringLiteral("countability")) {
+        return SessionMode::CountabilityLearning;
+    }
+    if (type == QStringLiteral("polysemy")) {
+        return SessionMode::PolysemyLearning;
+    }
+    return SessionMode::Learning;
+}
+
+void VibeSpellerWindow::openWordBooksForTraining(const QString &trainingType) {
+    const QString type = trainingType.trimmed().toLower().isEmpty()
+                             ? QStringLiteral("spelling")
+                             : trainingType.trimmed().toLower();
+    pendingBookSelectionTrainingType_ = type;
+    refreshWordBooks();
+    stack_->setCurrentWidget(wordBooksPage_);
+}
+
+bool VibeSpellerWindow::ensureActiveBookForTraining(const QString &trainingType, const QString &title) {
+    if (db_.activeBookIdForTraining(trainingType) > 0) {
+        return true;
+    }
+
+    const bool goChoose = showQuestionPrompt(
+        this,
+        QStringLiteral("未绑定词书"),
+        QStringLiteral("%1暂未绑定词书，是否现在去绑定？").arg(title + QStringLiteral(" ")));
+    if (goChoose) {
+        openWordBooksForTraining(trainingType);
+    }
+    return false;
+}
+
+SessionMode VibeSpellerWindow::modeForDashboardRequest(int modeIndex, bool isReview) const {
+    const int index = qBound(0, modeIndex, 2);
+    if (index == 1) {
+        return isReview ? SessionMode::CountabilityReview : SessionMode::CountabilityLearning;
+    }
+    if (index == 2) {
+        return isReview ? SessionMode::PolysemyReview : SessionMode::PolysemyLearning;
+    }
+    return isReview ? SessionMode::Review : SessionMode::Learning;
 }
 
 QString VibeSpellerWindow::resultLabel(SpellingResult result) const {

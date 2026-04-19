@@ -698,9 +698,14 @@ void WordBooksPageWidget::setAudioDownloadStatus(const QString &text, int curren
     }
 }
 
-void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int activeBookId) {
+void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books,
+                                       int activeBookId,
+                                       const QString &trainingType,
+                                       const QString &trainingDisplayName) {
     books_ = books;
     activeBookId_ = activeBookId;
+    currentTrainingType_ = trainingType.trimmed().toLower();
+    currentTrainingDisplayName_ = trainingDisplayName.trimmed();
     int totalWords = 0;
     for (const WordBookItem &book : books_) {
         totalWords += book.wordCount;
@@ -708,7 +713,28 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books, int a
     if (metaLabel_) {
         metaLabel_->setText(QStringLiteral("共 %1 本词书 · %2 词").arg(books_.size()).arg(totalWords));
     }
+    if (currentTitleLabel_) {
+        if (currentTrainingDisplayName_.isEmpty()) {
+            currentTitleLabel_->setText(QStringLiteral("当前学习词书"));
+        } else {
+            currentTitleLabel_->setText(QStringLiteral("%1 · 当前绑定词书").arg(currentTrainingDisplayName_));
+        }
+    }
     rebuildList();
+}
+
+QString WordBooksPageWidget::bindingTagText(const WordBookItem &book) const {
+    QStringList tags;
+    if (book.boundSpelling) {
+        tags << QStringLiteral("[拼]");
+    }
+    if (book.boundCountability) {
+        tags << QStringLiteral("[可]");
+    }
+    if (book.boundPolysemy) {
+        tags << QStringLiteral("[生]");
+    }
+    return tags.join(QStringLiteral(" "));
 }
 
 void WordBooksPageWidget::rebuildList() {
@@ -744,10 +770,12 @@ void WordBooksPageWidget::rebuildList() {
     otherTitleLabel_->show();
     booksList_->show();
 
-    WordBookItem activeBook = books_.first();
+    WordBookItem activeBook;
+    bool hasActiveBook = false;
     for (const WordBookItem &book : books_) {
         if (book.id == activeBookId_) {
             activeBook = book;
+            hasActiveBook = true;
             break;
         }
     }
@@ -792,36 +820,23 @@ void WordBooksPageWidget::rebuildList() {
         count->setStyleSheet(QStringLiteral(
             "font-size: 15px; color: #94a3b8;"
             "background: transparent; border: none;"));
+        auto *binding = new QLabel(bindingTagText(book), row);
+        binding->setStyleSheet(QStringLiteral(
+            "font-size: 12px;"
+            "font-weight: 700;"
+            "letter-spacing: 0.4px;"
+            "color: #475569;"
+            "background: transparent; border: none;"));
+        if (binding->text().isEmpty()) {
+            binding->hide();
+        }
 
         auto *textLayout = new QVBoxLayout();
         textLayout->setContentsMargins(0, 0, 0, 0);
         textLayout->setSpacing(5);
         textLayout->addWidget(title);
         textLayout->addWidget(count);
-
-        if (isCurrent) {
-            auto *progressBar = new RoundedProgressStrip(row);
-            progressBar->setRange(0, qMax(1, book.wordCount));
-            progressBar->setValue(qBound(0, book.learnedCount, qMax(1, book.wordCount)));
-            progressBar->setFixedHeight(10);
-
-            auto *progressText = new QHBoxLayout();
-            progressText->setContentsMargins(0, 0, 0, 0);
-            progressText->setSpacing(4);
-            auto *learnedLabel = new QLabel(QStringLiteral("已学习 %1").arg(book.learnedCount), row);
-            learnedLabel->setStyleSheet(QStringLiteral(
-                "font-size: 13px; color: #475569; background: transparent; border: none;"));
-            auto *totalLabel = new QLabel(QStringLiteral("总词数 %1").arg(book.wordCount), row);
-            totalLabel->setStyleSheet(QStringLiteral(
-                "font-size: 13px; color: #64748b; background: transparent; border: none;"));
-            progressText->addWidget(learnedLabel, 0, Qt::AlignLeft);
-            progressText->addStretch();
-            progressText->addWidget(totalLabel, 0, Qt::AlignRight);
-
-            textLayout->addSpacing(2);
-            textLayout->addWidget(progressBar);
-            textLayout->addLayout(progressText);
-        }
+        textLayout->addWidget(binding);
 
         textLayout->addStretch();
 
@@ -831,7 +846,7 @@ void WordBooksPageWidget::rebuildList() {
         rightLayout->setAlignment(Qt::AlignTop | Qt::AlignRight);
 
         if (!isCurrent) {
-            auto *learnButton = new QPushButton(QStringLiteral("学习"), row);
+            auto *learnButton = new QPushButton(QStringLiteral("绑定"), row);
             learnButton->setObjectName(QStringLiteral("bookLearnButton"));
             learnButton->setFixedSize(88, 34);
             learnButton->setCursor(Qt::PointingHandCursor);
@@ -927,11 +942,26 @@ void WordBooksPageWidget::rebuildList() {
         return row;
     };
 
-    currentCardLayout_->addWidget(makeBookCard(currentCardHost_, activeBook, true));
+    if (hasActiveBook) {
+        currentCardLayout_->addWidget(makeBookCard(currentCardHost_, activeBook, true));
+    } else {
+        auto *emptyBind = new QWidget(currentCardHost_);
+        emptyBind->setStyleSheet(QStringLiteral(
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
+        auto *emptyLayout = new QVBoxLayout(emptyBind);
+        emptyLayout->setContentsMargins(16, 12, 16, 12);
+        auto *emptyTitle = new QLabel(QStringLiteral("当前模式未绑定词书"), emptyBind);
+        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
+        auto *emptyDesc = new QLabel(QStringLiteral("点击下方任意词书的“绑定”按钮即可设置"), emptyBind);
+        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+        emptyLayout->addWidget(emptyTitle);
+        emptyLayout->addWidget(emptyDesc);
+        currentCardLayout_->addWidget(emptyBind);
+    }
 
     int otherCount = 0;
     for (const WordBookItem &book : books_) {
-        if (book.id == activeBook.id) {
+        if (hasActiveBook && book.id == activeBook.id) {
             continue;
         }
         ++otherCount;

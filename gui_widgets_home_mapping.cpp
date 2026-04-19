@@ -6,172 +6,222 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QQmlContext>
 #include <QPushButton>
+#include <QQuickWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QVBoxLayout>
 
 using namespace GuiWidgetsInternal;
+namespace {
+class DashboardBridge final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QVariantList cards READ cards NOTIFY cardsChanged)
+    Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
+
+public:
+    explicit DashboardBridge(QObject *parent = nullptr)
+        : QObject(parent) {}
+
+    QVariantList cards() const { return cards_; }
+    int currentIndex() const { return currentIndex_; }
+
+    void setCards(const QVariantList &cards) {
+        cards_ = cards;
+        emit cardsChanged();
+    }
+
+    void setCurrentIndex(int index) {
+        const int safeIndex = qMax(0, index);
+        if (safeIndex == currentIndex_) {
+            return;
+        }
+        currentIndex_ = safeIndex;
+        emit currentIndexChanged(currentIndex_);
+    }
+
+    Q_INVOKABLE void requestStart(int modeIndex, bool isReview, const QVariantMap &globalRectMap) {
+        const QRect globalRect(globalRectMap.value(QStringLiteral("x")).toInt(),
+                               globalRectMap.value(QStringLiteral("y")).toInt(),
+                               globalRectMap.value(QStringLiteral("width")).toInt(),
+                               globalRectMap.value(QStringLiteral("height")).toInt());
+        emit startRequested(modeIndex, isReview, globalRect);
+    }
+
+    Q_INVOKABLE void requestChangeBook(int modeIndex) {
+        emit changeBookRequested(modeIndex);
+    }
+
+    Q_INVOKABLE void requestStats() {
+        emit statsRequested();
+    }
+
+signals:
+    void cardsChanged();
+    void currentIndexChanged(int index);
+    void startRequested(int modeIndex, bool isReview, const QRect &globalRect);
+    void changeBookRequested(int modeIndex);
+    void statsRequested();
+
+private:
+    QVariantList cards_;
+    int currentIndex_ = 0;
+};
+} // namespace
+
 HomePageWidget::HomePageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(18, 16, 18, 40);
-    root->setSpacing(8);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
-    auto *title = new QLabel(QStringLiteral("Spell it"), this);
-    title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; letter-spacing: 0.2px; padding-bottom: 4px;"));
+    dashboardView_ = new QQuickWidget(this);
+    dashboardView_->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    dashboardView_->setClearColor(QColor("#e9edf2"));
+    dashboardView_->setAttribute(Qt::WA_AlwaysStackOnTop, false);
 
-    learningCountLabel_ = new QLabel(this);
-    learningCountLabel_->setAlignment(Qt::AlignCenter);
-    learningCountLabel_->setStyleSheet(QStringLiteral("font-size: 10px; color: #6b7280;"));
+    auto *bridge = new DashboardBridge(this);
+    dashboardBridge_ = bridge;
+    dashboardView_->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge);
+    const QString qmlPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/qml/MainDashboard.qml");
+    dashboardView_->setSource(QUrl::fromLocalFile(qmlPath));
 
-    learningButton_ = new QPushButton(QStringLiteral("学习"), this);
-    learningButton_->setMinimumHeight(78);
-    learningButton_->setStyleSheet(QStringLiteral(
-        "font-size: 16px; "
-        "font-weight: 700; "
-        "text-align: left; "
-        "padding-left: 12px; "
-        "border-radius: 12px;"));
+    root->addWidget(dashboardView_, 1);
 
-    reviewCountLabel_ = new QLabel(this);
-    reviewCountLabel_->setAlignment(Qt::AlignCenter);
-    reviewCountLabel_->setStyleSheet(QStringLiteral("font-size: 10px; color: #6b7280;"));
-
-    reviewButton_ = new QPushButton(QStringLiteral("复习"), this);
-    reviewButton_->setMinimumHeight(78);
-    reviewButton_->setStyleSheet(QStringLiteral(
-        "font-size: 16px; "
-        "font-weight: 700; "
-        "text-align: left; "
-        "padding-left: 12px; "
-        "border-radius: 12px;"));
-
-    countabilityLearnButton_ = new QPushButton(QStringLiteral("可数性辨析\n0"), this);
-    countabilityLearnButton_->setMinimumHeight(78);
-    countabilityLearnButton_->setStyleSheet(QStringLiteral(
-        "font-size: 16px; "
-        "font-weight: 700; "
-        "text-align: left; "
-        "padding-left: 12px; "
-        "border-radius: 12px;"));
-
-    countabilityReviewButton_ = new QPushButton(QStringLiteral("可数性复习\n0"), this);
-    countabilityReviewButton_->setMinimumHeight(78);
-    countabilityReviewButton_->setStyleSheet(QStringLiteral(
-        "font-size: 16px; "
-        "font-weight: 700; "
-        "text-align: left; "
-        "padding-left: 12px; "
-        "border-radius: 12px;"));
-
-    auto *countabilityCardsLayout = new QHBoxLayout();
-    countabilityCardsLayout->setSpacing(10);
-    countabilityCardsLayout->addWidget(countabilityLearnButton_, 1);
-    countabilityCardsLayout->addWidget(countabilityReviewButton_, 1);
-
-    auto *cardsLayout = new QHBoxLayout();
-    cardsLayout->setSpacing(10);
-    cardsLayout->addWidget(learningButton_, 1);
-    cardsLayout->addWidget(reviewButton_, 1);
-
-    auto *navLayout = new QHBoxLayout();
-    navLayout->setContentsMargins(0, 0, 0, 0);
-
-    auto *navBtn1 = new QPushButton(this);
-    auto *navBtn2 = new QPushButton(this);
-    auto *navBtn3 = new QPushButton(this);
-    navBtn1->setToolTip(QStringLiteral("词书"));
-    navBtn2->setToolTip(QStringLiteral("导入"));
-    navBtn3->setToolTip(QStringLiteral("统计"));
-    navBtn1->setIcon(createBooksLineIcon());
-    navBtn2->setIcon(createArchiveLineIcon());
-    navBtn3->setIcon(createChartLineIcon());
-    navBtn1->setIconSize(QSize(24, 24));
-    navBtn2->setIconSize(QSize(24, 24));
-    navBtn3->setIconSize(QSize(24, 24));
-    navBtn1->setFixedSize(46, 46);
-    navBtn2->setFixedSize(46, 46);
-    navBtn3->setFixedSize(46, 46);
-
-    const QString navBtnStyle = QStringLiteral(
-        "QPushButton {"
-        "  background: transparent;"
-        "  border: none;"
-        "  padding: 0;"
-        "}"
-        "QPushButton:hover { background: #f3f4f6; border-radius: 12px; }");
-
-    navBtn1->setStyleSheet(navBtnStyle);
-    navBtn2->setStyleSheet(navBtnStyle);
-    navBtn3->setStyleSheet(navBtnStyle);
-
-    navLayout->addStretch(1);
-    navLayout->addWidget(navBtn1);
-    navLayout->addStretch(2);
-    navLayout->addWidget(navBtn2);
-    navLayout->addStretch(2);
-    navLayout->addWidget(navBtn3);
-    navLayout->addStretch(1);
-
-    root->addWidget(learningCountLabel_);
-    root->addStretch(1);
-    root->addWidget(title);
-    root->addStretch(6);
-    root->addLayout(countabilityCardsLayout);
-    root->addSpacing(8);
-    root->addSpacing(4);
-    root->addLayout(cardsLayout);
-    root->addSpacing(10);
-    root->addWidget(reviewCountLabel_);
-    root->addSpacing(6);
-    root->addLayout(navLayout);
-
-    connect(learningButton_, &QPushButton::clicked, this, &HomePageWidget::startLearningClicked);
-    connect(reviewButton_, &QPushButton::clicked, this, &HomePageWidget::startReviewClicked);
-    connect(countabilityLearnButton_, &QPushButton::clicked, this, &HomePageWidget::startCountabilityLearningClicked);
-    connect(countabilityReviewButton_, &QPushButton::clicked, this, &HomePageWidget::startCountabilityReviewClicked);
-    connect(navBtn1, &QPushButton::clicked, this, &HomePageWidget::booksClicked);
-    connect(navBtn3, &QPushButton::clicked, this, &HomePageWidget::statsClicked);
+    connect(bridge, &DashboardBridge::startRequested, this, &HomePageWidget::handleStartRequest);
+    connect(bridge, &DashboardBridge::changeBookRequested, this, &HomePageWidget::handleChangeBookRequest);
+    connect(bridge, &DashboardBridge::currentIndexChanged, this, &HomePageWidget::handleCurrentIndexChanged);
+    connect(bridge, &DashboardBridge::statsRequested, this, &HomePageWidget::handleStatsRequest);
 }
 
-void HomePageWidget::setCounts(int learningCount,
-                               int reviewCount,
-                               int todayLearningCount,
-                               int todayReviewCount,
-                               int countabilityLearningCount,
-                               int countabilityReviewCount) {
-    learningButton_->setText(QStringLiteral("拼写学习\n%1").arg(learningCount));
-    reviewButton_->setText(QStringLiteral("拼写复习\n%1").arg(reviewCount));
-    countabilityLearnButton_->setText(QStringLiteral("可数性辨析\n%1").arg(countabilityLearningCount));
-    countabilityReviewButton_->setText(QStringLiteral("可数性复习\n%1").arg(countabilityReviewCount));
-    learningCountLabel_->setText(
-        QStringLiteral("今日已学 %1 词 · 今日复习 %2 词").arg(todayLearningCount).arg(todayReviewCount));
-    reviewCountLabel_->setText(QStringLiteral("长期主义的核心是无视中断"));
+void HomePageWidget::setDashboardCards(const QVector<DashboardCardState> &cards,
+                                       int currentIndex,
+                                       int todayLearningCount,
+                                       int todayReviewCount,
+                                       int todayStudyMinutes) {
+    Q_UNUSED(todayLearningCount);
+    Q_UNUSED(todayReviewCount);
+    Q_UNUSED(todayStudyMinutes);
+    cards_ = cards;
+    currentCardIndex_ = qMax(0, currentIndex);
+    updateCardModel();
+}
+
+void HomePageWidget::updateCardModel() {
+    auto *bridge = qobject_cast<DashboardBridge *>(dashboardBridge_);
+    if (bridge == nullptr) {
+        return;
+    }
+
+    QVariantList model;
+    model.reserve(cards_.size());
+    for (const DashboardCardState &card : cards_) {
+        QVariantMap item;
+        item.insert(QStringLiteral("modeTitle"), card.modeTitle);
+        item.insert(QStringLiteral("bookName"), card.bookName.isEmpty() ? QStringLiteral("未绑定词书") : card.bookName);
+        item.insert(QStringLiteral("coverName"), card.coverName);
+        item.insert(QStringLiteral("themeColor"), card.themeColor);
+        item.insert(QStringLiteral("hasActiveBook"), card.hasActiveBook);
+        item.insert(QStringLiteral("learningEnabled"), card.learningEnabled);
+        item.insert(QStringLiteral("reviewEnabled"), card.reviewEnabled);
+        item.insert(QStringLiteral("mastered"), card.masteredWords);
+        item.insert(QStringLiteral("total"), card.totalWords);
+        item.insert(QStringLiteral("unlearned"), card.unlearnedCount);
+        item.insert(QStringLiteral("due"), card.dueReviewCount);
+        const double progress = (card.totalWords > 0)
+                                    ? (static_cast<double>(card.masteredWords) / static_cast<double>(card.totalWords))
+                                    : 0.0;
+        item.insert(QStringLiteral("progress"), progress);
+        model.push_back(item);
+    }
+
+    bridge->setCards(model);
+    bridge->setCurrentIndex(currentCardIndex_);
+}
+
+void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect) {
+    if (modeIndex < 0 || modeIndex > 2) {
+        return;
+    }
+    SessionMode mode = SessionMode::Learning;
+    if (modeIndex == 1) {
+        mode = isReview ? SessionMode::CountabilityReview : SessionMode::CountabilityLearning;
+    } else if (modeIndex == 2) {
+        mode = isReview ? SessionMode::PolysemyReview : SessionMode::PolysemyLearning;
+    } else {
+        mode = isReview ? SessionMode::Review : SessionMode::Learning;
+    }
+
+    QRect localRect;
+    if (!globalRect.isEmpty()) {
+        localRect = QRect(mapFromGlobal(globalRect.topLeft()), globalRect.size());
+    }
+    if (localRect.isEmpty() && dashboardView_ != nullptr) {
+        const QSize fallbackSize(220, 64);
+        const QPoint center = dashboardView_->geometry().center() - QPoint(fallbackSize.width() / 2, fallbackSize.height() / 2);
+        localRect = QRect(center, fallbackSize);
+    }
+    launchRectByMode_.insert(static_cast<int>(mode), localRect);
+
+    switch (mode) {
+    case SessionMode::Learning:
+        emit startLearningClicked();
+        break;
+    case SessionMode::Review:
+        emit startReviewClicked();
+        break;
+    case SessionMode::CountabilityLearning:
+        emit startCountabilityLearningClicked();
+        break;
+    case SessionMode::CountabilityReview:
+        emit startCountabilityReviewClicked();
+        break;
+    case SessionMode::PolysemyLearning:
+        emit startPolysemyLearningClicked();
+        break;
+    case SessionMode::PolysemyReview:
+        emit startPolysemyReviewClicked();
+        break;
+    }
+}
+
+void HomePageWidget::handleChangeBookRequest(int modeIndex) {
+    QString trainingType = QStringLiteral("spelling");
+    if (modeIndex == 1) {
+        trainingType = QStringLiteral("countability");
+    } else if (modeIndex == 2) {
+        trainingType = QStringLiteral("polysemy");
+    }
+    emit changeBookRequested(trainingType);
+}
+
+void HomePageWidget::handleCurrentIndexChanged(int index) {
+    currentCardIndex_ = qMax(0, index);
+    emit dashboardIndexChanged(currentCardIndex_);
+}
+
+void HomePageWidget::handleStatsRequest() {
+    emit statsClicked();
 }
 
 QRect HomePageWidget::launchRect(SessionMode mode) const {
-    const QPushButton *button = nullptr;
-    switch (mode) {
-    case SessionMode::Learning:
-        button = learningButton_;
-        break;
-    case SessionMode::Review:
-        button = reviewButton_;
-        break;
-    case SessionMode::CountabilityLearning:
-        button = countabilityLearnButton_;
-        break;
-    case SessionMode::CountabilityReview:
-        button = countabilityReviewButton_;
-        break;
+    const QRect stored = launchRectByMode_.value(static_cast<int>(mode));
+    if (!stored.isEmpty()) {
+        return stored;
     }
-
-    if (button == nullptr) {
+    if (dashboardView_ == nullptr) {
         return QRect();
     }
-    return button->geometry();
+    const QSize fallbackSize(220, 64);
+    const QPoint center = dashboardView_->geometry().center() - QPoint(fallbackSize.width() / 2, fallbackSize.height() / 2);
+    return QRect(center, fallbackSize);
+}
+
+int HomePageWidget::currentCardIndex() const {
+    return currentCardIndex_;
 }
 
 MappingPageWidget::MappingPageWidget(QWidget *parent)
@@ -206,6 +256,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     countabilityCombo_ = new QComboBox(this);
     pluralCombo_ = new QComboBox(this);
     notesCombo_ = new QComboBox(this);
+    polysemyCombo_ = new QComboBox(this);
 
     const QString comboStyle = QStringLiteral(
         "QComboBox {"
@@ -223,6 +274,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     countabilityCombo_->setStyleSheet(comboStyle);
     pluralCombo_->setStyleSheet(comboStyle);
     notesCombo_->setStyleSheet(comboStyle);
+    polysemyCombo_->setStyleSheet(comboStyle);
 
     wordCombo_->setMinimumWidth(260);
     translationCombo_->setMinimumWidth(260);
@@ -230,6 +282,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     countabilityCombo_->setMinimumWidth(260);
     pluralCombo_->setMinimumWidth(260);
     notesCombo_->setMinimumWidth(260);
+    polysemyCombo_->setMinimumWidth(260);
 
     auto *mappingRows = new QVBoxLayout();
     mappingRows->setSpacing(12);
@@ -255,6 +308,7 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     mappingRows->addLayout(makeRow(QStringLiteral("可数性"), countabilityCombo_));
     mappingRows->addLayout(makeRow(QStringLiteral("复数形式"), pluralCombo_));
     mappingRows->addLayout(makeRow(QStringLiteral("用法备注"), notesCombo_));
+    mappingRows->addLayout(makeRow(QStringLiteral("熟词生义"), polysemyCombo_));
 
     auto *previewTitle = new QLabel(QStringLiteral("CSV 样例预览"), this);
     previewTitle->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: #374151;"));
@@ -338,9 +392,10 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
         const int countabilityColumn = countabilityCombo_->currentData().toInt();
         const int pluralColumn = pluralCombo_->currentData().toInt();
         const int notesColumn = notesCombo_->currentData().toInt();
+        const int polysemyColumn = polysemyCombo_->currentData().toInt();
 
         emit importConfirmed(wordCombo_->currentIndex(), translationCombo_->currentIndex(), phoneticColumn,
-                             countabilityColumn, pluralColumn, notesColumn);
+                             countabilityColumn, pluralColumn, notesColumn, polysemyColumn);
     });
 }
 
@@ -352,6 +407,10 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
     wordCombo_->clear();
     translationCombo_->clear();
     phoneticCombo_->clear();
+    countabilityCombo_->clear();
+    pluralCombo_->clear();
+    notesCombo_->clear();
+    polysemyCombo_->clear();
 
     wordCombo_->addItems(headers);
     translationCombo_->addItems(headers);
@@ -360,12 +419,14 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
     countabilityCombo_->addItem(QStringLiteral("不处理"), -1);
     pluralCombo_->addItem(QStringLiteral("不处理"), -1);
     notesCombo_->addItem(QStringLiteral("不处理"), -1);
+    polysemyCombo_->addItem(QStringLiteral("不处理"), -1);
 
     for (int i = 0; i < headers.size(); ++i) {
         phoneticCombo_->addItem(headers.at(i), i);
         countabilityCombo_->addItem(headers.at(i), i);
         pluralCombo_->addItem(headers.at(i), i);
         notesCombo_->addItem(headers.at(i), i);
+        polysemyCombo_->addItem(headers.at(i), i);
     }
 
     const QString bestWord = findBestColumn(headers, {QStringLiteral("word"), QStringLiteral("单词")});
@@ -419,6 +480,19 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
         notesCombo_->setCurrentIndex(0);
     }
 
+    const QString bestPolysemy = findBestColumn(headers,
+                                                {QStringLiteral("polysemy_json"),
+                                                 QStringLiteral("polysemy"),
+                                                 QStringLiteral("json"),
+                                                 QStringLiteral("熟词生义"),
+                                                 QStringLiteral("生义")});
+    if (!bestPolysemy.isEmpty()) {
+        const int idx = polysemyCombo_->findText(bestPolysemy);
+        if (idx >= 0) polysemyCombo_->setCurrentIndex(idx);
+    } else {
+        polysemyCombo_->setCurrentIndex(0);
+    }
+
     previewTable_->clear();
     previewTable_->setColumnCount(headers.size());
     previewTable_->setHorizontalHeaderLabels(headers);
@@ -437,3 +511,5 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
         previewTable_->setColumnWidth(col, 200);
     }
 }
+
+#include "gui_widgets_home_mapping.moc"

@@ -27,12 +27,15 @@ class QProcess;
 class QThread;
 class RoundedProgressStrip;
 class QParallelAnimationGroup;
+class QQuickWidget;
 
 enum class SessionMode {
     Learning,
     Review,
     CountabilityLearning,
     CountabilityReview,
+    PolysemyLearning,
+    PolysemyReview,
 };
 
 struct PracticeRecord {
@@ -42,34 +45,61 @@ struct PracticeRecord {
     bool skipped = false;
 };
 
+struct DashboardCardState {
+    QString trainingType;
+    QString modeTitle;
+    QString themeColor;
+    QString bookName;
+    QString coverName;
+    int totalWords = 0;
+    int masteredWords = 0;
+    int unlearnedCount = 0;
+    int dueReviewCount = 0;
+    bool hasActiveBook = false;
+    bool learningEnabled = false;
+    bool reviewEnabled = false;
+    int activeBookId = -1;
+};
+
 class HomePageWidget : public QWidget {
     Q_OBJECT
 public:
     explicit HomePageWidget(QWidget *parent = nullptr);
 
-    void setCounts(int learningCount,
-                   int reviewCount,
-                   int todayLearningCount,
-                   int todayReviewCount,
-                   int countabilityLearningCount = 0,
-                   int countabilityReviewCount = 0);
+    void setDashboardCards(const QVector<DashboardCardState> &cards,
+                           int currentIndex,
+                           int todayLearningCount,
+                           int todayReviewCount,
+                           int todayStudyMinutes);
     QRect launchRect(SessionMode mode) const;
+    int currentCardIndex() const;
 
 signals:
     void startLearningClicked();
     void startReviewClicked();
     void startCountabilityLearningClicked();
     void startCountabilityReviewClicked();
+    void startPolysemyLearningClicked();
+    void startPolysemyReviewClicked();
+    void changeBookRequested(const QString &trainingType);
+    void dashboardIndexChanged(int index);
     void booksClicked();
     void statsClicked();
 
 private:
-    QLabel *learningCountLabel_ = nullptr;
-    QLabel *reviewCountLabel_ = nullptr;
-    QPushButton *countabilityLearnButton_ = nullptr;
-    QPushButton *countabilityReviewButton_ = nullptr;
-    QPushButton *learningButton_ = nullptr;
-    QPushButton *reviewButton_ = nullptr;
+    void handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect);
+    void handleChangeBookRequest(int modeIndex);
+    void handleCurrentIndexChanged(int index);
+    void handleStatsRequest();
+    void updateCardModel();
+
+    QVector<DashboardCardState> cards_;
+    QHash<int, QRect> launchRectByMode_;
+    int currentCardIndex_ = 0;
+    QLabel *topMetaLabel_ = nullptr;
+    QLabel *footerLabel_ = nullptr;
+    QQuickWidget *dashboardView_ = nullptr;
+    QObject *dashboardBridge_ = nullptr;
 };
 
 class MappingPageWidget : public QWidget {
@@ -83,7 +113,7 @@ public:
 
 signals:
     void importConfirmed(int wordColumn, int translationColumn, int phoneticColumn,
-                         int countabilityColumn, int pluralColumn, int notesColumn);
+                         int countabilityColumn, int pluralColumn, int notesColumn, int polysemyColumn);
     void cancelled();
 
 private:
@@ -94,6 +124,7 @@ private:
     QComboBox *countabilityCombo_ = nullptr;
     QComboBox *pluralCombo_ = nullptr;
     QComboBox *notesCombo_ = nullptr;
+    QComboBox *polysemyCombo_ = nullptr;
     QTableWidget *previewTable_ = nullptr;
 };
 
@@ -202,6 +233,37 @@ private:
     void refreshBasePositions();
 };
 
+class PolysemyPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit PolysemyPageWidget(QWidget *parent = nullptr);
+
+    void setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode);
+    void setOptionsEnabled(bool enabled);
+    void resetRevealState();
+
+signals:
+    void exitRequested();
+    void revealRequested();
+    void ratingSubmitted(SpellingResult result);
+    void continueRequested();
+    void userActivity();
+
+private:
+    QString buildPolysemyText(const WordItem &word) const;
+
+    QLabel *modeLabel_ = nullptr;
+    QLabel *progressLabel_ = nullptr;
+    QLabel *wordLabel_ = nullptr;
+    QLabel *meaningLabel_ = nullptr;
+    QPushButton *exitButton_ = nullptr;
+    QPushButton *revealButton_ = nullptr;
+    QPushButton *masteredButton_ = nullptr;
+    QPushButton *blurryButton_ = nullptr;
+    QPushButton *unfamiliarButton_ = nullptr;
+    bool revealed_ = false;
+};
+
 class SummaryPageWidget : public QWidget {
     Q_OBJECT
 public:
@@ -258,7 +320,10 @@ class WordBooksPageWidget : public QWidget {
 public:
     explicit WordBooksPageWidget(QWidget *parent = nullptr);
 
-    void setWordBooks(const QVector<WordBookItem> &books, int activeBookId);
+    void setWordBooks(const QVector<WordBookItem> &books,
+                      int activeBookId,
+                      const QString &trainingType,
+                      const QString &trainingDisplayName);
     void setAudioDownloadStatus(const QString &text, int current, int total, bool running);
 
 signals:
@@ -271,9 +336,12 @@ signals:
 
 private:
     void rebuildList();
+    QString bindingTagText(const WordBookItem &book) const;
 
     QVector<WordBookItem> books_;
     int activeBookId_ = -1;
+    QString currentTrainingType_;
+    QString currentTrainingDisplayName_;
     QLabel *metaLabel_ = nullptr;
     QLabel *currentTitleLabel_ = nullptr;
     QWidget *currentCardHost_ = nullptr;
@@ -298,12 +366,16 @@ private slots:
     void onStartReview();
     void onStartCountabilityLearning();
     void onStartCountabilityReview();
+    void onStartPolysemyLearning();
+    void onStartPolysemyReview();
     void onSubmitAnswer(const QString &text);
     void onCountabilityAnswer(CountabilityAnswer answer);
+    void onPolysemyRated(SpellingResult result);
     void onProceedAfterFeedback();
     void onExitSession();
     void onSkipForeverCurrentWord();
     void onOpenWordBooks();
+    void onChangeBookForTraining(const QString &trainingType);
     void onSelectWordBook(int bookId);
     void onDeleteWordBook(int bookId);
     void onDownloadAudio(int bookId);
@@ -343,6 +415,13 @@ private:
     void finishSession();
     void continueNextGroup();
     QString modeKey(SessionMode mode) const;
+    QString trainingTypeForMode(SessionMode mode) const;
+    QString trainingDisplayName(const QString &trainingType) const;
+    SessionMode reviewModeForTraining(const QString &trainingType) const;
+    SessionMode learningModeForTraining(const QString &trainingType) const;
+    void openWordBooksForTraining(const QString &trainingType);
+    bool ensureActiveBookForTraining(const QString &trainingType, const QString &title);
+    SessionMode modeForDashboardRequest(int modeIndex, bool isReview) const;
 
     QString resultLabel(SpellingResult result) const;
     QString resultColor(SpellingResult result) const;
@@ -354,6 +433,7 @@ private:
     MappingPageWidget *mappingPage_ = nullptr;
     SpellingPageWidget *spellingPage_ = nullptr;
     CountabilityPageWidget *countabilityPage_ = nullptr;
+    PolysemyPageWidget *polysemyPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
     StatisticsPageWidget *statisticsPage_ = nullptr;
     WordBooksPageWidget *wordBooksPage_ = nullptr;
@@ -369,6 +449,7 @@ private:
     int currentIndex_ = 0;
     QRect pendingHomeLaunchRect_;
     SessionMode currentMode_ = SessionMode::Learning;
+    QString pendingBookSelectionTrainingType_;
     bool isStudyTrackingActive_ = false;
     QDateTime studyTrackingStartTime_;
     QDateTime lastStudyUserActionTime_;

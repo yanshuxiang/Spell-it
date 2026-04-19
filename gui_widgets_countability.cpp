@@ -544,3 +544,224 @@ void CountabilityPageWidget::showDetailedFeedback(const WordItem &word,
 void CountabilityPageWidget::refreshBasePositions() {
     rootLayout_->activate();
 }
+
+PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(28, 20, 28, 30);
+    root->setSpacing(10);
+
+    auto *header = new QHBoxLayout();
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(10);
+
+    exitButton_ = new QPushButton(QStringLiteral("退出"), this);
+    exitButton_->setFixedSize(96, 42);
+    exitButton_->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background: #f3f4f6;"
+        "  color: #0f172a;"
+        "  border-radius: 12px;"
+        "  font-size: 14px;"
+        "  font-weight: 700;"
+        "}"
+        "QPushButton:hover { background: #e8ebef; }"));
+
+    modeLabel_ = new QLabel(QStringLiteral("熟词生义"), this);
+    modeLabel_->setAlignment(Qt::AlignCenter);
+    modeLabel_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
+
+    progressLabel_ = new QLabel(QStringLiteral("0 / 0"), this);
+    progressLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    progressLabel_->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 700; color: #475569;"));
+
+    header->addWidget(exitButton_, 0, Qt::AlignLeft);
+    header->addStretch(1);
+    header->addWidget(modeLabel_, 0, Qt::AlignCenter);
+    header->addStretch(1);
+    header->addWidget(progressLabel_, 0, Qt::AlignRight);
+
+    wordLabel_ = new QLabel(QStringLiteral("word"), this);
+    wordLabel_->setAlignment(Qt::AlignCenter);
+    wordLabel_->setWordWrap(true);
+    wordLabel_->setStyleSheet(QStringLiteral("font-size: 44px; font-weight: 800; color: #0f172a;"));
+    wordLabel_->setMinimumHeight(120);
+
+    revealButton_ = new QPushButton(QStringLiteral("揭晓释义"), this);
+    revealButton_->setFixedSize(220, 48);
+    revealButton_->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background: #e2e8f0;"
+        "  color: #0f172a;"
+        "  border-radius: 14px;"
+        "  font-size: 15px;"
+        "  font-weight: 700;"
+        "}"
+        "QPushButton:hover { background: #d7dee7; }"));
+
+    meaningLabel_ = new QLabel(this);
+    meaningLabel_->setWordWrap(true);
+    meaningLabel_->setTextFormat(Qt::PlainText);
+    meaningLabel_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    meaningLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 16px;"
+        "font-weight: 600;"
+        "color: #334155;"
+        "line-height: 1.4;"
+        "padding: 12px;"
+        "background: #f8fafc;"
+        "border: 1px solid #e2e8f0;"
+        "border-radius: 12px;"));
+    meaningLabel_->hide();
+
+    masteredButton_ = new QPushButton(QStringLiteral("已掌握"), this);
+    blurryButton_ = new QPushButton(QStringLiteral("模糊"), this);
+    unfamiliarButton_ = new QPushButton(QStringLiteral("不熟悉"), this);
+    const QString answerButtonStyle = QStringLiteral(
+        "QPushButton {"
+        "  background: #f8fafc;"
+        "  border: 1px solid #cbd5e1;"
+        "  border-radius: 16px;"
+        "  font-size: 18px;"
+        "  font-weight: 700;"
+        "  color: #0f172a;"
+        "  min-height: 58px;"
+        "}"
+        "QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
+        "QPushButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
+    masteredButton_->setStyleSheet(answerButtonStyle);
+    blurryButton_->setStyleSheet(answerButtonStyle);
+    unfamiliarButton_->setStyleSheet(answerButtonStyle);
+
+    root->addLayout(header);
+    root->addStretch(2);
+    root->addWidget(wordLabel_);
+    root->addWidget(revealButton_, 0, Qt::AlignHCenter);
+    root->addWidget(meaningLabel_);
+    root->addStretch(3);
+    root->addWidget(masteredButton_);
+    root->addSpacing(10);
+    root->addWidget(blurryButton_);
+    root->addSpacing(10);
+    root->addWidget(unfamiliarButton_);
+
+    connect(exitButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit exitRequested();
+    });
+    connect(revealButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        revealed_ = true;
+        meaningLabel_->show();
+        revealButton_->setEnabled(false);
+        revealButton_->setText(QStringLiteral("已揭晓"));
+        setOptionsEnabled(true);
+        emit revealRequested();
+    });
+    connect(masteredButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit ratingSubmitted(SpellingResult::Mastered);
+    });
+    connect(blurryButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit ratingSubmitted(SpellingResult::Blurry);
+    });
+    connect(unfamiliarButton_, &QPushButton::clicked, this, [this]() {
+        emit userActivity();
+        emit ratingSubmitted(SpellingResult::Unfamiliar);
+    });
+}
+
+QString PolysemyPageWidget::buildPolysemyText(const WordItem &word) const {
+    QStringList lines;
+    if (!word.translation.trimmed().isEmpty()) {
+        lines << QStringLiteral("基础释义：%1").arg(word.translation.trimmed());
+    }
+
+    const QString raw = word.polysemyJson.trimmed();
+    if (raw.isEmpty()) {
+        if (lines.isEmpty()) {
+            lines << QStringLiteral("暂无熟词生义数据");
+        }
+        return lines.join(QChar('\n'));
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        lines << QStringLiteral("生义数据：%1").arg(raw.left(300));
+        return lines.join(QChar('\n'));
+    }
+
+    auto appendSense = [&lines](const QJsonObject &senseObj) {
+        const QString def = senseObj.value(QStringLiteral("definition")).toString().trimmed();
+        const QString meaning = senseObj.value(QStringLiteral("meaning")).toString().trimmed();
+        const QString note = senseObj.value(QStringLiteral("note")).toString().trimmed();
+        const QString example = senseObj.value(QStringLiteral("example")).toString().trimmed();
+
+        QString line = def;
+        if (line.isEmpty()) {
+            line = meaning;
+        }
+        if (!note.isEmpty()) {
+            if (!line.isEmpty()) {
+                line += QStringLiteral("；");
+            }
+            line += note;
+        }
+        if (!line.isEmpty()) {
+            lines << QStringLiteral("• %1").arg(line);
+        }
+        if (!example.isEmpty()) {
+            lines << QStringLiteral("  例：%1").arg(example);
+        }
+    };
+
+    if (doc.isArray()) {
+        const QJsonArray arr = doc.array();
+        for (const QJsonValue &value : arr) {
+            if (value.isObject()) {
+                appendSense(value.toObject());
+            }
+        }
+    } else if (doc.isObject()) {
+        const QJsonObject rootObj = doc.object();
+        const QJsonArray senses = rootObj.value(QStringLiteral("senses")).toArray();
+        if (!senses.isEmpty()) {
+            for (const QJsonValue &value : senses) {
+                if (value.isObject()) {
+                    appendSense(value.toObject());
+                }
+            }
+        } else {
+            appendSense(rootObj);
+        }
+    }
+
+    if (lines.isEmpty()) {
+        lines << QStringLiteral("暂无可展示的熟词生义内容");
+    }
+    return lines.join(QChar('\n'));
+}
+
+void PolysemyPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
+    modeLabel_->setText(isReviewMode ? QStringLiteral("熟词生义复习") : QStringLiteral("熟词生义学习"));
+    progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(qMax(1, totalCount)));
+    wordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
+    meaningLabel_->setText(buildPolysemyText(word));
+    resetRevealState();
+    setOptionsEnabled(false);
+}
+
+void PolysemyPageWidget::setOptionsEnabled(bool enabled) {
+    masteredButton_->setEnabled(enabled);
+    blurryButton_->setEnabled(enabled);
+    unfamiliarButton_->setEnabled(enabled);
+}
+
+void PolysemyPageWidget::resetRevealState() {
+    revealed_ = false;
+    meaningLabel_->hide();
+    revealButton_->setEnabled(true);
+    revealButton_->setText(QStringLiteral("揭晓释义"));
+}

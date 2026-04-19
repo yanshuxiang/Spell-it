@@ -15,6 +15,39 @@ namespace {
 constexpr const char *kDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
 constexpr const char *kTrainingTypeSpelling = "spelling";
 constexpr const char *kTrainingTypeCountability = "countability";
+constexpr const char *kTrainingTypePolysemy = "polysemy";
+constexpr const char *kSettingCsvPromptHandled = "csv_prompt_handled";
+constexpr const char *kDefaultTrainingTypes[] = {
+    kTrainingTypeSpelling,
+    kTrainingTypeCountability,
+    kTrainingTypePolysemy,
+};
+
+bool isKnownTrainingType(const QString &trainingType) {
+    const QString type = trainingType.trimmed().toLower();
+    return type == QString::fromLatin1(kTrainingTypeSpelling)
+        || type == QString::fromLatin1(kTrainingTypeCountability)
+        || type == QString::fromLatin1(kTrainingTypePolysemy);
+}
+
+bool isCountabilityLabelValid(const QString &label) {
+    const QString normalized = label.trimmed().toUpper();
+    return normalized == QStringLiteral("C")
+        || normalized == QStringLiteral("U")
+        || normalized == QStringLiteral("B");
+}
+
+QString learningEligibilityClauseForType(const QString &trainingType) {
+    if (trainingType == QString::fromLatin1(kTrainingTypeCountability)) {
+        return QStringLiteral(
+            " AND upper(trim(COALESCE(w.countability_label, ''))) IN ('C', 'U', 'B') ");
+    }
+    if (trainingType == QString::fromLatin1(kTrainingTypePolysemy)) {
+        return QStringLiteral(
+            " AND length(trim(COALESCE(w.polysemy_json, ''))) > 0 ");
+    }
+    return QString();
+}
 
 QVector<int> reviewLadder() {
     return {1, 2, 4, 7, 15, 30};
@@ -74,6 +107,9 @@ WordItem readWordFromQuery(const QSqlQuery &query) {
     }
     if (query.record().indexOf("countability_notes") >= 0) {
         item.countabilityNotes = query.value("countability_notes").toString().trimmed();
+    }
+    if (query.record().indexOf("polysemy_json") >= 0) {
+        item.polysemyJson = query.value("polysemy_json").toString().trimmed();
     }
     item.easeFactor = query.value("ease_factor").toDouble();
     item.interval = query.value("interval").toInt();
@@ -167,6 +203,7 @@ bool DatabaseManager::initialize() {
         "countability_label TEXT,"
         "countability_plural TEXT,"
         "countability_notes TEXT,"
+        "polysemy_json TEXT,"
         "ease_factor REAL DEFAULT 2.5,"
         "interval INTEGER DEFAULT 0,"
         "next_review TEXT,"
@@ -207,6 +244,7 @@ bool DatabaseManager::initialize() {
     bool hasCountabilityLabelColumn = false;
     bool hasCountabilityPluralColumn = false;
     bool hasCountabilityNotesColumn = false;
+    bool hasPolysemyJsonColumn = false;
     QSqlQuery tableInfo(database());
     if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
         lastError_ = tableInfo.lastError().text();
@@ -230,6 +268,9 @@ bool DatabaseManager::initialize() {
         }
         if (tableInfo.value(1).toString() == QStringLiteral("countability_notes")) {
             hasCountabilityNotesColumn = true;
+        }
+        if (tableInfo.value(1).toString() == QStringLiteral("polysemy_json")) {
+            hasPolysemyJsonColumn = true;
         }
     }
 
@@ -269,6 +310,12 @@ bool DatabaseManager::initialize() {
             return false;
         }
     }
+    if (!hasPolysemyJsonColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE words ADD COLUMN polysemy_json TEXT"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
     // 确保至少有一个活跃词书（在多词书场景下由用户切换）
     if (!query.exec(QStringLiteral(
             "UPDATE word_books "
@@ -277,7 +324,12 @@ bool DatabaseManager::initialize() {
             "AND NOT EXISTS (SELECT 1 FROM word_books WHERE is_active = 1)"))) {
         lastError_ = query.lastError().text();
         return false;
-    }    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_skip_forever ON words(skip_forever)"))) {
+    }
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_skip_forever ON words(skip_forever)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_polysemy ON words(polysemy_json)"))) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -387,6 +439,69 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    const QString createTrainingConfigsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS training_configs ("
+        "training_type TEXT PRIMARY KEY,"
+        "active_book_id INTEGER,"
+        "last_card_index INTEGER DEFAULT 0,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createTrainingConfigsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createAppSettingsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS app_settings ("
+        "setting_key TEXT PRIMARY KEY,"
+        "setting_value TEXT,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createAppSettingsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    QSqlQuery seedTraining(database());
+    seedTraining.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO training_configs(training_type, active_book_id, last_card_index, updated_at) "
+        "VALUES(?, NULL, 0, datetime('now','localtime'))"));
+    for (const char *trainingType : kDefaultTrainingTypes) {
+        seedTraining.bindValue(0, QString::fromLatin1(trainingType));
+        if (!seedTraining.exec()) {
+            lastError_ = seedTraining.lastError().text();
+            return false;
+        }
+    }
+
+    int legacyActiveBookId = -1;
+    QSqlQuery legacyActiveQuery(database());
+    if (legacyActiveQuery.exec(QStringLiteral(
+            "SELECT id FROM word_books WHERE is_active = 1 ORDER BY id ASC LIMIT 1"))
+        && legacyActiveQuery.next()) {
+        legacyActiveBookId = legacyActiveQuery.value(0).toInt();
+    }
+    if (legacyActiveBookId <= 0) {
+        QSqlQuery fallbackBookQuery(database());
+        if (fallbackBookQuery.exec(QStringLiteral("SELECT id FROM word_books ORDER BY id ASC LIMIT 1"))
+            && fallbackBookQuery.next()) {
+            legacyActiveBookId = fallbackBookQuery.value(0).toInt();
+        }
+    }
+    if (legacyActiveBookId > 0) {
+        QSqlQuery bindSpelling(database());
+        bindSpelling.prepare(QStringLiteral(
+            "UPDATE training_configs "
+            "SET active_book_id = ?, updated_at = datetime('now','localtime') "
+            "WHERE training_type = ? AND active_book_id IS NULL"));
+        bindSpelling.bindValue(0, legacyActiveBookId);
+        bindSpelling.bindValue(1, QString::fromLatin1(kTrainingTypeSpelling));
+        if (!bindSpelling.exec()) {
+            lastError_ = bindSpelling.lastError().text();
+            return false;
+        }
+    }
+
     // 兼容旧库：把既有拼写调度回填到训练进度表（spelling）。
     QSqlQuery migrateSpellingProgress(database());
     migrateSpellingProgress.prepare(QStringLiteral(
@@ -456,6 +571,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
                                     int phoneticColumn,
                                     int countabilityColumn,
                                     int pluralColumn,
+                                    int polysemyColumn,
                                     int notesColumn,
                                     int &importedCount) {
     importedCount = 0;
@@ -509,17 +625,21 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         bookName = baseName.left(keepCount) + suffixText;
     }
 
-    QSqlQuery updateActiveQuery(db);
-    if (!updateActiveQuery.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
+    int existingBookCount = 0;
+    QSqlQuery countBooksQuery(db);
+    if (!countBooksQuery.exec(QStringLiteral("SELECT COUNT(*) FROM word_books")) || !countBooksQuery.next()) {
         db.rollback();
-        lastError_ = updateActiveQuery.lastError().text();
+        lastError_ = countBooksQuery.lastError().text();
         return false;
     }
+    existingBookCount = countBooksQuery.value(0).toInt();
+    const int shouldActive = existingBookCount <= 0 ? 1 : 0;
 
     QSqlQuery createBookQuery(db);
     createBookQuery.prepare(QStringLiteral(
-        "INSERT INTO word_books(name, is_active, created_at) VALUES(?, 1, datetime('now','localtime'))"));
+        "INSERT INTO word_books(name, is_active, created_at) VALUES(?, ?, datetime('now','localtime'))"));
     createBookQuery.bindValue(0, bookName);
+    createBookQuery.bindValue(1, shouldActive);
     if (!createBookQuery.exec()) {
         db.rollback();
         lastError_ = createBookQuery.lastError().text();
@@ -533,8 +653,18 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     QSqlQuery insertQuery(db);
     insertQuery.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO words (word, translation, phonetic, "
-        "countability_label, countability_plural, countability_notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)"));
+        "countability_label, countability_plural, countability_notes, polysemy_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)"));
+
+    QSqlQuery updateExistingWordQuery(db);
+    updateExistingWordQuery.prepare(QStringLiteral(
+        "UPDATE words SET "
+        "phonetic = CASE WHEN length(trim(COALESCE(phonetic, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE phonetic END, "
+        "countability_label = CASE WHEN length(trim(COALESCE(countability_label, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_label END, "
+        "countability_plural = CASE WHEN length(trim(COALESCE(countability_plural, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_plural END, "
+        "countability_notes = CASE WHEN length(trim(COALESCE(countability_notes, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_notes END, "
+        "polysemy_json = CASE WHEN length(trim(COALESCE(polysemy_json, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE polysemy_json END "
+        "WHERE id = ?"));
 
     QSqlQuery linkWordQuery(db);
     linkWordQuery.prepare(QStringLiteral(
@@ -592,12 +722,18 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
             countabilityNotes = columns[notesColumn].trimmed();
         }
 
+        QString polysemyJson;
+        if (polysemyColumn >= 0 && polysemyColumn < columns.size()) {
+            polysemyJson = columns[polysemyColumn].trimmed();
+        }
+
         insertQuery.bindValue(0, word);
         insertQuery.bindValue(1, translation);
         insertQuery.bindValue(2, phonetic);
         insertQuery.bindValue(3, countabilityLabel);
         insertQuery.bindValue(4, countabilityPlural);
         insertQuery.bindValue(5, countabilityNotes);
+        insertQuery.bindValue(6, polysemyJson);
 
         if (!insertQuery.exec()) {
             db.rollback();
@@ -616,6 +752,25 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         }
 
         if (wordId > 0) {
+            if (insertQuery.numRowsAffected() == 0) {
+                updateExistingWordQuery.bindValue(0, phonetic);
+                updateExistingWordQuery.bindValue(1, phonetic);
+                updateExistingWordQuery.bindValue(2, countabilityLabel);
+                updateExistingWordQuery.bindValue(3, countabilityLabel);
+                updateExistingWordQuery.bindValue(4, countabilityPlural);
+                updateExistingWordQuery.bindValue(5, countabilityPlural);
+                updateExistingWordQuery.bindValue(6, countabilityNotes);
+                updateExistingWordQuery.bindValue(7, countabilityNotes);
+                updateExistingWordQuery.bindValue(8, polysemyJson);
+                updateExistingWordQuery.bindValue(9, polysemyJson);
+                updateExistingWordQuery.bindValue(10, wordId);
+                if (!updateExistingWordQuery.exec()) {
+                    db.rollback();
+                    lastError_ = updateExistingWordQuery.lastError().text();
+                    return false;
+                }
+            }
+
             linkWordQuery.bindValue(0, bookId);
             linkWordQuery.bindValue(1, wordId);
             if (!linkWordQuery.exec()) {
@@ -625,6 +780,19 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
             }
             ++importedCount;
         }
+    }
+
+    QSqlQuery bindDefaultQuery(db);
+    bindDefaultQuery.prepare(QStringLiteral(
+        "UPDATE training_configs "
+        "SET active_book_id = ?, updated_at = datetime('now','localtime') "
+        "WHERE training_type = ? AND active_book_id IS NULL"));
+    bindDefaultQuery.bindValue(0, bookId);
+    bindDefaultQuery.bindValue(1, QString::fromLatin1(kTrainingTypeSpelling));
+    if (!bindDefaultQuery.exec()) {
+        db.rollback();
+        lastError_ = bindDefaultQuery.lastError().text();
+        return false;
     }
 
     if (!db.commit()) {
@@ -646,18 +814,13 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
     if (!query.exec(QStringLiteral(
             "SELECT b.id, b.name, b.is_active, "
             "COUNT(bw.word_id) AS word_count, "
-            "SUM(CASE "
-            "      WHEN w.id IS NULL THEN 0 "
-            "      WHEN w.skip_forever = 1 "
-            "        OR w.status != 0 "
-            "        OR w.next_review IS NOT NULL "
-            "        OR COALESCE(ws.attempt_count, 0) > 0 "
-            "      THEN 1 ELSE 0 "
-            "    END) AS learned_count "
+            "SUM(CASE WHEN COALESCE(tps.correct_count, 0) > 0 THEN 1 ELSE 0 END) AS learned_count, "
+            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'spelling' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_spelling, "
+            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'countability' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_countability, "
+            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'polysemy' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_polysemy "
             "FROM word_books b "
             "LEFT JOIN book_words bw ON bw.book_id = b.id "
-            "LEFT JOIN words w ON w.id = bw.word_id "
-            "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
+            "LEFT JOIN training_progress tps ON tps.word_id = bw.word_id AND tps.training_type = 'spelling' "
             "GROUP BY b.id, b.name, b.is_active "
             "ORDER BY b.is_active DESC, b.id ASC"))) {
         lastError_ = query.lastError().text();
@@ -671,6 +834,9 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
         item.isActive = query.value(2).toInt() == 1;
         item.wordCount = query.value(3).toInt();
         item.learnedCount = query.value(4).toInt();
+        item.boundSpelling = query.value(5).toInt() == 1;
+        item.boundCountability = query.value(6).toInt() == 1;
+        item.boundPolysemy = query.value(7).toInt() == 1;
         books.push_back(item);
     }
 
@@ -678,46 +844,23 @@ QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
 }
 
 bool DatabaseManager::setActiveWordBook(int bookId) {
+    if (!setActiveBookIdForTraining(QString::fromLatin1(kTrainingTypeSpelling), bookId)) {
+        return false;
+    }
     if (!ensureDatabaseOpen()) {
         return false;
     }
 
-    QSqlDatabase db = database();
-    if (!db.transaction()) {
-        lastError_ = db.lastError().text();
-        return false;
-    }
-
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE id = ?"));
-    query.bindValue(0, bookId);
-    if (!query.exec() || !query.next()) {
-        db.rollback();
-        lastError_ = query.lastError().text();
-        return false;
-    }
-    if (query.value(0).toInt() <= 0) {
-        db.rollback();
-        lastError_ = QStringLiteral("词书不存在");
-        return false;
-    }
-
+    // 兼容旧逻辑：保留 word_books.is_active 作为“最近一次拼写绑定”的镜像。
+    QSqlQuery query(database());
     if (!query.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
-        db.rollback();
         lastError_ = query.lastError().text();
         return false;
     }
-
     query.prepare(QStringLiteral("UPDATE word_books SET is_active = 1 WHERE id = ?"));
     query.bindValue(0, bookId);
     if (!query.exec()) {
-        db.rollback();
         lastError_ = query.lastError().text();
-        return false;
-    }
-
-    if (!db.commit()) {
-        lastError_ = db.lastError().text();
         return false;
     }
     return true;
@@ -793,6 +936,17 @@ bool DatabaseManager::deleteWordBook(int bookId) {
         return false;
     }
 
+    query.prepare(QStringLiteral(
+        "UPDATE training_configs "
+        "SET active_book_id = NULL, updated_at = datetime('now','localtime') "
+        "WHERE active_book_id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     int fallbackActiveId = -1;
     if (!query.exec(QStringLiteral("SELECT id FROM word_books WHERE is_active = 1 ORDER BY id ASC LIMIT 1"))) {
         db.rollback();
@@ -835,52 +989,345 @@ bool DatabaseManager::deleteWordBook(int bookId) {
 }
 
 int DatabaseManager::activeWordBookId() const {
-    return activeWordBookIdInternal();
+    return activeBookIdForTraining(QString::fromLatin1(kTrainingTypeSpelling));
 }
 
-int DatabaseManager::unlearnedCount() const {
+bool DatabaseManager::isValidTrainingType(const QString &trainingType) const {
+    return isKnownTrainingType(trainingType);
+}
+
+bool DatabaseManager::upsertSetting(const QString &key, const QString &value) {
     if (!ensureDatabaseOpen()) {
-        return 0;
+        return false;
+    }
+    if (key.trimmed().isEmpty()) {
+        lastError_ = QStringLiteral("设置键不能为空");
+        return false;
     }
 
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId <= 0) {
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO app_settings(setting_key, setting_value, updated_at) "
+        "VALUES(?, ?, datetime('now','localtime')) "
+        "ON CONFLICT(setting_key) DO UPDATE SET "
+        "setting_value = excluded.setting_value, "
+        "updated_at = excluded.updated_at"));
+    query.bindValue(0, key.trimmed());
+    query.bindValue(1, value);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QString DatabaseManager::settingValue(const QString &key, const QString &defaultValue) const {
+    if (!ensureDatabaseOpen()) {
+        return defaultValue;
+    }
+    if (key.trimmed().isEmpty()) {
+        return defaultValue;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("SELECT setting_value FROM app_settings WHERE setting_key = ?"));
+    query.bindValue(0, key.trimmed());
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return defaultValue;
+    }
+    if (!query.next()) {
+        return defaultValue;
+    }
+    return query.value(0).toString();
+}
+
+int DatabaseManager::activeBookIdForTraining(const QString &trainingType) const {
+    if (!ensureDatabaseOpen()) {
+        return -1;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        lastError_ = QStringLiteral("不支持的训练类型：%1").arg(trainingType);
+        return -1;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT active_book_id "
+        "FROM training_configs "
+        "WHERE training_type = ?"));
+    query.bindValue(0, type);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return -1;
+    }
+    if (!query.next() || query.value(0).isNull()) {
+        return -1;
+    }
+    return query.value(0).toInt();
+}
+
+QString DatabaseManager::activeBookNameForTraining(const QString &trainingType) const {
+    const int bookId = activeBookIdForTraining(trainingType);
+    if (bookId <= 0) {
+        return QString();
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("SELECT name FROM word_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return QString();
+    }
+    if (!query.next()) {
+        return QString();
+    }
+    return query.value(0).toString();
+}
+
+bool DatabaseManager::setActiveBookIdForTraining(const QString &trainingType, int bookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        lastError_ = QStringLiteral("不支持的训练类型：%1").arg(trainingType);
+        return false;
+    }
+    if (bookId > 0) {
+        QSqlQuery verify(database());
+        verify.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE id = ?"));
+        verify.bindValue(0, bookId);
+        if (!verify.exec() || !verify.next()) {
+            lastError_ = verify.lastError().text();
+            return false;
+        }
+        if (verify.value(0).toInt() <= 0) {
+            lastError_ = QStringLiteral("词书不存在");
+            return false;
+        }
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "INSERT INTO training_configs(training_type, active_book_id, last_card_index, updated_at) "
+        "VALUES(?, ?, 0, datetime('now','localtime')) "
+        "ON CONFLICT(training_type) DO UPDATE SET "
+        "active_book_id = excluded.active_book_id, "
+        "updated_at = excluded.updated_at"));
+    query.bindValue(0, type);
+    if (bookId > 0) {
+        query.bindValue(1, bookId);
+    } else {
+        query.bindValue(1, QVariant());
+    }
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (type == QString::fromLatin1(kTrainingTypeSpelling)) {
+        if (!query.exec(QStringLiteral("UPDATE word_books SET is_active = 0"))) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        if (bookId > 0) {
+            query.prepare(QStringLiteral("UPDATE word_books SET is_active = 1 WHERE id = ?"));
+            query.bindValue(0, bookId);
+            if (!query.exec()) {
+                db.rollback();
+                lastError_ = query.lastError().text();
+                return false;
+            }
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+int DatabaseManager::lastDashboardCardIndex() const {
+    if (!ensureDatabaseOpen()) {
         return 0;
     }
 
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
+        "SELECT last_card_index "
+        "FROM training_configs "
+        "WHERE training_type = ?"));
+    query.bindValue(0, QString::fromLatin1(kTrainingTypeSpelling));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return 0;
+    }
+    if (!query.next()) {
+        return 0;
+    }
+    return qMax(0, query.value(0).toInt());
+}
+
+bool DatabaseManager::setLastDashboardCardIndex(int index) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    const int safeIndex = qMax(0, index);
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "UPDATE training_configs "
+        "SET last_card_index = ?, updated_at = datetime('now','localtime') "
+        "WHERE training_type IN (?, ?, ?)"));
+    query.bindValue(0, safeIndex);
+    query.bindValue(1, QString::fromLatin1(kTrainingTypeSpelling));
+    query.bindValue(2, QString::fromLatin1(kTrainingTypeCountability));
+    query.bindValue(3, QString::fromLatin1(kTrainingTypePolysemy));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::isCsvPromptHandled() const {
+    return settingValue(QString::fromLatin1(kSettingCsvPromptHandled), QStringLiteral("0")) == QStringLiteral("1");
+}
+
+bool DatabaseManager::markCsvPromptHandled() {
+    return upsertSetting(QString::fromLatin1(kSettingCsvPromptHandled), QStringLiteral("1"));
+}
+
+int DatabaseManager::totalWordCountForTraining(const QString &trainingType) const {
+    if (!ensureDatabaseOpen()) {
+        return 0;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return 0;
+    }
+
+    const int activeBookId = activeBookIdForTraining(type);
+    if (activeBookId <= 0) {
+        return 0;
+    }
+
+    QString sql = QStringLiteral(
         "SELECT COUNT(*) "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
-        "LEFT JOIN training_progress tp "
-        "  ON tp.word_id = w.id AND tp.training_type = ? "
-        "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
+        "WHERE bw.book_id = ?");
+    sql += learningEligibilityClauseForType(type);
+
+    QSqlQuery query(database());
+    query.prepare(sql);
+    query.bindValue(0, activeBookId);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return 0;
+    }
+    if (!query.next()) {
+        return 0;
+    }
+    return query.value(0).toInt();
+}
+
+int DatabaseManager::masteredWordCountForTraining(const QString &trainingType) const {
+    if (!ensureDatabaseOpen()) {
+        return 0;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return 0;
+    }
+
+    const int activeBookId = activeBookIdForTraining(type);
+    if (activeBookId <= 0) {
+        return 0;
+    }
+
+    QString sql = QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "JOIN training_progress tp ON tp.word_id = w.id AND tp.training_type = ? "
         "WHERE bw.book_id = ? "
-        "  AND w.skip_forever = 0 "
-        "  AND COALESCE(tp.status, 0) = 0 "
-        "  AND tp.next_review IS NULL "
-        "  AND COALESCE(ws.attempt_count, 0) = 0"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeSpelling));
+        "  AND COALESCE(tp.status, 0) = 2");
+    sql += learningEligibilityClauseForType(type);
+
+    QSqlQuery query(database());
+    query.prepare(sql);
+    query.bindValue(0, type);
     query.bindValue(1, activeBookId);
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return 0;
     }
-
-    if (query.next()) {
-        return query.value(0).toInt();
+    if (!query.next()) {
+        return 0;
     }
-    return 0;
+    return query.value(0).toInt();
 }
 
-int DatabaseManager::dueReviewCount(const QDateTime &now) const {
+int DatabaseManager::unlearnedCountForTraining(const QString &trainingType) const {
     if (!ensureDatabaseOpen()) {
         return 0;
     }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return 0;
+    }
+
+    const int activeBookId = activeBookIdForTraining(type);
+    if (activeBookId <= 0) {
+        return 0;
+    }
+
+    QString sql = QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM book_words bw "
+        "JOIN words w ON w.id = bw.word_id "
+        "LEFT JOIN training_progress tp ON tp.word_id = w.id AND tp.training_type = ? "
+        "WHERE bw.book_id = ? "
+        "  AND w.skip_forever = 0 "
+        "  AND (tp.id IS NULL OR COALESCE(tp.status, 0) = 0)");
+    sql += learningEligibilityClauseForType(type);
 
     QSqlQuery query(database());
-    query.prepare(QStringLiteral(
+    query.prepare(sql);
+    query.bindValue(0, type);
+    query.bindValue(1, activeBookId);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return 0;
+    }
+    if (!query.next()) {
+        return 0;
+    }
+    return query.value(0).toInt();
+}
+
+int DatabaseManager::dueReviewCountForTraining(const QString &trainingType, const QDateTime &now) const {
+    if (!ensureDatabaseOpen()) {
+        return 0;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return 0;
+    }
+
+    QString sql = QStringLiteral(
         "SELECT COUNT(*) "
         "FROM training_progress tp "
         "JOIN words w ON w.id = tp.word_id "
@@ -888,35 +1335,40 @@ int DatabaseManager::dueReviewCount(const QDateTime &now) const {
         "  AND tp.status != 0 "
         "  AND w.skip_forever = 0 "
         "  AND tp.next_review IS NOT NULL "
-        "  AND date(tp.next_review) <= date(?)"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeSpelling));
-    query.bindValue(1, now.toString(kDateTimeFormat));
+        "  AND date(tp.next_review) <= date(?)");
+    sql += learningEligibilityClauseForType(type);
 
+    QSqlQuery query(database());
+    query.prepare(sql);
+    query.bindValue(0, type);
+    query.bindValue(1, now.toString(kDateTimeFormat));
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return 0;
     }
-
-    if (query.next()) {
-        return query.value(0).toInt();
+    if (!query.next()) {
+        return 0;
     }
-    return 0;
+    return query.value(0).toInt();
 }
 
-QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
+QVector<WordItem> DatabaseManager::fetchLearningBatchForTraining(const QString &trainingType, int limit) const {
     QVector<WordItem> items;
     if (!ensureDatabaseOpen()) {
         return items;
     }
-
-    const int activeBookId = activeWordBookIdInternal();
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return items;
+    }
+    const int activeBookId = activeBookIdForTraining(type);
     if (activeBookId <= 0) {
         return items;
     }
 
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
+    QString sql = QStringLiteral(
         "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, w.polysemy_json, "
         "       COALESCE(tp.ease_factor, 2.5) AS ease_factor, "
         "       COALESCE(tp.interval, 0) AS interval, "
         "       tp.next_review AS next_review, "
@@ -926,203 +1378,102 @@ QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
         "JOIN words w ON w.id = bw.word_id "
         "LEFT JOIN training_progress tp "
         "  ON tp.word_id = w.id AND tp.training_type = ? "
-        "LEFT JOIN word_spelling_stats ws ON ws.word_id = w.id "
         "WHERE bw.book_id = ? "
         "  AND w.skip_forever = 0 "
-        "  AND COALESCE(tp.status, 0) = 0 "
-        "  AND tp.next_review IS NULL "
-        "  AND COALESCE(ws.attempt_count, 0) = 0 "
-        "ORDER BY w.id "
-        "LIMIT ?"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeSpelling));
+        "  AND (tp.id IS NULL OR COALESCE(tp.status, 0) = 0)");
+    sql += learningEligibilityClauseForType(type);
+    sql += QStringLiteral(" ORDER BY w.id LIMIT ?");
+
+    QSqlQuery query(database());
+    query.prepare(sql);
+    query.bindValue(0, type);
     query.bindValue(1, activeBookId);
     query.bindValue(2, qMax(1, limit));
-
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return items;
     }
-
     while (query.next()) {
         items.push_back(readWordFromQuery(query));
     }
-
     return items;
+}
+
+QVector<WordItem> DatabaseManager::fetchReviewBatchForTraining(const QString &trainingType,
+                                                               const QDateTime &now,
+                                                               int limit) const {
+    QVector<WordItem> items;
+    if (!ensureDatabaseOpen()) {
+        return items;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        return items;
+    }
+
+    QString sql = QStringLiteral(
+        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, w.polysemy_json, "
+        "       tp.ease_factor AS ease_factor, "
+        "       tp.interval AS interval, "
+        "       tp.next_review AS next_review, "
+        "       tp.status AS status, "
+        "       w.skip_forever "
+        "FROM training_progress tp "
+        "JOIN words w ON w.id = tp.word_id "
+        "WHERE tp.training_type = ? "
+        "  AND tp.status != 0 "
+        "  AND w.skip_forever = 0 "
+        "  AND tp.next_review IS NOT NULL "
+        "  AND date(tp.next_review) <= date(?)");
+    sql += learningEligibilityClauseForType(type);
+    sql += QStringLiteral(" ORDER BY tp.next_review ASC, w.id ASC LIMIT ?");
+
+    QSqlQuery query(database());
+    query.prepare(sql);
+    query.bindValue(0, type);
+    query.bindValue(1, now.toString(kDateTimeFormat));
+    query.bindValue(2, qMax(1, limit));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return items;
+    }
+    while (query.next()) {
+        items.push_back(readWordFromQuery(query));
+    }
+    return items;
+}
+
+int DatabaseManager::unlearnedCount() const {
+    return unlearnedCountForTraining(QString::fromLatin1(kTrainingTypeSpelling));
+}
+
+int DatabaseManager::dueReviewCount(const QDateTime &now) const {
+    return dueReviewCountForTraining(QString::fromLatin1(kTrainingTypeSpelling), now);
+}
+
+QVector<WordItem> DatabaseManager::fetchLearningBatch(int limit) const {
+    return fetchLearningBatchForTraining(QString::fromLatin1(kTrainingTypeSpelling), limit);
 }
 
 QVector<WordItem> DatabaseManager::fetchReviewBatch(const QDateTime &now, int limit) const {
-    QVector<WordItem> items;
-    if (!ensureDatabaseOpen()) {
-        return items;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
-        "       tp.ease_factor AS ease_factor, tp.interval AS interval, tp.next_review AS next_review, tp.status AS status, "
-        "       w.skip_forever "
-        "FROM training_progress tp "
-        "JOIN words w ON w.id = tp.word_id "
-        "WHERE tp.training_type = ? "
-        "  AND tp.status != 0 "
-        "  AND w.skip_forever = 0 "
-        "  AND tp.next_review IS NOT NULL "
-        "  AND date(tp.next_review) <= date(?) "
-        "ORDER BY tp.next_review ASC, w.id ASC LIMIT ?"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeSpelling));
-    query.bindValue(1, now.toString(kDateTimeFormat));
-    query.bindValue(2, qMax(1, limit));
-
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return items;
-    }
-
-    while (query.next()) {
-        items.push_back(readWordFromQuery(query));
-    }
-
-    return items;
+    return fetchReviewBatchForTraining(QString::fromLatin1(kTrainingTypeSpelling), now, limit);
 }
 
 int DatabaseManager::countabilityUnlearnedCount() const {
-    if (!ensureDatabaseOpen()) {
-        return 0;
-    }
-
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId <= 0) {
-        return 0;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT COUNT(*) "
-        "FROM book_words bw "
-        "JOIN words w ON w.id = bw.word_id "
-        "LEFT JOIN training_progress tp "
-        "  ON tp.word_id = w.id AND tp.training_type = ? "
-        "WHERE bw.book_id = ? "
-        "  AND w.skip_forever = 0 "
-        "  AND tp.id IS NULL "
-        "  AND upper(trim(COALESCE(w.countability_label, ''))) IN ('C', 'U', 'B')"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeCountability));
-    query.bindValue(1, activeBookId);
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return 0;
-    }
-
-    if (query.next()) {
-        return query.value(0).toInt();
-    }
-    return 0;
+    return unlearnedCountForTraining(QString::fromLatin1(kTrainingTypeCountability));
 }
 
 int DatabaseManager::countabilityDueReviewCount(const QDateTime &now) const {
-    if (!ensureDatabaseOpen()) {
-        return 0;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT COUNT(*) "
-        "FROM training_progress tp "
-        "JOIN words w ON w.id = tp.word_id "
-        "WHERE tp.training_type = ? "
-        "  AND tp.status != 0 "
-        "  AND w.skip_forever = 0 "
-        "  AND upper(trim(COALESCE(w.countability_label, ''))) IN ('C', 'U', 'B') "
-        "  AND tp.next_review IS NOT NULL "
-        "  AND date(tp.next_review) <= date(?)"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeCountability));
-    query.bindValue(1, now.toString(kDateTimeFormat));
-
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return 0;
-    }
-
-    if (query.next()) {
-        return query.value(0).toInt();
-    }
-    return 0;
+    return dueReviewCountForTraining(QString::fromLatin1(kTrainingTypeCountability), now);
 }
 
 QVector<WordItem> DatabaseManager::fetchCountabilityLearningBatch(int limit) const {
-    QVector<WordItem> items;
-    if (!ensureDatabaseOpen()) {
-        return items;
-    }
-
-    const int activeBookId = activeWordBookIdInternal();
-    if (activeBookId <= 0) {
-        return items;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
-        "       w.countability_label, w.countability_plural, w.countability_notes, "
-        "       2.5 AS ease_factor, 0 AS interval, NULL AS next_review, 0 AS status, w.skip_forever "
-        "FROM book_words bw "
-        "JOIN words w ON w.id = bw.word_id "
-        "LEFT JOIN training_progress tp "
-        "  ON tp.word_id = w.id AND tp.training_type = ? "
-        "WHERE bw.book_id = ? "
-        "  AND w.skip_forever = 0 "
-        "  AND tp.id IS NULL "
-        "  AND upper(trim(COALESCE(w.countability_label, ''))) IN ('C', 'U', 'B') "
-        "ORDER BY w.id "
-        "LIMIT ?"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeCountability));
-    query.bindValue(1, activeBookId);
-    query.bindValue(2, qMax(1, limit));
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return items;
-    }
-
-    while (query.next()) {
-        items.push_back(readWordFromQuery(query));
-    }
-    return items;
+    return fetchLearningBatchForTraining(QString::fromLatin1(kTrainingTypeCountability), limit);
 }
 
 QVector<WordItem> DatabaseManager::fetchCountabilityReviewBatch(const QDateTime &now, int limit) const {
-    QVector<WordItem> items;
-    if (!ensureDatabaseOpen()) {
-        return items;
-    }
-
-    QSqlQuery query(database());
-    query.prepare(QStringLiteral(
-        "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
-        "       w.countability_label, w.countability_plural, w.countability_notes, "
-        "       tp.ease_factor AS ease_factor, tp.interval AS interval, tp.next_review AS next_review, tp.status AS status, "
-        "       w.skip_forever "
-        "FROM training_progress tp "
-        "JOIN words w ON w.id = tp.word_id "
-        "WHERE tp.training_type = ? "
-        "  AND tp.status != 0 "
-        "  AND w.skip_forever = 0 "
-        "  AND upper(trim(COALESCE(w.countability_label, ''))) IN ('C', 'U', 'B') "
-        "  AND tp.next_review IS NOT NULL "
-        "  AND date(tp.next_review) <= date(?) "
-        "ORDER BY tp.next_review ASC, w.id ASC "
-        "LIMIT ?"));
-    query.bindValue(0, QString::fromLatin1(kTrainingTypeCountability));
-    query.bindValue(1, now.toString(kDateTimeFormat));
-    query.bindValue(2, qMax(1, limit));
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return items;
-    }
-
-    while (query.next()) {
-        items.push_back(readWordFromQuery(query));
-    }
-    return items;
+    return fetchReviewBatchForTraining(QString::fromLatin1(kTrainingTypeCountability), now, limit);
 }
 
 QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
@@ -1142,7 +1493,7 @@ QVector<WordItem> DatabaseManager::fetchWordsForBook(int bookId) const {
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
-        "       w.countability_label, w.countability_plural, w.countability_notes, "
+        "       w.countability_label, w.countability_plural, w.countability_notes, w.polysemy_json, "
         "       w.ease_factor, w.interval, w.next_review, w.status, w.skip_forever "
         "FROM book_words bw "
         "JOIN words w ON w.id = bw.word_id "
@@ -1442,6 +1793,17 @@ bool DatabaseManager::applyCountabilityResult(int wordId,
                                      now);
 }
 
+bool DatabaseManager::applyPolysemyResult(int wordId,
+                                          SpellingResult result,
+                                          bool skipped,
+                                          const QDateTime &now) {
+    return applyTrainingReviewResult(wordId,
+                                     QString::fromLatin1(kTrainingTypePolysemy),
+                                     result,
+                                     skipped,
+                                     now);
+}
+
 bool DatabaseManager::applyTrainingReviewResult(int wordId,
                                                 const QString &trainingType,
                                                 SpellingResult result,
@@ -1454,9 +1816,9 @@ bool DatabaseManager::applyTrainingReviewResult(int wordId,
         lastError_ = QStringLiteral("无效的单词 ID");
         return false;
     }
-    const QString type = trainingType.trimmed();
-    if (type.isEmpty()) {
-        lastError_ = QStringLiteral("训练类型不能为空");
+    const QString type = trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        lastError_ = QStringLiteral("不支持的训练类型：%1").arg(trainingType);
         return false;
     }
 
@@ -1554,7 +1916,8 @@ bool DatabaseManager::applyTrainingReviewResult(int wordId,
         lastError_ = query.lastError().text();
         return false;
     }
-    incrementDailyCount(isLearningRow, isCountability, now.date());    return true;
+    incrementDailyCount(isLearningRow, isCountability, now.date());
+    return true;
 }
 
 bool DatabaseManager::incrementDailyCount(bool isLearning, bool isCountability, const QDate &date) {
@@ -1894,7 +2257,7 @@ bool DatabaseManager::queryWordById(int wordId, WordItem &item) const {
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT id, word, phonetic, translation, part_of_speech, "
-        "       countability_label, countability_plural, countability_notes, "
+        "       countability_label, countability_plural, countability_notes, polysemy_json, "
         "       ease_factor, interval, next_review, status, skip_forever "
         "FROM words WHERE id = ?"));
     query.bindValue(0, wordId);
