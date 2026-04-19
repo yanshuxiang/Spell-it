@@ -1,5 +1,6 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
+#include "app_logger.h"
 
 #include <QComboBox>
 #include <QHeaderView>
@@ -8,7 +9,9 @@
 #include <QListWidget>
 #include <QQmlContext>
 #include <QPushButton>
+#include <QQuickItem>
 #include <QQuickWidget>
+#include <QQuickWindow>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVariantList>
@@ -74,6 +77,8 @@ private:
 
 HomePageWidget::HomePageWidget(QWidget *parent)
     : QWidget(parent) {
+    setStyleSheet(QStringLiteral("background: #e9edf2;"));
+
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
@@ -81,7 +86,10 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     dashboardView_ = new QQuickWidget(this);
     dashboardView_->setResizeMode(QQuickWidget::SizeRootObjectToView);
     dashboardView_->setClearColor(QColor("#e9edf2"));
+    dashboardView_->setStyleSheet(QStringLiteral("background: #e9edf2;"));
     dashboardView_->setAttribute(Qt::WA_AlwaysStackOnTop, false);
+    dashboardView_->setFocusPolicy(Qt::StrongFocus);
+    setFocusPolicy(Qt::StrongFocus);
 
     auto *bridge = new DashboardBridge(this);
     dashboardBridge_ = bridge;
@@ -144,8 +152,18 @@ void HomePageWidget::updateCardModel() {
 
 void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect) {
     if (modeIndex < 0 || modeIndex > 2) {
+        AppLogger::warn(QStringLiteral("Home"),
+                        QStringLiteral("ignore start request, invalid modeIndex=%1").arg(modeIndex));
         return;
     }
+    AppLogger::step(QStringLiteral("Home"),
+                    QStringLiteral("start request, modeIndex=%1, isReview=%2, rect=(%3,%4,%5,%6)")
+                        .arg(modeIndex)
+                        .arg(isReview ? QStringLiteral("true") : QStringLiteral("false"))
+                        .arg(globalRect.x())
+                        .arg(globalRect.y())
+                        .arg(globalRect.width())
+                        .arg(globalRect.height()));
     SessionMode mode = SessionMode::Learning;
     if (modeIndex == 1) {
         mode = isReview ? SessionMode::CountabilityReview : SessionMode::CountabilityLearning;
@@ -195,11 +213,17 @@ void HomePageWidget::handleChangeBookRequest(int modeIndex) {
     } else if (modeIndex == 2) {
         trainingType = QStringLiteral("polysemy");
     }
+    AppLogger::step(QStringLiteral("Home"),
+                    QStringLiteral("change book request, modeIndex=%1, type=%2")
+                        .arg(modeIndex)
+                        .arg(trainingType));
     emit changeBookRequested(trainingType);
 }
 
 void HomePageWidget::handleCurrentIndexChanged(int index) {
     currentCardIndex_ = qMax(0, index);
+    AppLogger::info(QStringLiteral("Home"),
+                    QStringLiteral("dashboard current index changed, index=%1").arg(currentCardIndex_));
     emit dashboardIndexChanged(currentCardIndex_);
 }
 
@@ -222,6 +246,21 @@ QRect HomePageWidget::launchRect(SessionMode mode) const {
 
 int HomePageWidget::currentCardIndex() const {
     return currentCardIndex_;
+}
+
+void HomePageWidget::focusDashboard() {
+    if (dashboardView_ == nullptr) {
+        return;
+    }
+    dashboardView_->setFocus(Qt::OtherFocusReason);
+    if (QQuickWindow *quickWindow = dashboardView_->quickWindow()) {
+        if (QQuickItem *contentItem = quickWindow->contentItem()) {
+            contentItem->forceActiveFocus(Qt::OtherFocusReason);
+        }
+    }
+    if (QObject *rootObject = dashboardView_->rootObject()) {
+        QMetaObject::invokeMethod(rootObject, "recoverInteraction", Qt::DirectConnection);
+    }
 }
 
 MappingPageWidget::MappingPageWidget(QWidget *parent)

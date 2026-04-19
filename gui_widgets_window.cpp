@@ -1,6 +1,7 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
 #include "audio_downloader.h"
+#include "app_logger.h"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -52,6 +53,50 @@ QString countabilityAnswerText(CountabilityAnswer answer) {
         return QStringLiteral("可数且不可数");
     }
     return QStringLiteral("可数");
+}
+
+QString sessionModeName(SessionMode mode) {
+    switch (mode) {
+    case SessionMode::Learning:
+        return QStringLiteral("spelling_learning");
+    case SessionMode::Review:
+        return QStringLiteral("spelling_review");
+    case SessionMode::CountabilityLearning:
+        return QStringLiteral("countability_learning");
+    case SessionMode::CountabilityReview:
+        return QStringLiteral("countability_review");
+    case SessionMode::PolysemyLearning:
+        return QStringLiteral("polysemy_learning");
+    case SessionMode::PolysemyReview:
+        return QStringLiteral("polysemy_review");
+    }
+    return QStringLiteral("unknown");
+}
+
+int dashboardIndexForMode(SessionMode mode) {
+    switch (mode) {
+    case SessionMode::CountabilityLearning:
+    case SessionMode::CountabilityReview:
+        return 1;
+    case SessionMode::PolysemyLearning:
+    case SessionMode::PolysemyReview:
+        return 2;
+    case SessionMode::Learning:
+    case SessionMode::Review:
+    default:
+        return 0;
+    }
+}
+
+int dashboardIndexForTrainingType(const QString &trainingType) {
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QStringLiteral("countability")) {
+        return 1;
+    }
+    if (type == QStringLiteral("polysemy")) {
+        return 2;
+    }
+    return 0;
 }
 
 bool parseCountabilityLabel(const QString &label, CountabilityAnswer &answerOut) {
@@ -132,6 +177,7 @@ private:
 
 VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     : QWidget(parent) {
+    AppLogger::step(QStringLiteral("Window"), QStringLiteral("construct window"));
     setWindowTitle(QStringLiteral("VibeSpeller"));
     resize(540, 960);
     setMinimumSize(405, 720);
@@ -187,6 +233,15 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(stack_, &QStackedWidget::currentChanged, this, [this](int) {
         updateStudyTimeTracking();
+        if (stack_ != nullptr && stack_->currentWidget() == homePage_ && homePage_ != nullptr) {
+            QTimer::singleShot(0, this, [this]() {
+                if (homePage_ == nullptr) {
+                    return;
+                }
+                homePage_->focusDashboard();
+                AppLogger::info(QStringLiteral("Home"), QStringLiteral("dashboard focus restored"));
+            });
+        }
     });
     studyIdleTimer_ = new QTimer(this);
     studyIdleTimer_->setInterval(5000);
@@ -205,11 +260,13 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
+        rememberHomeCardIndex();
         statisticsPage_->setLogs(db_.fetchWeeklyLogs());
         stack_->setCurrentWidget(statisticsPage_);
     });
 
     connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, [this]() {
+        restoreHomeCardIndex(false);
         stack_->setCurrentWidget(homePage_);
     });
 
@@ -225,10 +282,22 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
 
     connect(mappingPage_, &MappingPageWidget::importConfirmed, this,
             [this](int wordCol, int transCol, int phoCol, int countCol, int plurCol, int noteCol, int polyCol) {
+                AppLogger::step(
+                    QStringLiteral("Import"),
+                    QStringLiteral("mapping confirmed word=%1 trans=%2 phonetic=%3 countability=%4 plural=%5 notes=%6 polysemy=%7 csv=%8")
+                        .arg(wordCol)
+                        .arg(transCol)
+                        .arg(phoCol)
+                        .arg(countCol)
+                        .arg(plurCol)
+                        .arg(noteCol)
+                        .arg(polyCol)
+                        .arg(pendingCsvPath_));
                 if (pendingCsvPath_.isEmpty()) {
                     showWarningPrompt(this,
                                       QStringLiteral("导入失败"),
                                       QStringLiteral("没有可导入的 CSV 文件路径。"));
+                    AppLogger::warn(QStringLiteral("Import"), QStringLiteral("mapping confirmed but csv path empty"));
                     return;
                 }
 
@@ -245,6 +314,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
                     showErrorPrompt(this,
                                     QStringLiteral("导入失败"),
                                     QStringLiteral("CSV 导入失败：%1").arg(db_.lastError()));
+                    AppLogger::error(QStringLiteral("Import"),
+                                     QStringLiteral("csv import failed, error=%1").arg(db_.lastError()));
                     return;
                 }
 
@@ -256,6 +327,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
                 pendingCsvPath_.clear();
                 refreshHomeCounts();
                 refreshWordBooks();
+                AppLogger::info(QStringLiteral("Import"),
+                                QStringLiteral("csv import success, imported=%1").arg(importedCount));
                 if (returnToWordBooksAfterImport_) {
                     stack_->setCurrentWidget(wordBooksPage_);
                 } else {
@@ -283,7 +356,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
     connect(summaryPage_, &SummaryPageWidget::nextGroupClicked, this, &VibeSpellerWindow::continueNextGroup);
     connect(wordBooksPage_, &WordBooksPageWidget::backClicked, this, [this]() {
-        refreshHomeCounts();
+        restoreHomeCardIndex(true);
         stack_->setCurrentWidget(homePage_);
     });
     connect(wordBooksPage_, &WordBooksPageWidget::addBookClicked, this, [this]() {
@@ -303,6 +376,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     refreshHomeCounts();
     refreshWordBooks();
     applyRoundedWindowMask();
+    AppLogger::info(QStringLiteral("Window"), QStringLiteral("window initialized"));
 
     // 启动后若词库为空，提示导入 CSV。
     QTimer::singleShot(0, this, &VibeSpellerWindow::requestCsvImportIfNeeded);
@@ -339,20 +413,26 @@ void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
 }
 
 void VibeSpellerWindow::onStartLearning() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=spelling_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Learning);
     if (tryResumeSession(SessionMode::Learning)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=spelling_learning"));
         return;
     }
 
     if (!ensureActiveBookForTraining(QStringLiteral("spelling"), QStringLiteral("拼写学习"))) {
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("start blocked, no active spelling book"));
         return;
     }
 
     const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("spelling"), kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=spelling_learning, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         showInfoPrompt(this,
                        QStringLiteral("暂无学习任务"),
                        QStringLiteral("当前词书没有可学习的新词。"));
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("no learning task, mode=spelling_learning"));
         return;
     }
 
@@ -360,8 +440,10 @@ void VibeSpellerWindow::onStartLearning() {
 }
 
 void VibeSpellerWindow::onStartReview() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=spelling_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Review);
     if (tryResumeSession(SessionMode::Review)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=spelling_review"));
         return;
     }
 
@@ -369,6 +451,8 @@ void VibeSpellerWindow::onStartReview() {
         QStringLiteral("spelling"),
         QDateTime::currentDateTime(),
         kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=spelling_review, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         const int tomorrowCount = db_.dueReviewCountForTraining(
             QStringLiteral("spelling"),
@@ -376,6 +460,8 @@ void VibeSpellerWindow::onStartReview() {
         showInfoPrompt(this,
                        QStringLiteral("暂无复习任务"),
                        QStringLiteral("今天已经复习完，明天需要复习%1个").arg(tomorrowCount));
+        AppLogger::warn(QStringLiteral("Session"),
+                        QStringLiteral("no review task, mode=spelling_review, tomorrow=%1").arg(tomorrowCount));
         return;
     }
 
@@ -383,29 +469,37 @@ void VibeSpellerWindow::onStartReview() {
 }
 
 void VibeSpellerWindow::onStartCountabilityLearning() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=countability_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityLearning);
     if (tryResumeSession(SessionMode::CountabilityLearning)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=countability_learning"));
         return;
     }
 
     if (!ensureActiveBookForTraining(QStringLiteral("countability"), QStringLiteral("可数性辨析"))) {
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("start blocked, no active countability book"));
         return;
     }
 
     const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("countability"),
                                                                        kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=countability_learning, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         showInfoPrompt(this,
                        QStringLiteral("暂无辨析任务"),
                        QStringLiteral("当前词书没有可进行可数性辨析的新词。"));
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("no learning task, mode=countability_learning"));
         return;
     }
     startSession(SessionMode::CountabilityLearning, words, 0);
 }
 
 void VibeSpellerWindow::onStartCountabilityReview() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=countability_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityReview);
     if (tryResumeSession(SessionMode::CountabilityReview)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=countability_review"));
         return;
     }
 
@@ -413,6 +507,8 @@ void VibeSpellerWindow::onStartCountabilityReview() {
         QStringLiteral("countability"),
         QDateTime::currentDateTime(),
         kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=countability_review, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         const int tomorrowCount = db_.dueReviewCountForTraining(
             QStringLiteral("countability"),
@@ -420,35 +516,45 @@ void VibeSpellerWindow::onStartCountabilityReview() {
         showInfoPrompt(this,
                        QStringLiteral("暂无复习任务"),
                        QStringLiteral("今天已经完成可数性复习，明天需要复习%1个").arg(tomorrowCount));
+        AppLogger::warn(QStringLiteral("Session"),
+                        QStringLiteral("no review task, mode=countability_review, tomorrow=%1").arg(tomorrowCount));
         return;
     }
     startSession(SessionMode::CountabilityReview, words, 0);
 }
 
 void VibeSpellerWindow::onStartPolysemyLearning() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=polysemy_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyLearning);
     if (tryResumeSession(SessionMode::PolysemyLearning)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=polysemy_learning"));
         return;
     }
 
     if (!ensureActiveBookForTraining(QStringLiteral("polysemy"), QStringLiteral("熟词生义学习"))) {
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("start blocked, no active polysemy book"));
         return;
     }
 
     const QVector<WordItem> words = db_.fetchLearningBatchForTraining(QStringLiteral("polysemy"),
                                                                        kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=polysemy_learning, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         showInfoPrompt(this,
                        QStringLiteral("暂无学习任务"),
                        QStringLiteral("当前词书没有可进行熟词生义学习的新词。"));
+        AppLogger::warn(QStringLiteral("Session"), QStringLiteral("no learning task, mode=polysemy_learning"));
         return;
     }
     startSession(SessionMode::PolysemyLearning, words, 0);
 }
 
 void VibeSpellerWindow::onStartPolysemyReview() {
+    AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=polysemy_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyReview);
     if (tryResumeSession(SessionMode::PolysemyReview)) {
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("resume hit, mode=polysemy_review"));
         return;
     }
 
@@ -456,6 +562,8 @@ void VibeSpellerWindow::onStartPolysemyReview() {
         QStringLiteral("polysemy"),
         QDateTime::currentDateTime(),
         kSessionBatchSize);
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("fetched words, mode=polysemy_review, count=%1").arg(words.size()));
     if (words.isEmpty()) {
         const int tomorrowCount = db_.dueReviewCountForTraining(
             QStringLiteral("polysemy"),
@@ -463,6 +571,8 @@ void VibeSpellerWindow::onStartPolysemyReview() {
         showInfoPrompt(this,
                        QStringLiteral("暂无复习任务"),
                        QStringLiteral("今天已经完成熟词生义复习，明天需要复习%1个").arg(tomorrowCount));
+        AppLogger::warn(QStringLiteral("Session"),
+                        QStringLiteral("no review task, mode=polysemy_review, tomorrow=%1").arg(tomorrowCount));
         return;
     }
     startSession(SessionMode::PolysemyReview, words, 0);
@@ -810,12 +920,28 @@ void VibeSpellerWindow::onProceedAfterFeedback() {
 }
 
 void VibeSpellerWindow::onExitSession() {
+    AppLogger::step(QStringLiteral("Session"),
+                    QStringLiteral("exit requested, mode=%1, words=%2, index=%3")
+                        .arg(sessionModeName(currentMode_))
+                        .arg(currentWords_.size())
+                        .arg(currentIndex_));
     if (currentWords_.isEmpty() || currentIndex_ < 0 || currentIndex_ >= currentWords_.size()) {
         stack_->setCurrentWidget(homePage_);
+        AppLogger::info(QStringLiteral("Session"), QStringLiteral("exit direct to home (no active word)"));
         return;
     }
 
     persistCurrentSession();
+    const int homeIndex = dashboardIndexForMode(currentMode_);
+    if (!db_.setLastDashboardCardIndex(homeIndex)) {
+        AppLogger::warn(QStringLiteral("Home"),
+                        QStringLiteral("failed to pin dashboard index on exit, index=%1, error=%2")
+                            .arg(homeIndex)
+                            .arg(db_.lastError()));
+    } else {
+        AppLogger::info(QStringLiteral("Home"),
+                        QStringLiteral("pin dashboard index on exit, index=%1").arg(homeIndex));
+    }
     refreshHomeCounts();
     QWidget *sourcePage = spellingPage_;
     if (currentMode_ == SessionMode::CountabilityLearning
@@ -867,23 +993,38 @@ void VibeSpellerWindow::onSkipForeverCurrentWord() {
 void VibeSpellerWindow::onOpenWordBooks() {
     const int index = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
     const SessionMode mode = modeForDashboardRequest(index, false);
+    AppLogger::step(QStringLiteral("BookBinding"),
+                    QStringLiteral("open word books from dashboard, index=%1, mode=%2")
+                        .arg(index)
+                        .arg(sessionModeName(mode)));
     openWordBooksForTraining(trainingTypeForMode(mode));
 }
 
 void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
+    AppLogger::step(QStringLiteral("BookBinding"),
+                    QStringLiteral("change book requested, trainingType=%1").arg(trainingType));
     openWordBooksForTraining(trainingType);
 }
 
 void VibeSpellerWindow::onSelectWordBook(int bookId) {
+    AppLogger::step(QStringLiteral("BookBinding"),
+                    QStringLiteral("select word book requested, bookId=%1").arg(bookId));
     if (bookId <= 0) {
+        AppLogger::warn(QStringLiteral("BookBinding"), QStringLiteral("select ignored, invalid bookId"));
         return;
     }
 
     const QString trainingType = pendingBookSelectionTrainingType_.isEmpty()
                                      ? QStringLiteral("spelling")
                                      : pendingBookSelectionTrainingType_;
+    preservedHomeCardIndex_ = dashboardIndexForTrainingType(trainingType);
+    AppLogger::info(QStringLiteral("BookBinding"),
+                    QStringLiteral("select context, trainingType=%1, currentActive=%2")
+                        .arg(trainingType)
+                        .arg(db_.activeBookIdForTraining(trainingType)));
     if (bookId == db_.activeBookIdForTraining(trainingType)) {
         stack_->setCurrentWidget(homePage_);
+        AppLogger::info(QStringLiteral("BookBinding"), QStringLiteral("select no-op, already active"));
         return;
     }
 
@@ -893,6 +1034,7 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
         QStringLiteral("是否将“%1”切换到新词书？\n当前模式进度会保留，已学习单词仍会继续推送复习。")
             .arg(trainingDisplayName(trainingType)));
     if (!confirmSwitch) {
+        AppLogger::info(QStringLiteral("BookBinding"), QStringLiteral("switch cancelled by user"));
         return;
     }
 
@@ -900,6 +1042,11 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
         showWarningPrompt(this,
                           QStringLiteral("切换失败"),
                           QStringLiteral("切换当前词书失败：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("BookBinding"),
+                         QStringLiteral("switch failed, type=%1, bookId=%2, error=%3")
+                             .arg(trainingType)
+                             .arg(bookId)
+                             .arg(db_.lastError()));
         return;
     }
 
@@ -907,6 +1054,8 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
     refreshHomeCounts();
     refreshWordBooks();
     stack_->setCurrentWidget(homePage_);
+    AppLogger::info(QStringLiteral("BookBinding"),
+                    QStringLiteral("switch success, type=%1, bookId=%2").arg(trainingType).arg(bookId));
 }
 
 void VibeSpellerWindow::onDeleteWordBook(int bookId) {
@@ -1246,11 +1395,13 @@ void VibeSpellerWindow::accumulateStudyDuration(const QDateTime &start, const QD
 
 void VibeSpellerWindow::initializeDatabase() {
     const QString dbPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/vibespeller.db");
+    AppLogger::step(QStringLiteral("DB"), QStringLiteral("initialize database, path=%1").arg(dbPath));
 
     if (!db_.open(dbPath)) {
         showErrorPrompt(this,
                         QStringLiteral("数据库错误"),
                         QStringLiteral("无法打开数据库：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("DB"), QStringLiteral("open failed, error=%1").arg(db_.lastError()));
         return;
     }
 
@@ -1258,7 +1409,10 @@ void VibeSpellerWindow::initializeDatabase() {
         showErrorPrompt(this,
                         QStringLiteral("数据库错误"),
                         QStringLiteral("无法初始化数据库：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("DB"), QStringLiteral("initialize failed, error=%1").arg(db_.lastError()));
+        return;
     }
+    AppLogger::info(QStringLiteral("DB"), QStringLiteral("database ready"));
 }
 
 void VibeSpellerWindow::refreshHomeCounts() {
@@ -1310,6 +1464,19 @@ void VibeSpellerWindow::refreshHomeCounts() {
 
     const int dashboardIndex = qBound(0, db_.lastDashboardCardIndex(), 2);
     homePage_->setDashboardCards(cards, dashboardIndex, todayLearning, todayReview, todayStudyMinutes);
+    AppLogger::info(
+        QStringLiteral("Home"),
+        QStringLiteral("counts refreshed, idx=%1, spelling(unlearned=%2,due=%3,total=%4), countability(unlearned=%5,due=%6,total=%7), polysemy(unlearned=%8,due=%9,total=%10)")
+            .arg(dashboardIndex)
+            .arg(cards.value(0).unlearnedCount)
+            .arg(cards.value(0).dueReviewCount)
+            .arg(cards.value(0).totalWords)
+            .arg(cards.value(1).unlearnedCount)
+            .arg(cards.value(1).dueReviewCount)
+            .arg(cards.value(1).totalWords)
+            .arg(cards.value(2).unlearnedCount)
+            .arg(cards.value(2).dueReviewCount)
+            .arg(cards.value(2).totalWords));
 }
 
 void VibeSpellerWindow::refreshWordBooks() {
@@ -1319,35 +1486,50 @@ void VibeSpellerWindow::refreshWordBooks() {
         trainingType = trainingTypeForMode(modeForDashboardRequest(dashboardIndex, false));
     }
     const int activeBookId = db_.activeBookIdForTraining(trainingType);
-    wordBooksPage_->setWordBooks(db_.fetchWordBooks(),
+    const QVector<WordBookItem> books = db_.fetchWordBooks();
+    wordBooksPage_->setWordBooks(books,
                                  activeBookId,
                                  trainingType,
                                  trainingDisplayName(trainingType));
+    AppLogger::info(QStringLiteral("BookBinding"),
+                    QStringLiteral("word books refreshed, type=%1, activeBook=%2, totalBooks=%3")
+                        .arg(trainingType)
+                        .arg(activeBookId)
+                        .arg(books.size()));
 }
 
 void VibeSpellerWindow::requestCsvImportIfNeeded() {
+    AppLogger::step(QStringLiteral("Import"), QStringLiteral("startup csv prompt check"));
     if (db_.isCsvPromptHandled()) {
+        AppLogger::info(QStringLiteral("Import"), QStringLiteral("csv prompt already handled"));
         return;
     }
     db_.markCsvPromptHandled();
     if (!db_.fetchWordBooks().isEmpty()) {
+        AppLogger::info(QStringLiteral("Import"), QStringLiteral("skip startup prompt, books already exist"));
         return;
     }
 
     const bool answer = showQuestionPrompt(this,
                                            QStringLiteral("导入词库"),
                                            QStringLiteral("当前还没有词书。现在导入 CSV 吗？"));
+    AppLogger::info(QStringLiteral("Import"),
+                    QStringLiteral("startup prompt result=%1").arg(answer ? QStringLiteral("yes") : QStringLiteral("no")));
     if (answer) {
         pickCsvAndShowMapping(false);
     }
 }
 
 bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
+    AppLogger::step(QStringLiteral("Import"),
+                    QStringLiteral("pick csv requested, returnToWordBooks=%1")
+                        .arg(returnToWordBooks ? QStringLiteral("true") : QStringLiteral("false")));
     const QString csvPath = QFileDialog::getOpenFileName(this,
                                                           QStringLiteral("选择 CSV 词库"),
                                                           QDir::homePath(),
                                                           QStringLiteral("CSV Files (*.csv);;All Files (*)"));
     if (csvPath.isEmpty()) {
+        AppLogger::info(QStringLiteral("Import"), QStringLiteral("pick csv cancelled"));
         return false;
     }
 
@@ -1357,6 +1539,8 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
         showErrorPrompt(this,
                         QStringLiteral("读取失败"),
                         QStringLiteral("读取 CSV 失败：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("Import"),
+                         QStringLiteral("read preview failed, csv=%1, error=%2").arg(csvPath, db_.lastError()));
         return false;
     }
 
@@ -1364,6 +1548,11 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
     returnToWordBooksAfterImport_ = returnToWordBooks;
     mappingPage_->setCsvData(csvPath, headers, previewRows);
     stack_->setCurrentWidget(mappingPage_);
+    AppLogger::info(QStringLiteral("Import"),
+                    QStringLiteral("open mapping page, csv=%1, headers=%2, previewRows=%3")
+                        .arg(csvPath)
+                        .arg(headers.size())
+                        .arg(previewRows.size()));
     return true;
 }
 
@@ -1371,14 +1560,26 @@ bool VibeSpellerWindow::tryResumeSession(SessionMode mode) {
     QVector<WordItem> savedWords;
     int savedIndex = 0;
     if (!db_.loadSessionProgress(modeKey(mode), savedWords, savedIndex)) {
+        AppLogger::info(QStringLiteral("Session"),
+                        QStringLiteral("resume miss, mode=%1").arg(sessionModeName(mode)));
         return false;
     }
 
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("resume hit, mode=%1, words=%2, index=%3")
+                        .arg(sessionModeName(mode))
+                        .arg(savedWords.size())
+                        .arg(savedIndex));
     startSession(mode, std::move(savedWords), savedIndex);
     return true;
 }
 
 void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, int startIndex) {
+    AppLogger::step(QStringLiteral("Session"),
+                    QStringLiteral("start session, mode=%1, initialWords=%2, startIndex=%3")
+                        .arg(sessionModeName(mode))
+                        .arg(words.size())
+                        .arg(startIndex));
     currentMode_ = mode;
     currentWords_ = std::move(words);
     records_.clear();
@@ -1476,10 +1677,17 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
     sessionWordTargetCount_ = qMin(kRoundLimit, currentWords_.size());
     currentIndex_ = 0;
     if (currentIndex_ >= currentWords_.size()) {
+        AppLogger::warn(QStringLiteral("Session"),
+                        QStringLiteral("start aborted after filtering, mode=%1").arg(sessionModeName(mode)));
         clearSessionForMode(mode);
         return;
     }
 
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("session ready, mode=%1, finalWords=%2, target=%3")
+                        .arg(sessionModeName(mode))
+                        .arg(currentWords_.size())
+                        .arg(sessionWordTargetCount_));
     persistCurrentSession();
     showCurrentWord();
     QWidget *targetPage = spellingPage_;
@@ -1493,10 +1701,36 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
 }
 
 void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWidget *targetPage) {
+    const QList<QWidget *> staleHosts = findChildren<QWidget *>(QStringLiteral("__transition_host__"),
+                                                                 Qt::FindDirectChildrenOnly);
+    for (QWidget *staleHost : staleHosts) {
+        if (staleHost == nullptr) {
+            continue;
+        }
+        staleHost->hide();
+        staleHost->deleteLater();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page removed stale transition host"));
+    }
+    if (homePage_ != nullptr && homePage_->graphicsEffect() != nullptr) {
+        QGraphicsEffect *staleEffect = homePage_->graphicsEffect();
+        homePage_->setGraphicsEffect(nullptr);
+        Q_UNUSED(staleEffect);
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page removed stale home opacity effect"));
+    }
+
     const QRect stackRect = stack_->geometry();
+    AppLogger::step(QStringLiteral("Transition"),
+                    QStringLiteral("home->page begin, source=(%1,%2,%3,%4), stack=(%5,%6,%7,%8), target=%9")
+                        .arg(sourceRect.x()).arg(sourceRect.y()).arg(sourceRect.width()).arg(sourceRect.height())
+                        .arg(stackRect.x()).arg(stackRect.y()).arg(stackRect.width()).arg(stackRect.height())
+                        .arg(targetPage != nullptr ? targetPage->objectName() : QStringLiteral("<null>")));
     if (sourceRect.isEmpty() || stack_->currentWidget() != homePage_ || stackRect.isEmpty() || targetPage == nullptr) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page fallback switch (invalid precondition)"));
         return;
     }
 
@@ -1505,6 +1739,8 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (startRect.isEmpty()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page fallback switch (start rect empty)"));
         return;
     }
 
@@ -1512,6 +1748,8 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (endRect.isEmpty()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page fallback switch (end rect empty)"));
         return;
     }
 
@@ -1534,12 +1772,18 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (snapshot.isNull()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("home->page fallback switch (snapshot null)"));
         return;
     }
 
     auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
     transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
     transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setAttribute(Qt::WA_AcceptTouchEvents, false);
+    transitionHost->setFocusPolicy(Qt::NoFocus);
+    transitionHost->setEnabled(false);
     transitionHost->setStyleSheet(QStringLiteral("background: transparent;"));
     transitionHost->setGeometry(rect());
     transitionHost->show();
@@ -1559,7 +1803,8 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     cardGeomAnim->setEndValue(endRect);
     cardGeomAnim->setEasingCurve(QEasingCurve::OutCubic);
 
-    auto *homeOpacity = ensureOpacityEffect(homePage_);
+    auto *homeOpacity = new QGraphicsOpacityEffect(homePage_);
+    homePage_->setGraphicsEffect(homeOpacity);
     homeOpacity->setOpacity(1.0);
     auto *homeFadeAnim = new QPropertyAnimation(homeOpacity, "opacity", group);
     homeFadeAnim->setDuration(kPageLaunchDurationMs);
@@ -1569,20 +1814,92 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
 
     connect(group, &QParallelAnimationGroup::finished, this,
             [this, group, transitionHost, homeOpacity, targetPage]() {
-        homeOpacity->setOpacity(1.0);
+        if (homeOpacity != nullptr) {
+            homeOpacity->setOpacity(1.0);
+            if (homePage_ != nullptr && homePage_->graphicsEffect() == homeOpacity) {
+                homePage_->setGraphicsEffect(nullptr);
+            }
+        }
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        transitionHost->hide();
         transitionHost->deleteLater();
         group->deleteLater();
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("home->page finished"));
+    });
+
+    QPointer<QParallelAnimationGroup> guardGroup(group);
+    QPointer<QWidget> guardHost(transitionHost);
+    QPointer<QGraphicsOpacityEffect> guardOpacity(homeOpacity);
+    QPointer<QWidget> guardTarget(targetPage);
+    QTimer::singleShot(kPageLaunchDurationMs + 400, this, [this, guardGroup, guardHost, guardOpacity, guardTarget]() {
+        if (guardGroup == nullptr || guardGroup->state() != QAbstractAnimation::Running) {
+            return;
+        }
+        AppLogger::warn(QStringLiteral("Transition"), QStringLiteral("home->page watchdog fallback triggered"));
+        guardGroup->stop();
+        if (guardOpacity != nullptr) {
+            guardOpacity->setOpacity(1.0);
+            if (homePage_ != nullptr && homePage_->graphicsEffect() == guardOpacity) {
+                homePage_->setGraphicsEffect(nullptr);
+            }
+        }
+        if (guardTarget != nullptr) {
+            stack_->setCurrentWidget(guardTarget);
+            guardTarget->setFocus();
+        }
+        if (guardHost != nullptr) {
+            guardHost->hide();
+            guardHost->deleteLater();
+        }
+        guardGroup->deleteLater();
+    });
+
+    QPointer<QWidget> cleanupHost(transitionHost);
+    QTimer::singleShot(kPageLaunchDurationMs + 1200, this, [cleanupHost]() {
+        if (cleanupHost == nullptr) {
+            return;
+        }
+        cleanupHost->hide();
+        cleanupHost->deleteLater();
     });
 
     group->start();
 }
 
 void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect) {
+    const QList<QWidget *> staleHosts = findChildren<QWidget *>(QStringLiteral("__transition_host__"),
+                                                                 Qt::FindDirectChildrenOnly);
+    for (QWidget *staleHost : staleHosts) {
+        if (staleHost == nullptr) {
+            continue;
+        }
+        staleHost->hide();
+        staleHost->deleteLater();
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home removed stale transition host"));
+    }
+    if (homePage_ != nullptr && homePage_->graphicsEffect() != nullptr) {
+        QGraphicsEffect *staleEffect = homePage_->graphicsEffect();
+        homePage_->setGraphicsEffect(nullptr);
+        Q_UNUSED(staleEffect);
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home removed stale home opacity effect"));
+    }
+
     const QRect stackRect = stack_->geometry();
+    AppLogger::step(QStringLiteral("Transition"),
+                    QStringLiteral("page->home begin, sourcePage=%1, target=(%2,%3,%4,%5), stack=(%6,%7,%8,%9)")
+                        .arg(sourcePage != nullptr ? sourcePage->objectName() : QStringLiteral("<null>"))
+                        .arg(targetRect.x()).arg(targetRect.y()).arg(targetRect.width()).arg(targetRect.height())
+                        .arg(stackRect.x()).arg(stackRect.y()).arg(stackRect.width()).arg(stackRect.height()));
     if (targetRect.isEmpty() || stack_->currentWidget() != sourcePage || stackRect.isEmpty() || sourcePage == nullptr) {
         stack_->setCurrentWidget(homePage_);
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home fallback switch (invalid precondition)"));
         return;
     }
 
@@ -1590,12 +1907,22 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
     endRect = endRect.intersected(rect());
     if (endRect.isEmpty()) {
         stack_->setCurrentWidget(homePage_);
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home fallback switch (end rect empty)"));
         return;
     }
 
     const QRect startRect = stackRect.intersected(rect());
     if (startRect.isEmpty()) {
         stack_->setCurrentWidget(homePage_);
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home fallback switch (start rect empty)"));
         return;
     }
 
@@ -1616,16 +1943,26 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
     }
     if (snapshot.isNull()) {
         stack_->setCurrentWidget(homePage_);
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        AppLogger::warn(QStringLiteral("Transition"),
+                        QStringLiteral("page->home fallback switch (snapshot null)"));
         return;
     }
 
-    auto *homeOpacity = ensureOpacityEffect(homePage_);
+    auto *homeOpacity = new QGraphicsOpacityEffect(homePage_);
+    homePage_->setGraphicsEffect(homeOpacity);
     homeOpacity->setOpacity(0.0);
     stack_->setCurrentWidget(homePage_);
 
     auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
     transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
     transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setAttribute(Qt::WA_AcceptTouchEvents, false);
+    transitionHost->setFocusPolicy(Qt::NoFocus);
+    transitionHost->setEnabled(false);
     transitionHost->setStyleSheet(QStringLiteral("background: transparent;"));
     transitionHost->setGeometry(rect());
     transitionHost->show();
@@ -1662,10 +1999,54 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
     homeFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
 
     connect(group, &QParallelAnimationGroup::finished, this,
-            [group, transitionHost, homeOpacity]() {
-        homeOpacity->setOpacity(1.0);
+            [this, group, transitionHost, homeOpacity]() {
+        if (homeOpacity != nullptr) {
+            homeOpacity->setOpacity(1.0);
+            if (homePage_ != nullptr && homePage_->graphicsEffect() == homeOpacity) {
+                homePage_->setGraphicsEffect(nullptr);
+            }
+        }
+        transitionHost->hide();
         transitionHost->deleteLater();
         group->deleteLater();
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("page->home finished"));
+    });
+
+    QPointer<QParallelAnimationGroup> guardGroup(group);
+    QPointer<QWidget> guardHost(transitionHost);
+    QPointer<QGraphicsOpacityEffect> guardOpacity(homeOpacity);
+    QTimer::singleShot(kPageLaunchDurationMs + 400, this, [this, guardGroup, guardHost, guardOpacity]() {
+        if (guardGroup == nullptr || guardGroup->state() != QAbstractAnimation::Running) {
+            return;
+        }
+        AppLogger::warn(QStringLiteral("Transition"), QStringLiteral("page->home watchdog fallback triggered"));
+        guardGroup->stop();
+        if (guardOpacity != nullptr) {
+            guardOpacity->setOpacity(1.0);
+            if (homePage_ != nullptr && homePage_->graphicsEffect() == guardOpacity) {
+                homePage_->setGraphicsEffect(nullptr);
+            }
+        }
+        if (guardHost != nullptr) {
+            guardHost->hide();
+            guardHost->deleteLater();
+        }
+        if (homePage_ != nullptr) {
+            homePage_->focusDashboard();
+        }
+        guardGroup->deleteLater();
+    });
+
+    QPointer<QWidget> cleanupHost(transitionHost);
+    QTimer::singleShot(kPageLaunchDurationMs + 1200, this, [cleanupHost]() {
+        if (cleanupHost == nullptr) {
+            return;
+        }
+        cleanupHost->hide();
+        cleanupHost->deleteLater();
     });
 
     group->start();
@@ -1722,7 +2103,19 @@ void VibeSpellerWindow::persistCurrentSession() {
         showWarningPrompt(this,
                           QStringLiteral("会话保存失败"),
                           QStringLiteral("保存当前练习进度失败：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("Session"),
+                         QStringLiteral("persist failed, mode=%1, index=%2, words=%3, error=%4")
+                             .arg(sessionModeName(currentMode_))
+                             .arg(currentIndex_)
+                             .arg(currentWords_.size())
+                             .arg(db_.lastError()));
+        return;
     }
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("persist success, mode=%1, index=%2, words=%3")
+                        .arg(sessionModeName(currentMode_))
+                        .arg(currentIndex_)
+                        .arg(currentWords_.size()));
 }
 
 void VibeSpellerWindow::clearSessionForMode(SessionMode mode) {
@@ -1730,7 +2123,14 @@ void VibeSpellerWindow::clearSessionForMode(SessionMode mode) {
         showWarningPrompt(this,
                           QStringLiteral("会话清理失败"),
                           QStringLiteral("清理练习进度失败：%1").arg(db_.lastError()));
+        AppLogger::error(QStringLiteral("Session"),
+                         QStringLiteral("clear failed, mode=%1, error=%2")
+                             .arg(sessionModeName(mode))
+                             .arg(db_.lastError()));
+        return;
     }
+    AppLogger::info(QStringLiteral("Session"),
+                    QStringLiteral("clear success, mode=%1").arg(sessionModeName(mode)));
 }
 
 void VibeSpellerWindow::moveToNextWord() {
@@ -1756,6 +2156,10 @@ void VibeSpellerWindow::moveToNextCountabilityWord() {
 }
 
 void VibeSpellerWindow::finishSession() {
+    AppLogger::step(QStringLiteral("Session"),
+                    QStringLiteral("finish session, mode=%1, records=%2")
+                        .arg(sessionModeName(currentMode_))
+                        .arg(records_.size()));
     clearSessionForMode(currentMode_);
     const bool reviewMode = (currentMode_ == SessionMode::Review
                              || currentMode_ == SessionMode::CountabilityReview
@@ -1763,6 +2167,7 @@ void VibeSpellerWindow::finishSession() {
     summaryPage_->setSummary(records_, reviewMode);
     refreshHomeCounts();
     stack_->setCurrentWidget(summaryPage_);
+    AppLogger::info(QStringLiteral("Session"), QStringLiteral("summary opened"));
 }
 
 void VibeSpellerWindow::continueNextGroup() {
@@ -1907,6 +2312,42 @@ QString VibeSpellerWindow::trainingDisplayName(const QString &trainingType) cons
     return QStringLiteral("拼写");
 }
 
+void VibeSpellerWindow::rememberHomeCardIndex() {
+    if (homePage_ == nullptr) {
+        return;
+    }
+    preservedHomeCardIndex_ = qBound(0, homePage_->currentCardIndex(), 2);
+    if (!db_.setLastDashboardCardIndex(preservedHomeCardIndex_)) {
+        AppLogger::warn(QStringLiteral("Home"),
+                        QStringLiteral("remember home card index failed, idx=%1, error=%2")
+                            .arg(preservedHomeCardIndex_)
+                            .arg(db_.lastError()));
+        return;
+    }
+    AppLogger::info(QStringLiteral("Home"),
+                    QStringLiteral("remember home card index, idx=%1").arg(preservedHomeCardIndex_));
+}
+
+void VibeSpellerWindow::restoreHomeCardIndex(bool refreshCounts) {
+    if (preservedHomeCardIndex_ < 0) {
+        return;
+    }
+    const int index = qBound(0, preservedHomeCardIndex_, 2);
+    if (!db_.setLastDashboardCardIndex(index)) {
+        AppLogger::warn(QStringLiteral("Home"),
+                        QStringLiteral("restore home card index failed, idx=%1, error=%2")
+                            .arg(index)
+                            .arg(db_.lastError()));
+    } else {
+        AppLogger::info(QStringLiteral("Home"),
+                        QStringLiteral("restore home card index, idx=%1").arg(index));
+    }
+    if (refreshCounts) {
+        refreshHomeCounts();
+    }
+    preservedHomeCardIndex_ = -1;
+}
+
 SessionMode VibeSpellerWindow::reviewModeForTraining(const QString &trainingType) const {
     const QString type = trainingType.trimmed().toLower();
     if (type == QStringLiteral("countability")) {
@@ -1933,13 +2374,22 @@ void VibeSpellerWindow::openWordBooksForTraining(const QString &trainingType) {
     const QString type = trainingType.trimmed().toLower().isEmpty()
                              ? QStringLiteral("spelling")
                              : trainingType.trimmed().toLower();
+    if (stack_ != nullptr && stack_->currentWidget() == homePage_) {
+        rememberHomeCardIndex();
+    }
     pendingBookSelectionTrainingType_ = type;
+    AppLogger::step(QStringLiteral("BookBinding"),
+                    QStringLiteral("open word books, type=%1").arg(type));
     refreshWordBooks();
     stack_->setCurrentWidget(wordBooksPage_);
 }
 
 bool VibeSpellerWindow::ensureActiveBookForTraining(const QString &trainingType, const QString &title) {
     if (db_.activeBookIdForTraining(trainingType) > 0) {
+        AppLogger::info(QStringLiteral("BookBinding"),
+                        QStringLiteral("active book exists, type=%1, bookId=%2")
+                            .arg(trainingType)
+                            .arg(db_.activeBookIdForTraining(trainingType)));
         return true;
     }
 
@@ -1947,6 +2397,10 @@ bool VibeSpellerWindow::ensureActiveBookForTraining(const QString &trainingType,
         this,
         QStringLiteral("未绑定词书"),
         QStringLiteral("%1暂未绑定词书，是否现在去绑定？").arg(title + QStringLiteral(" ")));
+    AppLogger::warn(QStringLiteral("BookBinding"),
+                    QStringLiteral("no active book, type=%1, userChooseBindNow=%2")
+                        .arg(trainingType)
+                        .arg(goChoose ? QStringLiteral("yes") : QStringLiteral("no")));
     if (goChoose) {
         openWordBooksForTraining(trainingType);
     }

@@ -1,4 +1,5 @@
 #include "gui_widgets_internal.h"
+#include "app_logger.h"
 
 #include <QColor>
 #include <QDialog>
@@ -387,18 +388,30 @@ int showStyledPrompt(QWidget *parent,
 }
 
 bool showQuestionPrompt(QWidget *parent, const QString &title, const QString &message) {
-    return showStyledPrompt(parent, title, message, PromptType::Question, {QStringLiteral("取消"), QStringLiteral("确定")}, 1) == 2;
+    const bool accepted = showStyledPrompt(parent, title, message, PromptType::Question, {QStringLiteral("取消"), QStringLiteral("确定")}, 1) == 2;
+    AppLogger::info(QStringLiteral("Prompt"),
+                    QStringLiteral("question title=%1 accepted=%2 message=%3")
+                        .arg(title)
+                        .arg(accepted ? QStringLiteral("true") : QStringLiteral("false"))
+                        .arg(message));
+    return accepted;
 }
 
 void showInfoPrompt(QWidget *parent, const QString &title, const QString &message) {
+    AppLogger::info(QStringLiteral("Prompt"),
+                    QStringLiteral("info title=%1 message=%2").arg(title, message));
     showStyledPrompt(parent, title, message, PromptType::Info, {QStringLiteral("确定")}, 0);
 }
 
 void showWarningPrompt(QWidget *parent, const QString &title, const QString &message) {
+    AppLogger::warn(QStringLiteral("Prompt"),
+                    QStringLiteral("warning title=%1 message=%2").arg(title, message));
     showStyledPrompt(parent, title, message, PromptType::Warning, {QStringLiteral("知道了")}, 0);
 }
 
 void showErrorPrompt(QWidget *parent, const QString &title, const QString &message) {
+    AppLogger::error(QStringLiteral("Prompt"),
+                     QStringLiteral("error title=%1 message=%2").arg(title, message));
     showStyledPrompt(parent, title, message, PromptType::Error, {QStringLiteral("知道了")}, 0);
 }
 

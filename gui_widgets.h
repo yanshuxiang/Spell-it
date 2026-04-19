@@ -73,6 +73,7 @@ public:
                            int todayStudyMinutes);
     QRect launchRect(SessionMode mode) const;
     int currentCardIndex() const;
+    void focusDashboard();
 
 signals:
     void startLearningClicked();
@@ -419,6 +420,8 @@ private:
     QString trainingDisplayName(const QString &trainingType) const;
     SessionMode reviewModeForTraining(const QString &trainingType) const;
     SessionMode learningModeForTraining(const QString &trainingType) const;
+    void rememberHomeCardIndex();
+    void restoreHomeCardIndex(bool refreshCounts);
     void openWordBooksForTraining(const QString &trainingType);
     bool ensureActiveBookForTraining(const QString &trainingType, const QString &title);
     SessionMode modeForDashboardRequest(int modeIndex, bool isReview) const;
@@ -460,6 +463,7 @@ private:
     bool debugMode_ = false;
     QProcess *pronunciationProcess_ = nullptr;
     QHash<QString, qreal> pronunciationVolumeCache_;
+    int preservedHomeCardIndex_ = -1;
 };
 
 #endif // GUI_WIDGETS_H

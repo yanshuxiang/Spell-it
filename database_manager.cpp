@@ -1,4 +1,5 @@
 #include "database_manager.h"
+#include "app_logger.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -170,6 +171,8 @@ DatabaseManager::~DatabaseManager() {
 }
 
 bool DatabaseManager::open(const QString &dbPath) {
+    AppLogger::step(QStringLiteral("DB"),
+                    QStringLiteral("open database requested, path=%1").arg(dbPath));
     if (QSqlDatabase::contains(connectionName_)) {
         QSqlDatabase existing = QSqlDatabase::database(connectionName_);
         if (existing.isOpen()) {
@@ -182,13 +185,19 @@ bool DatabaseManager::open(const QString &dbPath) {
 
     if (!db.open()) {
         lastError_ = db.lastError().text();
+        AppLogger::error(QStringLiteral("DB"),
+                         QStringLiteral("open failed, path=%1, error=%2").arg(dbPath, lastError_));
         return false;
     }
+    AppLogger::info(QStringLiteral("DB"),
+                    QStringLiteral("open success, path=%1").arg(dbPath));
     return true;
 }
 
 bool DatabaseManager::initialize() {
+    AppLogger::step(QStringLiteral("DB"), QStringLiteral("initialize requested"));
     if (!ensureDatabaseOpen()) {
+        AppLogger::error(QStringLiteral("DB"), QStringLiteral("initialize aborted, database not open"));
         return false;
     }
 
@@ -515,6 +524,7 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    AppLogger::info(QStringLiteral("DB"), QStringLiteral("initialize success"));
     return true;
 }
 
@@ -575,14 +585,27 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
                                     int notesColumn,
                                     int &importedCount) {
     importedCount = 0;
+    AppLogger::step(
+        QStringLiteral("Import"),
+        QStringLiteral("start csv=%1 word=%2 trans=%3 phonetic=%4 countability=%5 plural=%6 polysemy=%7 notes=%8")
+            .arg(csvPath)
+            .arg(wordColumn)
+            .arg(translationColumn)
+            .arg(phoneticColumn)
+            .arg(countabilityColumn)
+            .arg(pluralColumn)
+            .arg(polysemyColumn)
+            .arg(notesColumn));
 
     if (!ensureDatabaseOpen()) {
+        AppLogger::error(QStringLiteral("Import"), QStringLiteral("aborted, database not open"));
         return false;
     }
 
     QFile file(csvPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         lastError_ = QStringLiteral("无法打开 CSV 文件: %1").arg(csvPath);
+        AppLogger::error(QStringLiteral("Import"), QStringLiteral("open csv failed, error=%1").arg(lastError_));
         return false;
     }
 
@@ -590,6 +613,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     in.setEncoding(QStringConverter::Utf8);
     if (in.atEnd()) {
         lastError_ = QStringLiteral("CSV 文件为空");
+        AppLogger::warn(QStringLiteral("Import"), QStringLiteral("csv empty, path=%1").arg(csvPath));
         return false;
     }
 
@@ -797,10 +821,16 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
 
     if (!db.commit()) {
         lastError_ = db.lastError().text();
+        AppLogger::error(QStringLiteral("Import"), QStringLiteral("commit failed, error=%1").arg(lastError_));
         return false;
     }
 
     file.close();
+    AppLogger::info(QStringLiteral("Import"),
+                    QStringLiteral("completed, csv=%1, imported=%2, bookId=%3")
+                        .arg(csvPath)
+                        .arg(importedCount)
+                        .arg(bookId));
     return true;
 }
 
@@ -1088,7 +1118,12 @@ QString DatabaseManager::activeBookNameForTraining(const QString &trainingType) 
 }
 
 bool DatabaseManager::setActiveBookIdForTraining(const QString &trainingType, int bookId) {
+    AppLogger::step(QStringLiteral("BookBinding"),
+                    QStringLiteral("set active requested, type=%1, bookId=%2")
+                        .arg(trainingType)
+                        .arg(bookId));
     if (!ensureDatabaseOpen()) {
+        AppLogger::error(QStringLiteral("BookBinding"), QStringLiteral("aborted, database not open"));
         return false;
     }
     const QString type = trainingType.trimmed().toLower();
@@ -1154,8 +1189,15 @@ bool DatabaseManager::setActiveBookIdForTraining(const QString &trainingType, in
 
     if (!db.commit()) {
         lastError_ = db.lastError().text();
+        AppLogger::error(QStringLiteral("BookBinding"),
+                         QStringLiteral("commit failed, type=%1, bookId=%2, error=%3")
+                             .arg(type)
+                             .arg(bookId)
+                             .arg(lastError_));
         return false;
     }
+    AppLogger::info(QStringLiteral("BookBinding"),
+                    QStringLiteral("set active success, type=%1, bookId=%2").arg(type).arg(bookId));
     return true;
 }
 
