@@ -466,6 +466,7 @@ private:
     QProcess *pronunciationProcess_ = nullptr;
     QHash<QString, qreal> pronunciationVolumeCache_;
     int preservedHomeCardIndex_ = -1;
+    bool inTransition_ = false;
 };
 
 #endif // GUI_WIDGETS_H

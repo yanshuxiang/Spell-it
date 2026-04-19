@@ -406,6 +406,9 @@ void VibeSpellerWindow::closeEvent(QCloseEvent *event) {
 }
 
 void VibeSpellerWindow::onStartLearning() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=spelling_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Learning);
     if (tryResumeSession(SessionMode::Learning)) {
@@ -433,6 +436,9 @@ void VibeSpellerWindow::onStartLearning() {
 }
 
 void VibeSpellerWindow::onStartReview() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=spelling_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::Review);
     if (tryResumeSession(SessionMode::Review)) {
@@ -462,6 +468,9 @@ void VibeSpellerWindow::onStartReview() {
 }
 
 void VibeSpellerWindow::onStartCountabilityLearning() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=countability_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityLearning);
     if (tryResumeSession(SessionMode::CountabilityLearning)) {
@@ -489,6 +498,9 @@ void VibeSpellerWindow::onStartCountabilityLearning() {
 }
 
 void VibeSpellerWindow::onStartCountabilityReview() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=countability_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::CountabilityReview);
     if (tryResumeSession(SessionMode::CountabilityReview)) {
@@ -517,6 +529,9 @@ void VibeSpellerWindow::onStartCountabilityReview() {
 }
 
 void VibeSpellerWindow::onStartPolysemyLearning() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=polysemy_learning"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyLearning);
     if (tryResumeSession(SessionMode::PolysemyLearning)) {
@@ -544,6 +559,9 @@ void VibeSpellerWindow::onStartPolysemyLearning() {
 }
 
 void VibeSpellerWindow::onStartPolysemyReview() {
+    if (inTransition_) {
+        return;
+    }
     AppLogger::step(QStringLiteral("Session"), QStringLiteral("start requested, mode=polysemy_review"));
     pendingHomeLaunchRect_ = homePage_->launchRect(SessionMode::PolysemyReview);
     if (tryResumeSession(SessionMode::PolysemyReview)) {
@@ -984,6 +1002,9 @@ void VibeSpellerWindow::onSkipForeverCurrentWord() {
 }
 
 void VibeSpellerWindow::onOpenWordBooks() {
+    if (inTransition_) {
+        return;
+    }
     const int index = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
     const SessionMode mode = modeForDashboardRequest(index, false);
     AppLogger::step(QStringLiteral("BookBinding"),
@@ -1694,6 +1715,11 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
 }
 
 void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWidget *targetPage) {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+
     const QList<QWidget *> staleHosts = findChildren<QWidget *>(QStringLiteral("__transition_host__"),
                                                                  Qt::FindDirectChildrenOnly);
     for (QWidget *staleHost : staleHosts) {
@@ -1722,6 +1748,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (sourceRect.isEmpty() || stack_->currentWidget() != homePage_ || stackRect.isEmpty() || targetPage == nullptr) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("home->page fallback switch (invalid precondition)"));
         return;
@@ -1732,6 +1759,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (startRect.isEmpty()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("home->page fallback switch (start rect empty)"));
         return;
@@ -1741,6 +1769,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (endRect.isEmpty()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("home->page fallback switch (end rect empty)"));
         return;
@@ -1765,6 +1794,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
     if (snapshot.isNull()) {
         stack_->setCurrentWidget(targetPage);
         targetPage->setFocus();
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("home->page fallback switch (snapshot null)"));
         return;
@@ -1818,6 +1848,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
         transitionHost->hide();
         transitionHost->deleteLater();
         group->deleteLater();
+        inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("home->page finished"));
     });
 
@@ -1845,6 +1876,7 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
             guardHost->hide();
             guardHost->deleteLater();
         }
+        inTransition_ = false;
         guardGroup->deleteLater();
     });
 
@@ -1861,6 +1893,11 @@ void VibeSpellerWindow::animateHomeToPageTransition(const QRect &sourceRect, QWi
 }
 
 void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect) {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+
     const QList<QWidget *> staleHosts = findChildren<QWidget *>(QStringLiteral("__transition_host__"),
                                                                  Qt::FindDirectChildrenOnly);
     for (QWidget *staleHost : staleHosts) {
@@ -1891,6 +1928,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("page->home fallback switch (invalid precondition)"));
         return;
@@ -1903,6 +1941,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("page->home fallback switch (end rect empty)"));
         return;
@@ -1914,6 +1953,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("page->home fallback switch (start rect empty)"));
         return;
@@ -1939,6 +1979,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"),
                         QStringLiteral("page->home fallback switch (snapshot null)"));
         return;
@@ -2005,6 +2046,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("page->home finished"));
     });
 
@@ -2030,6 +2072,7 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         if (homePage_ != nullptr) {
             homePage_->focusDashboard();
         }
+        inTransition_ = false;
         guardGroup->deleteLater();
     });
 
@@ -2046,6 +2089,10 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
 }
 
 void VibeSpellerWindow::animateStatisticsPageRise() {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
     AppLogger::step(QStringLiteral("Transition"), QStringLiteral("stats rise begin"));
     rememberHomeCardIndex();
     statisticsPage_->setLogs(db_.fetchWeeklyLogs());
@@ -2054,6 +2101,7 @@ void VibeSpellerWindow::animateStatisticsPageRise() {
     if (windowRect.isEmpty() || statisticsPage_ == nullptr) {
         stack_->setCurrentWidget(statisticsPage_);
         statisticsPage_->setFocus();
+        inTransition_ = false;
         return;
     }
 
@@ -2077,6 +2125,7 @@ void VibeSpellerWindow::animateStatisticsPageRise() {
     if (snapshot.isNull()) {
         stack_->setCurrentWidget(statisticsPage_);
         statisticsPage_->setFocus();
+        inTransition_ = false;
         AppLogger::warn(QStringLiteral("Transition"), QStringLiteral("stats rise fallback switch (snapshot null)"));
         return;
     }
@@ -2109,6 +2158,7 @@ void VibeSpellerWindow::animateStatisticsPageRise() {
         transitionHost->hide();
         transitionHost->deleteLater();
         group->deleteLater();
+        inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats rise finished"));
     });
 
@@ -2116,12 +2166,17 @@ void VibeSpellerWindow::animateStatisticsPageRise() {
 }
 
 void VibeSpellerWindow::animateStatisticsPageBack() {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
     AppLogger::step(QStringLiteral("Transition"), QStringLiteral("stats back begin"));
     
     const QRect windowRect = rect();
     if (windowRect.isEmpty() || statisticsPage_ == nullptr || homePage_ == nullptr) {
         restoreHomeCardIndex(false);
         stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
         return;
     }
 
@@ -2136,6 +2191,7 @@ void VibeSpellerWindow::animateStatisticsPageBack() {
     if (snapshot.isNull()) {
         restoreHomeCardIndex(false);
         stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
         return;
     }
 
@@ -2164,10 +2220,11 @@ void VibeSpellerWindow::animateStatisticsPageBack() {
     backAnim->setEndValue(QRect(0, windowRect.height(), windowRect.width(), windowRect.height()));
     backAnim->setEasingCurve(QEasingCurve::InCubic);
 
-    connect(group, &QParallelAnimationGroup::finished, this, [group, transitionHost]() {
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost]() {
         transitionHost->hide();
         transitionHost->deleteLater();
         group->deleteLater();
+        inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats back finished"));
     });
 
