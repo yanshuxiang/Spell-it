@@ -25,7 +25,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     root->setSpacing(8);
 
     auto *top = new QHBoxLayout();
-    exitButton_ = new QPushButton(QStringLiteral("退出"), this);
+    exitButton_ = new HoverScaleButton(QStringLiteral("退出"), this);
     exitButton_->setFixedSize(104, 42);
     exitButton_->setStyleSheet(QStringLiteral("font-size: 12px; border-radius: 12px;"));
 
@@ -35,7 +35,7 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
     progressLabel_ = new QLabel(this);
     progressLabel_->setStyleSheet(QStringLiteral("font-size: 12px; color: #4b5563;"));
 
-    skipForeverButton_ = new QPushButton(this);
+    skipForeverButton_ = new HoverScaleButton(this);
     skipForeverButton_->setFixedSize(40, 40);
     skipForeverButton_->setIcon(createTrashLineIcon());
     skipForeverButton_->setIconSize(QSize(25, 25));
@@ -148,11 +148,11 @@ SpellingPageWidget::SpellingPageWidget(QWidget *parent)
         emit userActivity();
         emit submitted(inputEdit_->text());
     });
-    connect(exitButton_, &QPushButton::clicked, this, [this]() {
+    connect(exitButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit exitRequested();
     });
-    connect(skipForeverButton_, &QPushButton::clicked, this, [this]() {
+    connect(skipForeverButton_, &HoverScaleButton::clicked, this, [this]() {
         // 单击不执行动作，避免误触；永久跳过只通过双击触发。
     });
 }

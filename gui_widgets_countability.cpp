@@ -29,17 +29,17 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     header->setContentsMargins(0, 0, 0, 0);
     header->setSpacing(10);
 
-    exitButton_ = new QPushButton(QStringLiteral("退出"), this);
+    exitButton_ = new HoverScaleButton(QStringLiteral("退出"), this);
     exitButton_->setFixedSize(96, 42);
     exitButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #f3f4f6;"
         "  color: #0f172a;"
         "  border-radius: 12px;"
         "  font-size: 14px;"
         "  font-weight: 700;"
         "}"
-        "QPushButton:hover { background: #e8ebef; }"));
+        "HoverScaleButton:hover { background: #e8ebef; }"));
 
     modeLabel_ = new QLabel(QStringLiteral("可数性辨析"), this);
     modeLabel_->setAlignment(Qt::AlignCenter);
@@ -127,17 +127,17 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
         "QScrollBar::handle:vertical { background: #cbd5e1; border-radius: 3px; }"));
 
     // 继续按钮（固定高度，始终可见）
-    usageContinueButton_ = new QPushButton(QStringLiteral("我已理解，继续"), this);
+    usageContinueButton_ = new HoverScaleButton(QStringLiteral("我已理解，继续"), this);
     usageContinueButton_->setFixedSize(240, 52);
     usageContinueButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #0f172a;"
         "  color: #ffffff;"
         "  border-radius: 14px;"
         "  font-size: 16px;"
         "  font-weight: 700;"
         "}"
-        "QPushButton:hover { background: #1e293b; }"));
+        "HoverScaleButton:hover { background: #1e293b; }"));
 
     detailsLayout->addWidget(usageDetailCorrectLabel_);
     detailsLayout->addWidget(notesScroll, 1);   // stretch=1，弹性吸收剩余空间
@@ -148,11 +148,11 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     // 详情区 stretch=1，在竖向弹性分配
     rootLayout_->addWidget(usageDetailsHost_, 1);
 
-    countableButton_ = new QPushButton(QStringLiteral("可数"), this);
-    uncountableButton_ = new QPushButton(QStringLiteral("不可数"), this);
-    bothButton_ = new QPushButton(QStringLiteral("可数且不可数"), this);
+    countableButton_ = new HoverScaleButton(QStringLiteral("可数"), this);
+    uncountableButton_ = new HoverScaleButton(QStringLiteral("不可数"), this);
+    bothButton_ = new HoverScaleButton(QStringLiteral("可数且不可数"), this);
     const QString answerButtonStyle = QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #f8fafc;"
         "  border: 1px solid #cbd5e1;"
         "  border-radius: 16px;"
@@ -161,8 +161,8 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
         "  color: #0f172a;"
         "  min-height: 60px;"
         "}"
-        "QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
-        "QPushButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
+        "HoverScaleButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
+        "HoverScaleButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
     countableButton_->setStyleSheet(answerButtonStyle);
     uncountableButton_->setStyleSheet(answerButtonStyle);
     bothButton_->setStyleSheet(answerButtonStyle);
@@ -173,14 +173,14 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     rootLayout_->addSpacing(12);
     rootLayout_->addWidget(bothButton_);
 
-    connect(exitButton_, &QPushButton::clicked, this, &CountabilityPageWidget::exitRequested);
-    connect(countableButton_, &QPushButton::clicked, this,
+    connect(exitButton_, &HoverScaleButton::clicked, this, &CountabilityPageWidget::exitRequested);
+    connect(countableButton_, &HoverScaleButton::clicked, this,
             [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Countable); });
-    connect(uncountableButton_, &QPushButton::clicked, this,
+    connect(uncountableButton_, &HoverScaleButton::clicked, this,
             [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Uncountable); });
-    connect(bothButton_, &QPushButton::clicked, this,
+    connect(bothButton_, &HoverScaleButton::clicked, this,
             [this]() { emit userActivity(); emit answerSubmitted(CountabilityAnswer::Both); });
-    connect(usageContinueButton_, &QPushButton::clicked, this, [this]() {
+    connect(usageContinueButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit continueRequested();
     });
@@ -238,7 +238,7 @@ void CountabilityPageWidget::setOptionsEnabled(bool enabled) {
     bothButton_->setEnabled(enabled);
 }
 
-QPushButton *CountabilityPageWidget::buttonForAnswer(CountabilityAnswer answer) const {
+HoverScaleButton *CountabilityPageWidget::buttonForAnswer(CountabilityAnswer answer) const {
     switch (answer) {
     case CountabilityAnswer::Countable:
         return countableButton_;
@@ -252,7 +252,7 @@ QPushButton *CountabilityPageWidget::buttonForAnswer(CountabilityAnswer answer) 
 
 void CountabilityPageWidget::resetOptionStyles() {
     const QString baseStyle = QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #f8fafc;"
         "  border: 1px solid #d8e1ec;"
         "  border-radius: 14px;"
@@ -261,8 +261,8 @@ void CountabilityPageWidget::resetOptionStyles() {
         "  color: #0f172a;"
         "  min-height: 54px;"
         "}"
-        "QPushButton:hover { background: #eef3f9; }"
-        "QPushButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
+        "HoverScaleButton:hover { background: #eef3f9; }"
+        "HoverScaleButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
     countableButton_->setStyleSheet(baseStyle);
     uncountableButton_->setStyleSheet(baseStyle);
     bothButton_->setStyleSheet(baseStyle);
@@ -272,10 +272,10 @@ void CountabilityPageWidget::showAnswerFeedback(CountabilityAnswer selected,
                                                 CountabilityAnswer correct,
                                                 bool isCorrect) {
     resetOptionStyles();
-    QPushButton *selectedButton = buttonForAnswer(selected);
-    QPushButton *correctButton = buttonForAnswer(correct);
+    HoverScaleButton *selectedButton = buttonForAnswer(selected);
+    HoverScaleButton *correctButton = buttonForAnswer(correct);
     const QString greenStyle = QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: rgba(134,239,172,0.28);"
         "  border: 1px solid #86efac;"
         "  border-radius: 14px;"
@@ -285,7 +285,7 @@ void CountabilityPageWidget::showAnswerFeedback(CountabilityAnswer selected,
         "  min-height: 54px;"
         "}");
     const QString redStyle = QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: rgba(252,165,165,0.28);"
         "  border: 1px solid #fca5a5;"
         "  border-radius: 14px;"
@@ -555,17 +555,17 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     header->setContentsMargins(0, 0, 0, 0);
     header->setSpacing(10);
 
-    exitButton_ = new QPushButton(QStringLiteral("退出"), this);
+    exitButton_ = new HoverScaleButton(QStringLiteral("退出"), this);
     exitButton_->setFixedSize(96, 42);
     exitButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #f3f4f6;"
         "  color: #0f172a;"
         "  border-radius: 12px;"
         "  font-size: 14px;"
         "  font-weight: 700;"
         "}"
-        "QPushButton:hover { background: #e8ebef; }"));
+        "HoverScaleButton:hover { background: #e8ebef; }"));
 
     modeLabel_ = new QLabel(QStringLiteral("熟词生义"), this);
     modeLabel_->setAlignment(Qt::AlignCenter);
@@ -587,17 +587,17 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     wordLabel_->setStyleSheet(QStringLiteral("font-size: 44px; font-weight: 800; color: #0f172a;"));
     wordLabel_->setMinimumHeight(120);
 
-    revealButton_ = new QPushButton(QStringLiteral("揭晓释义"), this);
+    revealButton_ = new HoverScaleButton(QStringLiteral("揭晓释义"), this);
     revealButton_->setFixedSize(220, 48);
     revealButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #e2e8f0;"
         "  color: #0f172a;"
         "  border-radius: 14px;"
         "  font-size: 15px;"
         "  font-weight: 700;"
         "}"
-        "QPushButton:hover { background: #d7dee7; }"));
+        "HoverScaleButton:hover { background: #d7dee7; }"));
 
     meaningLabel_ = new QLabel(this);
     meaningLabel_->setWordWrap(true);
@@ -614,11 +614,11 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
         "border-radius: 12px;"));
     meaningLabel_->hide();
 
-    masteredButton_ = new QPushButton(QStringLiteral("已掌握"), this);
-    blurryButton_ = new QPushButton(QStringLiteral("模糊"), this);
-    unfamiliarButton_ = new QPushButton(QStringLiteral("不熟悉"), this);
+    masteredButton_ = new HoverScaleButton(QStringLiteral("已掌握"), this);
+    blurryButton_ = new HoverScaleButton(QStringLiteral("模糊"), this);
+    unfamiliarButton_ = new HoverScaleButton(QStringLiteral("不熟悉"), this);
     const QString answerButtonStyle = QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: #f8fafc;"
         "  border: 1px solid #cbd5e1;"
         "  border-radius: 16px;"
@@ -627,8 +627,8 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
         "  color: #0f172a;"
         "  min-height: 58px;"
         "}"
-        "QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
-        "QPushButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
+        "HoverScaleButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
+        "HoverScaleButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
     masteredButton_->setStyleSheet(answerButtonStyle);
     blurryButton_->setStyleSheet(answerButtonStyle);
     unfamiliarButton_->setStyleSheet(answerButtonStyle);
@@ -645,11 +645,11 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     root->addSpacing(10);
     root->addWidget(unfamiliarButton_);
 
-    connect(exitButton_, &QPushButton::clicked, this, [this]() {
+    connect(exitButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit exitRequested();
     });
-    connect(revealButton_, &QPushButton::clicked, this, [this]() {
+    connect(revealButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         revealed_ = true;
         meaningLabel_->show();
@@ -658,15 +658,15 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
         setOptionsEnabled(true);
         emit revealRequested();
     });
-    connect(masteredButton_, &QPushButton::clicked, this, [this]() {
+    connect(masteredButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit ratingSubmitted(SpellingResult::Mastered);
     });
-    connect(blurryButton_, &QPushButton::clicked, this, [this]() {
+    connect(blurryButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit ratingSubmitted(SpellingResult::Blurry);
     });
-    connect(unfamiliarButton_, &QPushButton::clicked, this, [this]() {
+    connect(unfamiliarButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit ratingSubmitted(SpellingResult::Unfamiliar);
     });

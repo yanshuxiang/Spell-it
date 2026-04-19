@@ -12,6 +12,10 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QVBoxLayout>
+#include <QPropertyAnimation>
+#include <QEasingCurve>
+#include <QStyleOptionButton>
+#include <QEnterEvent>
 
 namespace GuiWidgetsInternal {
 
@@ -456,3 +460,46 @@ QString buildMiniWeekCalendarHtml(const QDateTime &nextReview) {
     return html;
 }
 } // namespace GuiWidgetsInternal
+
+HoverScaleButton::HoverScaleButton(const QString &text, QWidget *parent)
+    : QPushButton(text, parent) {
+    setMouseTracking(true);
+}
+
+HoverScaleButton::HoverScaleButton(QWidget *parent)
+    : QPushButton(parent) {
+    setMouseTracking(true);
+}
+
+void HoverScaleButton::enterEvent(QEnterEvent *event) {
+    QPushButton::enterEvent(event);
+    auto *anim = new QPropertyAnimation(this, "scale");
+    anim->setDuration(150);
+    anim->setEndValue(1.06);
+    anim->setEasingCurve(QEasingCurve::OutBack);
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void HoverScaleButton::leaveEvent(QEvent *event) {
+    QPushButton::leaveEvent(event);
+    auto *anim = new QPropertyAnimation(this, "scale");
+    anim->setDuration(120);
+    anim->setEndValue(1.0);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void HoverScaleButton::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    painter.translate(rect().center());
+    painter.scale(scale_, scale_);
+    painter.translate(-rect().center());
+
+    QStyleOptionButton option;
+    initStyleOption(&option);
+    style()->drawControl(QStyle::CE_PushButton, &option, &painter, this);
+}

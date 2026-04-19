@@ -17,7 +17,7 @@ class QCloseEvent;
 class QEvent;
 class QKeyEvent;
 class QMouseEvent;
-class QPushButton;
+class HoverScaleButton;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
@@ -174,12 +174,12 @@ private:
     QLabel *translationLabel_ = nullptr;
     QLineEdit *inputEdit_ = nullptr;
     QLabel *feedbackLabel_ = nullptr;
-    QPushButton *skipForeverButton_ = nullptr;
+    HoverScaleButton *skipForeverButton_ = nullptr;
     QLabel *skipForeverTip_ = nullptr;
     QWidget *debugHost_ = nullptr;
     QLabel *debugScheduleLabel_ = nullptr;
     QLabel *debugAccuracyLabel_ = nullptr;
-    QPushButton *exitButton_ = nullptr;
+    HoverScaleButton *exitButton_ = nullptr;
     bool debugMode_ = false;
     bool awaitingProceed_ = false;
     bool proceedKeyArmed_ = false;
@@ -213,16 +213,16 @@ private:
     QLabel *wordLabel_ = nullptr;
     QLabel *hintLabel_ = nullptr;
 
-    QPushButton *exitButton_ = nullptr;
-    QPushButton *countableButton_ = nullptr;
-    QPushButton *uncountableButton_ = nullptr;
-    QPushButton *bothButton_ = nullptr;
-    QPushButton *buttonForAnswer(CountabilityAnswer answer) const;
+    HoverScaleButton *exitButton_ = nullptr;
+    HoverScaleButton *countableButton_ = nullptr;
+    HoverScaleButton *uncountableButton_ = nullptr;
+    HoverScaleButton *bothButton_ = nullptr;
+    HoverScaleButton *buttonForAnswer(CountabilityAnswer answer) const;
 
     QWidget *usageDetailsHost_ = nullptr;
     QLabel *usageDetailCorrectLabel_ = nullptr;
     QLabel *usageDetailNotesLabel_ = nullptr;
-    QPushButton *usageContinueButton_ = nullptr;
+    HoverScaleButton *usageContinueButton_ = nullptr;
 
     // 布局与动画辅助
     QVBoxLayout *rootLayout_ = nullptr;
@@ -259,11 +259,11 @@ private:
     QLabel *progressLabel_ = nullptr;
     QLabel *wordLabel_ = nullptr;
     QLabel *meaningLabel_ = nullptr;
-    QPushButton *exitButton_ = nullptr;
-    QPushButton *revealButton_ = nullptr;
-    QPushButton *masteredButton_ = nullptr;
-    QPushButton *blurryButton_ = nullptr;
-    QPushButton *unfamiliarButton_ = nullptr;
+    HoverScaleButton *exitButton_ = nullptr;
+    HoverScaleButton *revealButton_ = nullptr;
+    HoverScaleButton *masteredButton_ = nullptr;
+    HoverScaleButton *blurryButton_ = nullptr;
+    HoverScaleButton *unfamiliarButton_ = nullptr;
     bool revealed_ = false;
 };
 
@@ -284,8 +284,8 @@ private:
     QLabel *statsLabel_ = nullptr;
     QListWidget *wrongWordsList_ = nullptr;
     QLabel *footerLabel_ = nullptr;
-    QPushButton *backHomeButton_ = nullptr;
-    QPushButton *nextGroupButton_ = nullptr;
+    HoverScaleButton *backHomeButton_ = nullptr;
+    HoverScaleButton *nextGroupButton_ = nullptr;
     bool reviewMode_ = false;
 };
 
@@ -310,7 +310,7 @@ private:
         QString text;
     };
 
-    QPushButton *backButton_ = nullptr;
+    HoverScaleButton *backButton_ = nullptr;
     QLabel *hoverTip_ = nullptr;
     
     QVector<DatabaseManager::DailyLog> logs_;
@@ -352,12 +352,12 @@ private:
     QVBoxLayout *currentCardLayout_ = nullptr;
     QLabel *otherTitleLabel_ = nullptr;
     QListWidget *booksList_ = nullptr;
-    QPushButton *backButton_ = nullptr;
-    QPushButton *addBookButton_ = nullptr;
+    HoverScaleButton *backButton_ = nullptr;
+    HoverScaleButton *addBookButton_ = nullptr;
     QWidget *audioStatusHost_ = nullptr;
     QLabel *audioStatusLabel_ = nullptr;
     RoundedProgressStrip *audioProgressBar_ = nullptr;
-    QPushButton *audioStopButton_ = nullptr;
+    HoverScaleButton *audioStopButton_ = nullptr;
 };
 
 class VibeSpellerWindow : public QWidget {

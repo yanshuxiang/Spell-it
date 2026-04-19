@@ -83,7 +83,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
     auto *topBar = new QHBoxLayout();
     topBar->setContentsMargins(0, 0, 0, 0);
 
-    auto *backButton = new QPushButton(QStringLiteral("‹"), this);
+    auto *backButton = new HoverScaleButton(QStringLiteral("‹"), this);
     backButton->setFixedSize(32, 32);
     backButton->setStyleSheet(QStringLiteral("font-size: 24px; font-weight: 700; background: transparent; color: #222222;"));
 
@@ -141,7 +141,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
     footerLabel_->setAlignment(Qt::AlignCenter);
     footerLabel_->setStyleSheet(QStringLiteral("font-size: 14px; color: #7b7b7b;"));
 
-    backHomeButton_ = new QPushButton(QStringLiteral("返回首页"), this);
+    backHomeButton_ = new HoverScaleButton(QStringLiteral("返回首页"), this);
     backHomeButton_->setMinimumHeight(60);
     backHomeButton_->setStyleSheet(QStringLiteral(
         "background: rgba(17, 24, 39, 0.08);"
@@ -150,7 +150,7 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
         "font-weight: 700;"
         "border-radius: 26px;"));
 
-    nextGroupButton_ = new QPushButton(QStringLiteral("继续下一组"), this);
+    nextGroupButton_ = new HoverScaleButton(QStringLiteral("继续下一组"), this);
     nextGroupButton_->setMinimumHeight(60);
     nextGroupButton_->setStyleSheet(QStringLiteral(
         "background: #111827;"
@@ -176,9 +176,9 @@ SummaryPageWidget::SummaryPageWidget(QWidget *parent)
     bottomRow->addWidget(nextGroupButton_, 1);
     root->addLayout(bottomRow);
 
-    connect(backButton, &QPushButton::clicked, this, &SummaryPageWidget::backHomeClicked);
-    connect(backHomeButton_, &QPushButton::clicked, this, &SummaryPageWidget::backHomeClicked);
-    connect(nextGroupButton_, &QPushButton::clicked, this, &SummaryPageWidget::nextGroupClicked);
+    connect(backButton, &HoverScaleButton::clicked, this, &SummaryPageWidget::backHomeClicked);
+    connect(backHomeButton_, &HoverScaleButton::clicked, this, &SummaryPageWidget::backHomeClicked);
+    connect(nextGroupButton_, &HoverScaleButton::clicked, this, &SummaryPageWidget::nextGroupClicked);
 }
 
 void SummaryPageWidget::setSummary(const QVector<PracticeRecord> &records, bool reviewMode) {
@@ -240,15 +240,15 @@ StatisticsPageWidget::StatisticsPageWidget(QWidget *parent)
     root->setSpacing(16);
 
     auto *header = new QHBoxLayout();
-    backButton_ = new QPushButton(QStringLiteral("返回"), this);
+    backButton_ = new HoverScaleButton(QStringLiteral("返回"), this);
     backButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "  background: transparent;"
         "  font-size: 16px;"
         "  color: #4b5563;"
         "  padding: 8px;"
         "}"
-        "QPushButton:hover { color: #111827; }"));
+        "HoverScaleButton:hover { color: #111827; }"));
     
     auto *title = new QLabel(QStringLiteral("学习统计"), this);
     title->setAlignment(Qt::AlignCenter);
@@ -263,7 +263,7 @@ StatisticsPageWidget::StatisticsPageWidget(QWidget *parent)
     root->addLayout(header);
     root->addStretch(1);
 
-    connect(backButton_, &QPushButton::clicked, this, &StatisticsPageWidget::backClicked);
+    connect(backButton_, &HoverScaleButton::clicked, this, &StatisticsPageWidget::backClicked);
 }
 
 void StatisticsPageWidget::setLogs(const QVector<DatabaseManager::DailyLog> &logs) {
@@ -540,18 +540,18 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
 
     auto *header = new QHBoxLayout();
     header->setSpacing(14);
-    backButton_ = new QPushButton(this);
+    backButton_ = new HoverScaleButton(this);
     backButton_->setFixedSize(46, 46);
     backButton_->setIcon(createBackLineIcon());
     backButton_->setIconSize(QSize(20, 20));
     backButton_->setStyleSheet(QStringLiteral(
-        "QPushButton {"
+        "HoverScaleButton {"
         "background: #f3f4f6;"
         "color: #374151;"
         "border: none;"
         "border-radius: 14px;"
         "}"
-        "QPushButton:hover { background: #e9ebef; }"));
+        "HoverScaleButton:hover { background: #e9ebef; }"));
 
     auto *title = new QLabel(QStringLiteral("词书"), this);
     title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a; padding-bottom: 4px;"));
@@ -584,7 +584,7 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     audioProgressBar_->setValue(0);
     audioProgressBar_->setFixedHeight(10);
 
-    audioStopButton_ = new QPushButton(QStringLiteral("⏸"), audioStatusHost_);
+    audioStopButton_ = new HoverScaleButton(QStringLiteral("⏸"), audioStatusHost_);
     audioStopButton_->setObjectName(QStringLiteral("audioPauseEmojiButton"));
     audioStopButton_->setFixedSize(18, 18);
     audioStopButton_->setToolTip(QStringLiteral("暂停下载"));
@@ -641,12 +641,12 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
         "QScrollBar::handle:vertical { background: rgba(148,163,184,0.35); border-radius: 4px; min-height: 30px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
 
-    addBookButton_ = new QPushButton(QStringLiteral("添加词书"), this);
+    addBookButton_ = new HoverScaleButton(QStringLiteral("添加词书"), this);
     addBookButton_->setFixedHeight(60);
     addBookButton_->setStyleSheet(QStringLiteral(
         "font-size: 22px; font-weight: 700; border-radius: 18px;"
         "background: #0f1b3d; color: #ffffff;"
-        "QPushButton:hover { background: #13224b; }"));
+        "HoverScaleButton:hover { background: #13224b; }"));
 
     root->addLayout(header);
     root->addWidget(currentTitleLabel_);
@@ -655,9 +655,9 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     root->addWidget(booksList_, 1);
     root->addWidget(addBookButton_);
 
-    connect(backButton_, &QPushButton::clicked, this, &WordBooksPageWidget::backClicked);
-    connect(addBookButton_, &QPushButton::clicked, this, &WordBooksPageWidget::addBookClicked);
-    connect(audioStopButton_, &QPushButton::clicked, this, &WordBooksPageWidget::audioDownloadStopRequested);
+    connect(backButton_, &HoverScaleButton::clicked, this, &WordBooksPageWidget::backClicked);
+    connect(addBookButton_, &HoverScaleButton::clicked, this, &WordBooksPageWidget::addBookClicked);
+    connect(audioStopButton_, &HoverScaleButton::clicked, this, &WordBooksPageWidget::audioDownloadStopRequested);
     setAudioDownloadStatus(QStringLiteral("音频未下载"), 0, 0, false);
 }
 
@@ -856,7 +856,7 @@ void WordBooksPageWidget::rebuildList() {
         rightLayout->setAlignment(Qt::AlignTop | Qt::AlignRight);
 
         if (!isCurrent) {
-            auto *learnButton = new QPushButton(QStringLiteral("绑定"), row);
+            auto *learnButton = new HoverScaleButton(QStringLiteral("绑定"), row);
             learnButton->setObjectName(QStringLiteral("bookLearnButton"));
             learnButton->setFixedSize(88, 34);
             learnButton->setCursor(Qt::PointingHandCursor);
@@ -873,11 +873,11 @@ void WordBooksPageWidget::rebuildList() {
                 "}"
                 "#bookLearnButton:hover { background: #eef2f7; }"
                 "#bookLearnButton:pressed { background: #e2e8f0; }"));
-            connect(learnButton, &QPushButton::clicked, this, [this, book]() {
+            connect(learnButton, &HoverScaleButton::clicked, this, [this, book]() {
                 emit wordBookSelected(book.id);
             });
 
-            auto *deleteButton = new QPushButton(QStringLiteral("🗑"), row);
+            auto *deleteButton = new HoverScaleButton(QStringLiteral("🗑"), row);
             deleteButton->setObjectName(QStringLiteral("bookDeleteEmojiButton"));
             deleteButton->setFixedSize(26, 26);
             deleteButton->setToolTip(QStringLiteral("删除词书"));
@@ -887,7 +887,7 @@ void WordBooksPageWidget::rebuildList() {
                 "  background: transparent; font-size: 12px; color: #64748b;"
                 "}"
                 "#bookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
-            connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
+            connect(deleteButton, &HoverScaleButton::clicked, this, [this, book]() {
                 emit wordBookDeleteRequested(book.id);
             });
 
@@ -899,7 +899,7 @@ void WordBooksPageWidget::rebuildList() {
             opsRow->addWidget(deleteButton);
             rightLayout->addLayout(opsRow);
         } else {
-            auto *downloadButton = new QPushButton(QStringLiteral("下载音频"), row);
+            auto *downloadButton = new HoverScaleButton(QStringLiteral("下载音频"), row);
             downloadButton->setObjectName(QStringLiteral("bookDownloadButton"));
             downloadButton->setFixedSize(92, 34);
             downloadButton->setCursor(Qt::PointingHandCursor);
@@ -914,11 +914,11 @@ void WordBooksPageWidget::rebuildList() {
                 "}"
                 "#bookDownloadButton:hover { background: #eef2f7; }"
                 "#bookDownloadButton:pressed { background: #e2e8f0; }"));
-            connect(downloadButton, &QPushButton::clicked, this, [this, book]() {
+            connect(downloadButton, &HoverScaleButton::clicked, this, [this, book]() {
                 emit downloadAudioRequested(book.id);
             });
 
-            auto *deleteButton = new QPushButton(QStringLiteral("🗑"), row);
+            auto *deleteButton = new HoverScaleButton(QStringLiteral("🗑"), row);
             deleteButton->setObjectName(QStringLiteral("bookDeleteEmojiButton"));
             deleteButton->setFixedSize(26, 26);
             deleteButton->setToolTip(QStringLiteral("删除词书"));
@@ -928,7 +928,7 @@ void WordBooksPageWidget::rebuildList() {
                 "  background: transparent; font-size: 12px; color: #64748b;"
                 "}"
                 "#bookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
-            connect(deleteButton, &QPushButton::clicked, this, [this, book]() {
+            connect(deleteButton, &HoverScaleButton::clicked, this, [this, book]() {
                 emit wordBookDeleteRequested(book.id);
             });
 

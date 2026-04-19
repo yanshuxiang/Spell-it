@@ -398,8 +398,8 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     auto *buttons = new QHBoxLayout();
     buttons->setSpacing(16);
 
-    auto *cancelButton = new QPushButton(QStringLiteral("返回首页"), this);
-    auto *importButton = new QPushButton(QStringLiteral("导入词库"), this);
+    auto *cancelButton = new HoverScaleButton(QStringLiteral("返回首页"), this);
+    auto *importButton = new HoverScaleButton(QStringLiteral("导入词库"), this);
     cancelButton->setFixedSize(200, 62);
     importButton->setFixedSize(200, 62);
     cancelButton->setStyleSheet(QStringLiteral(
@@ -423,8 +423,8 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     root->addSpacing(8);
     root->addLayout(buttons);
 
-    connect(cancelButton, &QPushButton::clicked, this, &MappingPageWidget::cancelled);
-    connect(importButton, &QPushButton::clicked, this, [this]() {
+    connect(cancelButton, &HoverScaleButton::clicked, this, &MappingPageWidget::cancelled);
+    connect(importButton, &HoverScaleButton::clicked, this, [this]() {
         if (wordCombo_->currentIndex() < 0 || translationCombo_->currentIndex() < 0) {
             showWarningPrompt(this, QStringLiteral("映射不完整"), QStringLiteral("请先选择单词列和释义列。"));
             return;

@@ -57,7 +57,33 @@ void showInfoPrompt(QWidget *parent, const QString &title, const QString &messag
 void showWarningPrompt(QWidget *parent, const QString &title, const QString &message);
 void showErrorPrompt(QWidget *parent, const QString &title, const QString &message);
 QString buildMiniWeekCalendarHtml(const QDateTime &nextReview);
-
 } // namespace GuiWidgetsInternal
+
+#include <QPushButton>
+
+class QEnterEvent;
+
+class HoverScaleButton : public QPushButton {
+    Q_OBJECT
+    Q_PROPERTY(qreal scale READ scale WRITE setScale)
+public:
+    explicit HoverScaleButton(const QString &text, QWidget *parent = nullptr);
+    explicit HoverScaleButton(QWidget *parent = nullptr);
+
+    qreal scale() const { return scale_; }
+    void setScale(qreal s) {
+        if (qFuzzyCompare(scale_, s)) return;
+        scale_ = s;
+        update();
+    }
+
+protected:
+    void enterEvent(QEnterEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    qreal scale_ = 1.0;
+};
 
 #endif // GUI_WIDGETS_INTERNAL_H
