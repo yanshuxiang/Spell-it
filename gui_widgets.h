@@ -404,6 +404,8 @@ private:
     qreal computeNormalizedVolume(const QString &audioFilePath);
     void animateHomeToPageTransition(const QRect &sourceRect, QWidget *targetPage);
     void animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect);
+    void animateStatisticsPageRise();
+    void animateStatisticsPageBack();
     void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);

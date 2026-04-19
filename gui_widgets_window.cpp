@@ -259,16 +259,9 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
         db_.setLastDashboardCardIndex(index);
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
-    connect(homePage_, &HomePageWidget::statsClicked, this, [this]() {
-        rememberHomeCardIndex();
-        statisticsPage_->setLogs(db_.fetchWeeklyLogs());
-        stack_->setCurrentWidget(statisticsPage_);
-    });
+    connect(homePage_, &HomePageWidget::statsClicked, this, &VibeSpellerWindow::animateStatisticsPageRise);
 
-    connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, [this]() {
-        restoreHomeCardIndex(false);
-        stack_->setCurrentWidget(homePage_);
-    });
+    connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, &VibeSpellerWindow::animateStatisticsPageBack);
 
     connect(mappingPage_, &MappingPageWidget::cancelled, this, [this]() {
         if (returnToWordBooksAfterImport_) {
@@ -2047,6 +2040,135 @@ void VibeSpellerWindow::animatePageToHomeTransition(QWidget *sourcePage, const Q
         }
         cleanupHost->hide();
         cleanupHost->deleteLater();
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateStatisticsPageRise() {
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("stats rise begin"));
+    rememberHomeCardIndex();
+    statisticsPage_->setLogs(db_.fetchWeeklyLogs());
+
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || statisticsPage_ == nullptr) {
+        stack_->setCurrentWidget(statisticsPage_);
+        statisticsPage_->setFocus();
+        return;
+    }
+
+    const QRect startRect(0, windowRect.height(), windowRect.width(), windowRect.height());
+    const QRect endRect(0, 0, windowRect.width(), windowRect.height());
+
+    statisticsPage_->resize(windowRect.size());
+    statisticsPage_->ensurePolished();
+    if (statisticsPage_->layout() != nullptr) {
+        statisticsPage_->layout()->activate();
+    }
+
+    QPixmap snapshot(statisticsPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        statisticsPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        stack_->setCurrentWidget(statisticsPage_);
+        statisticsPage_->setFocus();
+        AppLogger::warn(QStringLiteral("Transition"), QStringLiteral("stats rise fallback switch (snapshot null)"));
+        return;
+    }
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0); 
+    card->setGeometry(startRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *riseAnim = new QPropertyAnimation(card, "geometry", group);
+    riseAnim->setDuration(kPageLaunchDurationMs + 100); 
+    riseAnim->setStartValue(startRect);
+    riseAnim->setEndValue(endRect);
+    riseAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost]() {
+        stack_->setCurrentWidget(statisticsPage_);
+        statisticsPage_->setFocus();
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats rise finished"));
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateStatisticsPageBack() {
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("stats back begin"));
+    
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || statisticsPage_ == nullptr || homePage_ == nullptr) {
+        restoreHomeCardIndex(false);
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    QPixmap snapshot(statisticsPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        statisticsPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        restoreHomeCardIndex(false);
+        stack_->setCurrentWidget(homePage_);
+        return;
+    }
+
+    restoreHomeCardIndex(false);
+    stack_->setCurrentWidget(homePage_);
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0); 
+    card->setGeometry(windowRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *backAnim = new QPropertyAnimation(card, "geometry", group);
+    backAnim->setDuration(kPageLaunchDurationMs); 
+    backAnim->setStartValue(windowRect);
+    backAnim->setEndValue(QRect(0, windowRect.height(), windowRect.width(), windowRect.height()));
+    backAnim->setEasingCurve(QEasingCurve::InCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [group, transitionHost]() {
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats back finished"));
     });
 
     group->start();
