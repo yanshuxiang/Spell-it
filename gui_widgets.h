@@ -86,12 +86,14 @@ signals:
     void dashboardIndexChanged(int index);
     void booksClicked();
     void statsClicked();
+    void managementClicked();
 
 private:
     void handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect);
     void handleChangeBookRequest(int modeIndex);
     void handleCurrentIndexChanged(int index);
     void handleStatsRequest();
+    void handleManagementRequest();
     void updateCardModel();
 
     QVector<DashboardCardState> cards_;
@@ -341,6 +343,7 @@ private:
 
     QVector<WordBookItem> books_;
     int activeBookId_ = -1;
+    bool isManagementMode_ = false;
     QString currentTrainingType_;
     QString currentTrainingDisplayName_;
     QLabel *metaLabel_ = nullptr;

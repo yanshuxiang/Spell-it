@@ -705,6 +705,7 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books,
     books_ = books;
     activeBookId_ = activeBookId;
     currentTrainingType_ = trainingType.trimmed().toLower();
+    isManagementMode_ = (currentTrainingType_ == QStringLiteral("none"));
     currentTrainingDisplayName_ = trainingDisplayName.trimmed();
     int totalWords = 0;
     for (const WordBookItem &book : books_) {
@@ -714,11 +715,18 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books,
         metaLabel_->setText(QStringLiteral("共 %1 本词书 · %2 词").arg(books_.size()).arg(totalWords));
     }
     if (currentTitleLabel_) {
+        currentTitleLabel_->setVisible(!isManagementMode_);
         if (currentTrainingDisplayName_.isEmpty()) {
             currentTitleLabel_->setText(QStringLiteral("当前学习词书"));
         } else {
             currentTitleLabel_->setText(QStringLiteral("%1 · 当前绑定词书").arg(currentTrainingDisplayName_));
         }
+    }
+    if (currentCardHost_) {
+        currentCardHost_->setVisible(!isManagementMode_);
+    }
+    if (otherTitleLabel_) {
+        otherTitleLabel_->setText(isManagementMode_ ? QStringLiteral("所有词库") : QStringLiteral("其他词书"));
     }
     rebuildList();
 }
@@ -772,11 +780,13 @@ void WordBooksPageWidget::rebuildList() {
 
     WordBookItem activeBook;
     bool hasActiveBook = false;
-    for (const WordBookItem &book : books_) {
-        if (book.id == activeBookId_) {
-            activeBook = book;
-            hasActiveBook = true;
-            break;
+    if (!isManagementMode_) {
+        for (const WordBookItem &book : books_) {
+            if (book.id == activeBookId_) {
+                activeBook = book;
+                hasActiveBook = true;
+                break;
+            }
         }
     }
 
@@ -850,6 +860,7 @@ void WordBooksPageWidget::rebuildList() {
             learnButton->setObjectName(QStringLiteral("bookLearnButton"));
             learnButton->setFixedSize(88, 34);
             learnButton->setCursor(Qt::PointingHandCursor);
+            learnButton->setVisible(!isManagementMode_);
             learnButton->setStyleSheet(QStringLiteral(
                 "#bookLearnButton {"
                 "  font-size: 13px;"
@@ -892,6 +903,7 @@ void WordBooksPageWidget::rebuildList() {
             downloadButton->setObjectName(QStringLiteral("bookDownloadButton"));
             downloadButton->setFixedSize(92, 34);
             downloadButton->setCursor(Qt::PointingHandCursor);
+            downloadButton->setVisible(!isManagementMode_);
             downloadButton->setToolTip(QStringLiteral("下载音频"));
             downloadButton->setStyleSheet(QStringLiteral(
                 "#bookDownloadButton {"
@@ -924,7 +936,9 @@ void WordBooksPageWidget::rebuildList() {
             downloadRow->setContentsMargins(0, 0, 0, 0);
             downloadRow->setSpacing(6);
             downloadRow->addStretch(1);
-            downloadRow->addWidget(downloadButton);
+            if (!isManagementMode_) {
+                downloadRow->addWidget(downloadButton);
+            }
 
             auto *deleteRow = new QHBoxLayout();
             deleteRow->setContentsMargins(0, 0, 0, 0);

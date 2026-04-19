@@ -259,6 +259,9 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
         db_.setLastDashboardCardIndex(index);
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
+    connect(homePage_, &HomePageWidget::managementClicked, this, [this]() {
+        openWordBooksForTraining(QStringLiteral("none"));
+    });
     connect(homePage_, &HomePageWidget::statsClicked, this, &VibeSpellerWindow::animateStatisticsPageRise);
 
     connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, &VibeSpellerWindow::animateStatisticsPageBack);
@@ -1028,15 +1031,19 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
         return;
     }
 
-    const QString trainingType = pendingBookSelectionTrainingType_.isEmpty()
-                                     ? QStringLiteral("spelling")
-                                     : pendingBookSelectionTrainingType_;
-    preservedHomeCardIndex_ = dashboardIndexForTrainingType(trainingType);
+    const QString trainingType = pendingBookSelectionTrainingType_;
+    if (trainingType == QStringLiteral("none")) {
+        AppLogger::info(QStringLiteral("BookBinding"), QStringLiteral("select ignored in management-only mode"));
+        return;
+    }
+
+    const QString actualType = trainingType.isEmpty() ? QStringLiteral("spelling") : trainingType;
+    preservedHomeCardIndex_ = dashboardIndexForTrainingType(actualType);
     AppLogger::info(QStringLiteral("BookBinding"),
                     QStringLiteral("select context, trainingType=%1, currentActive=%2")
-                        .arg(trainingType)
-                        .arg(db_.activeBookIdForTraining(trainingType)));
-    if (bookId == db_.activeBookIdForTraining(trainingType)) {
+                        .arg(actualType)
+                        .arg(db_.activeBookIdForTraining(actualType)));
+    if (bookId == db_.activeBookIdForTraining(actualType)) {
         stack_->setCurrentWidget(homePage_);
         AppLogger::info(QStringLiteral("BookBinding"), QStringLiteral("select no-op, already active"));
         return;
@@ -1046,30 +1053,30 @@ void VibeSpellerWindow::onSelectWordBook(int bookId) {
         this,
         QStringLiteral("切换词书"),
         QStringLiteral("是否将“%1”切换到新词书？\n当前模式进度会保留，已学习单词仍会继续推送复习。")
-            .arg(trainingDisplayName(trainingType)));
+            .arg(trainingDisplayName(actualType)));
     if (!confirmSwitch) {
         AppLogger::info(QStringLiteral("BookBinding"), QStringLiteral("switch cancelled by user"));
         return;
     }
 
-    if (!db_.setActiveBookIdForTraining(trainingType, bookId)) {
+    if (!db_.setActiveBookIdForTraining(actualType, bookId)) {
         showWarningPrompt(this,
                           QStringLiteral("切换失败"),
                           QStringLiteral("切换当前词书失败：%1").arg(db_.lastError()));
         AppLogger::error(QStringLiteral("BookBinding"),
                          QStringLiteral("switch failed, type=%1, bookId=%2, error=%3")
-                             .arg(trainingType)
+                             .arg(actualType)
                              .arg(bookId)
                              .arg(db_.lastError()));
         return;
     }
 
-    clearSessionForMode(learningModeForTraining(trainingType));
+    clearSessionForMode(learningModeForTraining(actualType));
     refreshHomeCounts();
     refreshWordBooks();
     stack_->setCurrentWidget(homePage_);
     AppLogger::info(QStringLiteral("BookBinding"),
-                    QStringLiteral("switch success, type=%1, bookId=%2").arg(trainingType).arg(bookId));
+                    QStringLiteral("switch success, type=%1, bookId=%2").arg(actualType).arg(bookId));
 }
 
 void VibeSpellerWindow::onDeleteWordBook(int bookId) {
@@ -1535,6 +1542,10 @@ void VibeSpellerWindow::requestCsvImportIfNeeded() {
 }
 
 bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
+    if (inTransition_) {
+        return false;
+    }
+    inTransition_ = true;
     AppLogger::step(QStringLiteral("Import"),
                     QStringLiteral("pick csv requested, returnToWordBooks=%1")
                         .arg(returnToWordBooks ? QStringLiteral("true") : QStringLiteral("false")));
@@ -1544,6 +1555,7 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
                                                           QStringLiteral("CSV Files (*.csv);;All Files (*)"));
     if (csvPath.isEmpty()) {
         AppLogger::info(QStringLiteral("Import"), QStringLiteral("pick csv cancelled"));
+        inTransition_ = false;
         return false;
     }
 
@@ -1555,6 +1567,7 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
                         QStringLiteral("读取 CSV 失败：%1").arg(db_.lastError()));
         AppLogger::error(QStringLiteral("Import"),
                          QStringLiteral("read preview failed, csv=%1, error=%2").arg(csvPath, db_.lastError()));
+        inTransition_ = false;
         return false;
     }
 
@@ -1562,6 +1575,7 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
     returnToWordBooksAfterImport_ = returnToWordBooks;
     mappingPage_->setCsvData(csvPath, headers, previewRows);
     stack_->setCurrentWidget(mappingPage_);
+    inTransition_ = false;
     AppLogger::info(QStringLiteral("Import"),
                     QStringLiteral("open mapping page, csv=%1, headers=%2, previewRows=%3")
                         .arg(csvPath)
@@ -2550,9 +2564,7 @@ SessionMode VibeSpellerWindow::learningModeForTraining(const QString &trainingTy
 }
 
 void VibeSpellerWindow::openWordBooksForTraining(const QString &trainingType) {
-    const QString type = trainingType.trimmed().toLower().isEmpty()
-                             ? QStringLiteral("spelling")
-                             : trainingType.trimmed().toLower();
+    const QString type = trainingType.trimmed().toLower();
     if (stack_ != nullptr && stack_->currentWidget() == homePage_) {
         rememberHomeCardIndex();
     }

@@ -61,6 +61,9 @@ public:
     Q_INVOKABLE void requestStats() {
         emit statsRequested();
     }
+    Q_INVOKABLE void requestManagement() {
+        emit managementRequested();
+    }
 
 signals:
     void cardsChanged();
@@ -68,6 +71,7 @@ signals:
     void startRequested(int modeIndex, bool isReview, const QRect &globalRect);
     void changeBookRequested(int modeIndex);
     void statsRequested();
+    void managementRequested();
 
 private:
     QVariantList cards_;
@@ -103,6 +107,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     connect(bridge, &DashboardBridge::changeBookRequested, this, &HomePageWidget::handleChangeBookRequest);
     connect(bridge, &DashboardBridge::currentIndexChanged, this, &HomePageWidget::handleCurrentIndexChanged);
     connect(bridge, &DashboardBridge::statsRequested, this, &HomePageWidget::handleStatsRequest);
+    connect(bridge, &DashboardBridge::managementRequested, this, &HomePageWidget::handleManagementRequest);
 }
 
 void HomePageWidget::setDashboardCards(const QVector<DashboardCardState> &cards,
@@ -229,6 +234,9 @@ void HomePageWidget::handleCurrentIndexChanged(int index) {
 
 void HomePageWidget::handleStatsRequest() {
     emit statsClicked();
+}
+void HomePageWidget::handleManagementRequest() {
+    emit managementClicked();
 }
 
 QRect HomePageWidget::launchRect(SessionMode mode) const {
