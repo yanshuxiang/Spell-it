@@ -27,7 +27,6 @@ import json
 import re
 import threading
 import time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +37,30 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_CONFIG_KEY = "3"
 MAX_RETRIES = 3
 DEFAULT_WORKERS = 8
+DEFAULT_KEEP_RATIO = 0.67
+
+GENERIC_CLUSTER_TERMS = {
+    "问题",
+    "发展",
+    "建设",
+    "水平",
+    "能力",
+    "方式",
+    "影响",
+    "作用",
+    "方面",
+    "现象",
+    "工作",
+    "措施",
+    "质量",
+    "效果",
+    "管理",
+    "改革",
+    "实践",
+    "社会",
+    "国家",
+    "人民",
+}
 
 
 @dataclass
@@ -137,13 +160,15 @@ def load_processed_ids(path: Path) -> set[str]:
 def build_prompt() -> str:
     return (
         "你是英语四六级翻译命题分析助手。"
-        "请从给定中文翻译原文中提取“可训练的词群/主题短语”，只要高价值项。\n"
+        "请从给定中文翻译原文中提取“可训练的词群/主题短语”，只保留高价值且可考的项。\n"
         "要求：\n"
         "1) 必须是中文词群（2~8字优先），不能是完整长句。\n"
         "2) 每个词群给出2~5个高频英文表达（短语或词组）。\n"
         "3) 每个词群给出1个来自原文的中文例句片段（source_sentence）。\n"
-        "4) 避免泛词（如'问题'/'发展'）除非在原文里有强语义限定。\n"
-        "5) 如果文本里没什么可提取内容，返回空数组。\n\n"
+        "4) 严格避免泛词（如'问题'/'发展'/'建设'），除非有强限定词并能形成稳定搭配。\n"
+        "5) 优先保留可用于翻译训练卡片的主题词群，例如政策、科技、生态、教育、文化、经济治理等。\n"
+        "6) 数量控制：每段最多输出 3~5 个词群，宁少勿滥。\n"
+        "7) 如果文本里没什么可提取内容，返回空数组。\n\n"
         "严格输出 JSON：\n"
         "{\n"
         '  "clusters":[\n'
@@ -151,6 +176,7 @@ def build_prompt() -> str:
         '      "cluster_zh":"生态文明",\n'
         '      "keywords_en":["ecological civilization","eco-civilization"],\n'
         '      "source_sentence":"...生态文明建设..."\n'
+        '      "confidence":0.86\n'
         "    }\n"
         "  ]\n"
         "}\n"
@@ -217,6 +243,35 @@ def clean_keywords_en(values: Any) -> list[str]:
     return out[:8]
 
 
+def is_generic_cluster(name: str) -> bool:
+    if not name:
+        return True
+    if len(name) <= 1:
+        return True
+    if name in GENERIC_CLUSTER_TERMS:
+        return True
+    # pure numeric/date-like or too symbolic
+    if re.fullmatch(r"[0-9\-./年月日]+", name):
+        return True
+    # if mostly punctuation/latin
+    zh_chars = re.findall(r"[\u4e00-\u9fff]", name)
+    if len(zh_chars) < 2:
+        return True
+    return False
+
+
+def parse_confidence(v: Any) -> float:
+    try:
+        x = float(v)
+    except Exception:
+        return 0.5
+    if x < 0:
+        return 0.0
+    if x > 1:
+        return 1.0
+    return x
+
+
 def write_candidates_append(path: Path, rows: list[dict[str, Any]], lock: threading.Lock) -> None:
     if not rows:
         return
@@ -237,10 +292,15 @@ def process_one(
         cluster_zh = clean_cluster_name(item.get("cluster_zh", ""))
         if not cluster_zh or len(cluster_zh) > 16:
             continue
+        if is_generic_cluster(cluster_zh):
+            continue
         keywords_en = clean_keywords_en(item.get("keywords_en", []))
+        if len(keywords_en) < 2:
+            continue
         source_sentence = str(item.get("source_sentence", "")).strip()
         if not source_sentence:
             source_sentence = rec.text_cn[:80]
+        confidence = parse_confidence(item.get("confidence", 0.5))
         output.append(
             {
                 "record_id": rec.record_id,
@@ -250,14 +310,34 @@ def process_one(
                 "cluster_zh": cluster_zh,
                 "keywords_en": keywords_en,
                 "source_sentence": source_sentence,
+                "confidence": confidence,
             }
         )
     return output
 
 
-def merge_cards(candidates_path: Path) -> list[dict[str, Any]]:
+def score_card(card: dict[str, Any]) -> float:
+    source_count = int(card.get("source_count", 0))
+    exam_count = len(card.get("exam_labels", []))
+    kw_count = len(card.get("keywords_en", []))
+    conf = float(card.get("avg_confidence", 0.5))
+    name = str(card.get("cluster_zh", ""))
+
+    score = 0.0
+    score += min(source_count, 4) * 0.25
+    score += min(exam_count, 3) * 0.18
+    score += min(kw_count, 5) * 0.08
+    score += conf * 0.45
+    if len(name) < 2 or len(name) > 10:
+        score -= 0.2
+    if is_generic_cluster(name):
+        score -= 0.5
+    return round(score, 4)
+
+
+def merge_cards(candidates_path: Path, keep_ratio: float) -> tuple[list[dict[str, Any]], dict[str, int]]:
     if not candidates_path.exists():
-        return []
+        return [], {"raw_cards": 0, "filtered_cards": 0}
     grouped: dict[str, dict[str, Any]] = {}
 
     with candidates_path.open("r", encoding="utf-8") as f:
@@ -277,6 +357,8 @@ def merge_cards(candidates_path: Path) -> list[dict[str, Any]]:
                     "exam_labels": set(),
                     "source_sentences": [],
                     "source_count": 0,
+                    "confidence_sum": 0.0,
+                    "confidence_n": 0,
                 }
             g = grouped[key]
             g["source_count"] += 1
@@ -290,9 +372,13 @@ def merge_cards(candidates_path: Path) -> list[dict[str, Any]]:
             sent = str(obj.get("source_sentence", "")).strip()
             if sent and sent not in g["source_sentences"]:
                 g["source_sentences"].append(sent)
+            g["confidence_sum"] += parse_confidence(obj.get("confidence", 0.5))
+            g["confidence_n"] += 1
 
     cards: list[dict[str, Any]] = []
     for _, g in grouped.items():
+        conf_n = max(1, int(g["confidence_n"]))
+        avg_confidence = round(float(g["confidence_sum"]) / conf_n, 4)
         cards.append(
             {
                 "cluster_zh": g["cluster_zh"],
@@ -300,11 +386,20 @@ def merge_cards(candidates_path: Path) -> list[dict[str, Any]]:
                 "exam_labels": sorted(g["exam_labels"]),
                 "source_count": g["source_count"],
                 "examples_cn": g["source_sentences"][:3],
+                "avg_confidence": avg_confidence,
             }
         )
 
-    cards.sort(key=lambda x: (-x["source_count"], x["cluster_zh"]))
-    return cards
+    for card in cards:
+        card["quality_score"] = score_card(card)
+
+    cards.sort(key=lambda x: (-x["quality_score"], -x["source_count"], x["cluster_zh"]))
+    raw_n = len(cards)
+    ratio = min(1.0, max(0.2, keep_ratio))
+    keep_n = max(1, int(round(raw_n * ratio))) if raw_n > 0 else 0
+    filtered = cards[:keep_n]
+    stats = {"raw_cards": raw_n, "filtered_cards": len(filtered)}
+    return filtered, stats
 
 
 def main() -> int:
@@ -335,6 +430,17 @@ def main() -> int:
         default=DEFAULT_WORKERS,
         help=f"Thread workers for passage tasks (set 1 for single-thread). Default: {DEFAULT_WORKERS}",
     )
+    parser.add_argument(
+        "--keep-ratio",
+        type=float,
+        default=DEFAULT_KEEP_RATIO,
+        help=f"Keep top quality card ratio after scoring. Default: {DEFAULT_KEEP_RATIO}",
+    )
+    parser.add_argument(
+        "--reset-candidates",
+        action="store_true",
+        help="Delete old candidate file before running to force full re-distill.",
+    )
     args = parser.parse_args()
     try:
         from openai import OpenAI  # type: ignore
@@ -353,7 +459,14 @@ def main() -> int:
     base_url, model_name, api_keys = discover_api_config(root)
     clients = [OpenAI(api_key=k, base_url=base_url) for k in api_keys]
     workers = max(1, args.workers)
-    print(f"[INFO] model={model_name} base={base_url} keys={len(api_keys)} workers={workers}")
+    keep_ratio = min(1.0, max(0.2, float(args.keep_ratio)))
+    print(
+        f"[INFO] model={model_name} base={base_url} keys={len(api_keys)} workers={workers} keep_ratio={keep_ratio:.2f}"
+    )
+
+    if args.reset_candidates and cand_path.exists():
+        cand_path.unlink()
+        print(f"[INFO] reset old candidates: {cand_path}")
 
     all_rows = load_input_records(in_path)
     done_ids = load_processed_ids(cand_path)
@@ -378,7 +491,7 @@ def main() -> int:
                     pass
                 pbar.update(1)
 
-    cards = merge_cards(cand_path)
+    cards, stats = merge_cards(cand_path, keep_ratio=keep_ratio)
     with cards_path.open("w", encoding="utf-8") as f:
         json.dump(
             {
@@ -387,6 +500,9 @@ def main() -> int:
                     "input_file": str(in_path),
                     "candidate_file": str(cand_path),
                     "total_cards": len(cards),
+                    "raw_cards_before_filter": stats["raw_cards"],
+                    "filtered_cards_after_ratio": stats["filtered_cards"],
+                    "keep_ratio": keep_ratio,
                 },
                 "cards": cards,
             },
@@ -397,7 +513,7 @@ def main() -> int:
 
     print(f"[OK] candidates={cand_path}")
     print(f"[OK] cards={cards_path}")
-    print(f"[OK] total_cards={len(cards)}")
+    print(f"[OK] total_cards={len(cards)} raw_before_filter={stats['raw_cards']}")
     return 0
 
 
