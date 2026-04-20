@@ -266,8 +266,15 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(homePage_, &HomePageWidget::startPhraseClusterLearningClicked, this, &VibeSpellerWindow::onStartPhraseClusterLearning);
     connect(homePage_, &HomePageWidget::startPhraseClusterReviewClicked, this, &VibeSpellerWindow::onStartPhraseClusterReview);
     connect(homePage_, &HomePageWidget::changeBookRequested, this, &VibeSpellerWindow::onChangeBookForTraining);
-    connect(homePage_, &HomePageWidget::dashboardIndexChanged, this, [this](int index) {
-        db_.setLastDashboardCardIndex(index);
+    auto *dashboardIndexSaveTimer = new QTimer(this);
+    dashboardIndexSaveTimer->setSingleShot(true);
+    dashboardIndexSaveTimer->setInterval(180);
+    connect(homePage_, &HomePageWidget::dashboardIndexChanged, this, [this, dashboardIndexSaveTimer](int index) {
+        pendingDashboardIndexToSave_ = qBound(0, index, 3);
+        dashboardIndexSaveTimer->start();
+    });
+    connect(dashboardIndexSaveTimer, &QTimer::timeout, this, [this]() {
+        db_.setLastDashboardCardIndex(pendingDashboardIndexToSave_);
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::calendarClicked, this, &VibeSpellerWindow::onOpenCalendar);

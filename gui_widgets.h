@@ -580,6 +580,7 @@ private:
     QProcess *pronunciationProcess_ = nullptr;
     QHash<QString, qreal> pronunciationVolumeCache_;
     int preservedHomeCardIndex_ = -1;
+    int pendingDashboardIndexToSave_ = 0;
     bool inTransition_ = false;
     QString calendarFilterType_ = QStringLiteral("all");
 };
