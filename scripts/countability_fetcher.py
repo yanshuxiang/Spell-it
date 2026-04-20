@@ -37,8 +37,8 @@ MODEL_CONFIGS = {
 }
 
 # --- 全局设定 ---
-INPUT_FILE = "test.csv"
-OUTPUT_FILE = "test_return.csv"
+INPUT_FILE = "../data/test.csv"
+OUTPUT_FILE = "../data/test_return.csv"
 BATCH_SIZE = 15  # 适当增加批次大小
 MAX_WORKERS = 15  # 增加并发线程数 (对应多 Key 负载)
 MAX_RETRIES = 3

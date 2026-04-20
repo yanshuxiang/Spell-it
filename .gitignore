@@ -43,3 +43,5 @@ scratch/
 csv_backup/
 db_backup/
 runtime_logs/
+resources/
+phrase_clusters/

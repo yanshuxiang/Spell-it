@@ -70,4 +70,21 @@ Spell it 是一个面向拼写训练的极简桌面工具。
 - 学习统计页支持按最近 7 天可视化查看。
 - 本地 SQLite 存储全部学习状态、调度时间、会话进度与统计数据。
 
+### 6. 四六级翻译词群数据（新增种子）
+
+- 词群数据目录：`data/phrase_clusters/`
+- 结构定义：`data/phrase_clusters/cet_phrase_cluster_schema.json`
+- 种子样例：`data/phrase_clusters/cet_phrase_cluster_seed.json`
+- 快速校验：
+  - `python3 scripts/validate_phrase_cluster_json.py data/phrase_clusters/cet_phrase_cluster_seed.json`
+- 从 `docx` 自动提取翻译题中文原文（批量）：
+  - `python3 scripts/extract_translation_from_docx.py --input <你的docx目录或文件> --output data/phrase_clusters/cet_translation_corpus.jsonl`
+- 从资源目录（`doc/docx/pdf`）自动提取翻译原文（推荐）：
+  - `python3 scripts/extract_translation_from_resources.py --input assets/resources --output-dir data/phrase_clusters`
+  - 输出文件：
+    - `data/phrase_clusters/cet_translation_extracted_raw.jsonl`
+    - `data/phrase_clusters/cet_translation_extracted_high_confidence.jsonl`
+    - `data/phrase_clusters/cet_translation_extracted_needs_review.jsonl`
+    - `data/phrase_clusters/cet_translation_extracted_summary.json`
+
 ---
