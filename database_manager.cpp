@@ -124,6 +124,41 @@ WordItem readWordFromQuery(const QSqlQuery &query) {
     return item;
 }
 
+QString resultCode(SpellingResult result) {
+    switch (result) {
+    case SpellingResult::Mastered:
+        return QStringLiteral("mastered");
+    case SpellingResult::Blurry:
+        return QStringLiteral("blurry");
+    case SpellingResult::Unfamiliar:
+    default:
+        return QStringLiteral("unfamiliar");
+    }
+}
+
+SpellingResult resultFromCode(const QString &code) {
+    const QString normalized = code.trimmed().toLower();
+    if (normalized == QStringLiteral("mastered")) {
+        return SpellingResult::Mastered;
+    }
+    if (normalized == QStringLiteral("blurry")) {
+        return SpellingResult::Blurry;
+    }
+    return SpellingResult::Unfamiliar;
+}
+
+QDateTime parseLocalDateTime(const QString &text) {
+    if (text.isEmpty()) {
+        return QDateTime();
+    }
+    QDateTime dt = QDateTime::fromString(text, kDateTimeFormat);
+    if (dt.isValid()) {
+        return dt;
+    }
+    dt = QDateTime::fromString(text, Qt::ISODate);
+    return dt;
+}
+
 // 判断一段 CSV 文本中是否存在未闭合的引号，用于支持跨行字段。
 bool csvRecordHasUnclosedQuote(const QString &text) {
     bool inQuotes = false;
@@ -388,6 +423,46 @@ bool DatabaseManager::initialize() {
         "cb_seconds INTEGER DEFAULT 0"
         ")");
     if (!query.exec(createLogsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createEventsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS learning_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "event_time TEXT NOT NULL,"
+        "event_date TEXT NOT NULL,"
+        "word_id INTEGER NOT NULL,"
+        "training_type TEXT NOT NULL,"
+        "result TEXT NOT NULL,"
+        "skipped INTEGER NOT NULL DEFAULT 0,"
+        "user_input TEXT"
+        ")");
+    if (!query.exec(createEventsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_learning_events_date "
+            "ON learning_events(event_date)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_learning_events_date_type "
+            "ON learning_events(event_date, training_type)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_learning_events_word_date "
+            "ON learning_events(word_id, event_date)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_learning_events_word_time "
+            "ON learning_events(word_id, event_time)"))) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -1700,6 +1775,279 @@ bool DatabaseManager::recordSpellingAttempt(int wordId, bool correct) {
         return false;
     }
     return true;
+}
+
+bool DatabaseManager::recordLearningEvent(const LearningEvent &event) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (event.wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+    const QString type = event.trainingType.trimmed().toLower();
+    if (!isValidTrainingType(type)) {
+        lastError_ = QStringLiteral("不支持的训练类型：%1").arg(event.trainingType);
+        return false;
+    }
+
+    const QDateTime eventTime = event.eventTime.isValid() ? event.eventTime : QDateTime::currentDateTime();
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO learning_events("
+        "event_time, event_date, word_id, training_type, result, skipped, user_input"
+        ") VALUES(?, ?, ?, ?, ?, ?, ?)"));
+    query.bindValue(0, eventTime.toString(kDateTimeFormat));
+    query.bindValue(1, eventTime.date().toString(Qt::ISODate));
+    query.bindValue(2, event.wordId);
+    query.bindValue(3, type);
+    query.bindValue(4, resultCode(event.result));
+    query.bindValue(5, event.skipped ? 1 : 0);
+    query.bindValue(6, event.userInput);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVector<DailyWordSummary> DatabaseManager::fetchDailyWordSummaries(const QDate &date,
+                                                                   const QString &trainingType) const {
+    QVector<DailyWordSummary> summaries;
+    if (!ensureDatabaseOpen()) {
+        return summaries;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    const bool allTypes = type.isEmpty() || type == QStringLiteral("all");
+    if (!allTypes && !isValidTrainingType(type)) {
+        return summaries;
+    }
+
+    QSqlQuery query(database());
+    QString sql = QStringLiteral(
+        "SELECT e.word_id, w.word, "
+        "       GROUP_CONCAT(DISTINCT e.training_type) AS training_types, "
+        "       COUNT(*) AS attempts, "
+        "       (SELECT ee.result FROM learning_events ee "
+        "        WHERE ee.word_id = e.word_id AND ee.event_date = e.event_date");
+    if (!allTypes) {
+        sql += QStringLiteral(" AND ee.training_type = :type");
+    }
+    sql += QStringLiteral(
+        "        ORDER BY ee.event_time DESC, ee.id DESC LIMIT 1) AS last_result, "
+        "       MAX(e.event_time) AS last_time "
+        "FROM learning_events e "
+        "JOIN words w ON w.id = e.word_id "
+        "WHERE e.event_date = :date");
+    if (!allTypes) {
+        sql += QStringLiteral(" AND e.training_type = :type");
+    }
+    sql += QStringLiteral(
+        " GROUP BY e.word_id, w.word "
+        "ORDER BY MAX(e.event_time) DESC");
+
+    query.prepare(sql);
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    if (!allTypes) {
+        query.bindValue(QStringLiteral(":type"), type);
+    }
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return summaries;
+    }
+
+    while (query.next()) {
+        DailyWordSummary summary;
+        summary.wordId = query.value(0).toInt();
+        summary.word = query.value(1).toString();
+        summary.trainingType = query.value(2).toString();
+        summary.attempts = query.value(3).toInt();
+        summary.lastResult = resultFromCode(query.value(4).toString());
+        summary.lastTime = parseLocalDateTime(query.value(5).toString());
+        summaries.push_back(summary);
+    }
+    return summaries;
+}
+
+int DatabaseManager::fetchDailyEventCount(const QDate &date, const QString &trainingType) const {
+    if (!ensureDatabaseOpen()) {
+        return 0;
+    }
+    const QString type = trainingType.trimmed().toLower();
+    const bool allTypes = type.isEmpty() || type == QStringLiteral("all");
+    if (!allTypes && !isValidTrainingType(type)) {
+        return 0;
+    }
+
+    QSqlQuery query(database());
+    if (allTypes) {
+        query.prepare(QStringLiteral(
+            "SELECT COUNT(*) FROM learning_events WHERE event_date = ?"));
+        query.bindValue(0, date.toString(Qt::ISODate));
+    } else {
+        query.prepare(QStringLiteral(
+            "SELECT COUNT(*) FROM learning_events WHERE event_date = ? AND training_type = ?"));
+        query.bindValue(0, date.toString(Qt::ISODate));
+        query.bindValue(1, type);
+    }
+
+    if (!query.exec() || !query.next()) {
+        lastError_ = query.lastError().text();
+        return 0;
+    }
+    return query.value(0).toInt();
+}
+
+bool DatabaseManager::fetchWordFullDetail(int wordId, WordFullDetail &detail) const {
+    detail = WordFullDetail();
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (wordId <= 0) {
+        lastError_ = QStringLiteral("无效的单词 ID");
+        return false;
+    }
+    if (!queryWordById(wordId, detail.word)) {
+        return false;
+    }
+
+    {
+        QSqlQuery query(database());
+        query.prepare(QStringLiteral(
+            "SELECT training_type, ease_factor, interval, next_review, status, "
+            "       correct_count, wrong_count, updated_at "
+            "FROM training_progress WHERE word_id = ? "
+            "ORDER BY training_type ASC"));
+        query.bindValue(0, wordId);
+        if (!query.exec()) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        while (query.next()) {
+            TrainingProgressDetail progress;
+            progress.trainingType = query.value(0).toString();
+            progress.easeFactor = query.value(1).toDouble();
+            progress.interval = query.value(2).toInt();
+            progress.nextReview = parseLocalDateTime(query.value(3).toString());
+            progress.status = query.value(4).toInt();
+            progress.correctCount = query.value(5).toInt();
+            progress.wrongCount = query.value(6).toInt();
+            progress.updatedAt = parseLocalDateTime(query.value(7).toString());
+            detail.progressByType.push_back(progress);
+        }
+    }
+
+    {
+        QSqlQuery query(database());
+        query.prepare(QStringLiteral(
+            "SELECT attempt_count, correct_count, updated_at "
+            "FROM word_spelling_stats WHERE word_id = ?"));
+        query.bindValue(0, wordId);
+        if (query.exec() && query.next()) {
+            detail.spellingAttemptCount = query.value(0).toInt();
+            detail.spellingCorrectCount = query.value(1).toInt();
+            detail.spellingStatsUpdatedAt = parseLocalDateTime(query.value(2).toString());
+        }
+    }
+
+    {
+        QSqlQuery query(database());
+        query.prepare(QStringLiteral(
+            "SELECT b.id, b.name, b.is_active "
+            "FROM book_words bw "
+            "JOIN word_books b ON b.id = bw.book_id "
+            "WHERE bw.word_id = ? "
+            "ORDER BY b.id ASC"));
+        query.bindValue(0, wordId);
+        if (!query.exec()) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        while (query.next()) {
+            WordBookItem book;
+            book.id = query.value(0).toInt();
+            book.name = query.value(1).toString();
+            book.isActive = query.value(2).toInt() == 1;
+            detail.books.push_back(book);
+        }
+    }
+
+    {
+        QSqlQuery query(database());
+        query.prepare(QStringLiteral(
+            "SELECT COUNT(*), MAX(event_time) "
+            "FROM learning_events WHERE word_id = ?"));
+        query.bindValue(0, wordId);
+        if (query.exec() && query.next()) {
+            detail.totalEventCount = query.value(0).toInt();
+            detail.lastEventTime = parseLocalDateTime(query.value(1).toString());
+        }
+    }
+
+    {
+        QSqlQuery query(database());
+        query.prepare(QStringLiteral(
+            "SELECT event_time, training_type, result, skipped, user_input "
+            "FROM learning_events WHERE word_id = ? "
+            "ORDER BY event_time DESC, id DESC LIMIT 50"));
+        query.bindValue(0, wordId);
+        if (!query.exec()) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        while (query.next()) {
+            WordEventItem event;
+            event.eventTime = parseLocalDateTime(query.value(0).toString());
+            event.trainingType = query.value(1).toString();
+            event.result = resultFromCode(query.value(2).toString());
+            event.skipped = query.value(3).toInt() == 1;
+            event.userInput = query.value(4).toString();
+            detail.recentEvents.push_back(event);
+        }
+    }
+
+    return true;
+}
+
+QDate DatabaseManager::firstLearningEventDate() const {
+    if (!ensureDatabaseOpen()) {
+        return QDate();
+    }
+    QSqlQuery query(database());
+    if (!query.exec(QStringLiteral("SELECT MIN(event_date) FROM learning_events")) || !query.next()) {
+        return QDate();
+    }
+    return QDate::fromString(query.value(0).toString(), Qt::ISODate);
+}
+
+QHash<QDate, int> DatabaseManager::fetchStudyMinutesRange(const QDate &startDate, const QDate &endDate) const {
+    QHash<QDate, int> minutesByDate;
+    if (!ensureDatabaseOpen() || !startDate.isValid() || !endDate.isValid() || endDate < startDate) {
+        return minutesByDate;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT log_date, study_seconds "
+        "FROM learning_logs "
+        "WHERE log_date >= ? AND log_date <= ?"));
+    query.bindValue(0, startDate.toString(Qt::ISODate));
+    query.bindValue(1, endDate.toString(Qt::ISODate));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return minutesByDate;
+    }
+
+    while (query.next()) {
+        const QDate date = QDate::fromString(query.value(0).toString(), Qt::ISODate);
+        if (!date.isValid()) {
+            continue;
+        }
+        const int seconds = query.value(1).toInt();
+        const int minutes = seconds > 0 ? ((seconds + 59) / 60) : 0;
+        minutesByDate.insert(date, minutes);
+    }
+    return minutesByDate;
 }
 
 bool DatabaseManager::fetchWordDebugStats(int wordId, WordDebugStats &stats) const {

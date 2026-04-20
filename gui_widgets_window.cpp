@@ -212,6 +212,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     polysemyPage_ = new PolysemyPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
+    calendarPage_ = new CalendarPageWidget(this);
+    wordDetailPage_ = new WordDetailPageWidget(this);
     wordBooksPage_ = new WordBooksPageWidget(this);
     debugMode_ = qApp->property("vibespeller_debug").toBool();
     spellingPage_->setDebugMode(debugMode_);
@@ -224,6 +226,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     stack_->addWidget(polysemyPage_);
     stack_->addWidget(summaryPage_);
     stack_->addWidget(statisticsPage_);
+    stack_->addWidget(calendarPage_);
+    stack_->addWidget(wordDetailPage_);
     stack_->addWidget(wordBooksPage_);
     stack_->setCurrentWidget(homePage_);
 
@@ -259,12 +263,19 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
         db_.setLastDashboardCardIndex(index);
     });
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
+    connect(homePage_, &HomePageWidget::calendarClicked, this, &VibeSpellerWindow::onOpenCalendar);
     connect(homePage_, &HomePageWidget::managementClicked, this, [this]() {
         animateWordBooksRise(QStringLiteral("none"));
     });
     connect(homePage_, &HomePageWidget::statsClicked, this, &VibeSpellerWindow::animateStatisticsPageRise);
 
     connect(statisticsPage_, &StatisticsPageWidget::backClicked, this, &VibeSpellerWindow::animateStatisticsPageBack);
+    connect(calendarPage_, &CalendarPageWidget::backClicked, this, &VibeSpellerWindow::animateCalendarBack);
+    connect(calendarPage_, &CalendarPageWidget::monthChanged, this, &VibeSpellerWindow::onCalendarMonthChanged);
+    connect(calendarPage_, &CalendarPageWidget::daySelected, this, &VibeSpellerWindow::onCalendarDaySelected);
+    connect(calendarPage_, &CalendarPageWidget::trainingFilterChanged, this, &VibeSpellerWindow::onCalendarFilterChanged);
+    connect(calendarPage_, &CalendarPageWidget::wordDetailRequested, this, &VibeSpellerWindow::onCalendarWordDetailRequested);
+    connect(wordDetailPage_, &WordDetailPageWidget::backClicked, this, &VibeSpellerWindow::onWordDetailBack);
 
     connect(mappingPage_, &MappingPageWidget::cancelled, this, [this]() {
         if (returnToWordBooksAfterImport_) {
@@ -666,10 +677,26 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
             return;
         }
 
-        if (!db_.applyReviewResult(current.id, SpellingResult::Mastered, false, QDateTime::currentDateTime())) {
+        const QDateTime now = QDateTime::currentDateTime();
+        const bool applyOk = db_.applyReviewResult(current.id, SpellingResult::Mastered, false, now);
+        if (!applyOk) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
                               QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+        } else {
+            LearningEvent event;
+            event.eventTime = now;
+            event.wordId = current.id;
+            event.trainingType = QStringLiteral("spelling");
+            event.result = SpellingResult::Mastered;
+            event.skipped = false;
+            event.userInput = text;
+            if (!db_.recordLearningEvent(event)) {
+                AppLogger::warn(QStringLiteral("Event"),
+                                QStringLiteral("record spelling event failed, wordId=%1, error=%2")
+                                    .arg(current.id)
+                                    .arg(db_.lastError()));
+            }
         }
 
         PracticeRecord record;
@@ -703,10 +730,26 @@ void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
 
     // 本词本轮第一次拼错时，按“不熟悉”更新复习安排；后续错不重复入库。
     if (!hasWrongHistory && mistakeCount == 1) {
-        if (!db_.applyReviewResult(current.id, SpellingResult::Unfamiliar, true, QDateTime::currentDateTime())) {
+        const QDateTime now = QDateTime::currentDateTime();
+        const bool applyOk = db_.applyReviewResult(current.id, SpellingResult::Unfamiliar, true, now);
+        if (!applyOk) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
                               QStringLiteral("保存复习结果失败：%1").arg(db_.lastError()));
+        } else {
+            LearningEvent event;
+            event.eventTime = now;
+            event.wordId = current.id;
+            event.trainingType = QStringLiteral("spelling");
+            event.result = SpellingResult::Unfamiliar;
+            event.skipped = true;
+            event.userInput = text;
+            if (!db_.recordLearningEvent(event)) {
+                AppLogger::warn(QStringLiteral("Event"),
+                                QStringLiteral("record spelling event failed, wordId=%1, error=%2")
+                                    .arg(current.id)
+                                    .arg(db_.lastError()));
+            }
         }
     }
 
@@ -816,10 +859,26 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
 
     if (correct) {
         if (existingMistakes == 0) {
-            if (!db_.applyCountabilityResult(current.id, true, QDateTime::currentDateTime())) {
+            const QDateTime now = QDateTime::currentDateTime();
+            const bool applyOk = db_.applyCountabilityResult(current.id, true, now);
+            if (!applyOk) {
                 showWarningPrompt(this,
                                   QStringLiteral("更新失败"),
                                   QStringLiteral("保存可数性结果失败：%1").arg(db_.lastError()));
+            } else {
+                LearningEvent event;
+                event.eventTime = now;
+                event.wordId = current.id;
+                event.trainingType = QStringLiteral("countability");
+                event.result = SpellingResult::Mastered;
+                event.skipped = false;
+                event.userInput = countabilityAnswerText(answer);
+                if (!db_.recordLearningEvent(event)) {
+                    AppLogger::warn(QStringLiteral("Event"),
+                                    QStringLiteral("record countability event failed, wordId=%1, error=%2")
+                                        .arg(current.id)
+                                        .arg(db_.lastError()));
+                }
             }
             PracticeRecord record;
             record.word = current;
@@ -852,10 +911,26 @@ void VibeSpellerWindow::onCountabilityAnswer(CountabilityAnswer answer) {
 
     if (mistakeCount == 1) {
         // 修复问题2：首次答错时更新记忆曲线，但不写入拼写统计计数。
-        if (!db_.applyCountabilityResult(current.id, false, QDateTime::currentDateTime())) {
+        const QDateTime now = QDateTime::currentDateTime();
+        const bool applyOk = db_.applyCountabilityResult(current.id, false, now);
+        if (!applyOk) {
             showWarningPrompt(this,
                               QStringLiteral("更新失败"),
                               QStringLiteral("保存可数性结果失败：%1").arg(db_.lastError()));
+        } else {
+            LearningEvent event;
+            event.eventTime = now;
+            event.wordId = current.id;
+            event.trainingType = QStringLiteral("countability");
+            event.result = SpellingResult::Unfamiliar;
+            event.skipped = true;
+            event.userInput = firstWrongInputs_.value(current.id, countabilityAnswerText(answer));
+            if (!db_.recordLearningEvent(event)) {
+                AppLogger::warn(QStringLiteral("Event"),
+                                QStringLiteral("record countability event failed, wordId=%1, error=%2")
+                                    .arg(current.id)
+                                    .arg(db_.lastError()));
+            }
         }
     }
 
@@ -901,10 +976,26 @@ void VibeSpellerWindow::onPolysemyRated(SpellingResult result) {
         polysemyPage_->setOptionsEnabled(false);
     }
 
-    if (!db_.applyPolysemyResult(current.id, result, false, QDateTime::currentDateTime())) {
+    const QDateTime now = QDateTime::currentDateTime();
+    const bool applyOk = db_.applyPolysemyResult(current.id, result, false, now);
+    if (!applyOk) {
         showWarningPrompt(this,
                           QStringLiteral("更新失败"),
                           QStringLiteral("保存熟词生义结果失败：%1").arg(db_.lastError()));
+    } else {
+        LearningEvent event;
+        event.eventTime = now;
+        event.wordId = current.id;
+        event.trainingType = QStringLiteral("polysemy");
+        event.result = result;
+        event.skipped = false;
+        event.userInput = briefResult(result);
+        if (!db_.recordLearningEvent(event)) {
+            AppLogger::warn(QStringLiteral("Event"),
+                            QStringLiteral("record polysemy event failed, wordId=%1, error=%2")
+                                .arg(current.id)
+                                .arg(db_.lastError()));
+        }
     }
 
     PracticeRecord record;
@@ -1012,6 +1103,70 @@ void VibeSpellerWindow::onOpenWordBooks() {
                         .arg(index)
                         .arg(sessionModeName(mode)));
     animateWordBooksRise(trainingTypeForMode(mode));
+}
+
+void VibeSpellerWindow::onOpenCalendar() {
+    if (inTransition_) {
+        return;
+    }
+    calendarFilterType_ = QStringLiteral("all");
+    if (calendarPage_ == nullptr || stack_ == nullptr) {
+        return;
+    }
+    calendarPage_->setTrainingFilter(calendarFilterType_);
+    const QDate thisMonth(QDate::currentDate().year(), QDate::currentDate().month(), 1);
+    onCalendarMonthChanged(thisMonth);
+    onCalendarDaySelected(QDate::currentDate());
+    animateCalendarRise();
+}
+
+void VibeSpellerWindow::onCalendarMonthChanged(const QDate &monthAnchor) {
+    if (calendarPage_ == nullptr) {
+        return;
+    }
+    const QDate month = QDate(monthAnchor.year(), monthAnchor.month(), 1);
+    const QDate start = month.addDays(-(month.dayOfWeek() % 7));
+    const QDate end = start.addDays(41);
+    calendarPage_->setMonth(month, db_.fetchStudyMinutesRange(start, end));
+    refreshCalendarDayData();
+}
+
+void VibeSpellerWindow::onCalendarDaySelected(const QDate &date) {
+    Q_UNUSED(date);
+    if (calendarPage_ == nullptr || !date.isValid()) {
+        return;
+    }
+    refreshCalendarDayData();
+}
+
+void VibeSpellerWindow::onCalendarFilterChanged(const QString &trainingType) {
+    calendarFilterType_ = trainingType.trimmed().toLower();
+    if (calendarFilterType_.isEmpty()) {
+        calendarFilterType_ = QStringLiteral("all");
+    }
+    refreshCalendarDayData();
+}
+
+void VibeSpellerWindow::onCalendarWordDetailRequested(int wordId) {
+    if (wordDetailPage_ == nullptr || stack_ == nullptr || wordId <= 0) {
+        return;
+    }
+    wordDetailPage_->setLoading(wordId);
+    stack_->setCurrentWidget(wordDetailPage_);
+
+    WordFullDetail detail;
+    if (!db_.fetchWordFullDetail(wordId, detail)) {
+        wordDetailPage_->setError(db_.lastError().isEmpty() ? QStringLiteral("未找到单词详情") : db_.lastError());
+        return;
+    }
+    wordDetailPage_->setDetail(detail);
+}
+
+void VibeSpellerWindow::onWordDetailBack() {
+    if (stack_ == nullptr || calendarPage_ == nullptr) {
+        return;
+    }
+    stack_->setCurrentWidget(calendarPage_);
 }
 
 void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
@@ -1495,6 +1650,27 @@ void VibeSpellerWindow::refreshHomeCounts() {
             .arg(cards.value(2).unlearnedCount)
             .arg(cards.value(2).dueReviewCount)
             .arg(cards.value(2).totalWords));
+}
+
+void VibeSpellerWindow::refreshCalendarMonthData() {
+    if (calendarPage_ == nullptr) {
+        return;
+    }
+    const QDate month = calendarPage_->currentMonth().isValid()
+                            ? calendarPage_->currentMonth()
+                            : QDate(QDate::currentDate().year(), QDate::currentDate().month(), 1);
+    onCalendarMonthChanged(month);
+}
+
+void VibeSpellerWindow::refreshCalendarDayData() {
+    if (calendarPage_ == nullptr) {
+        return;
+    }
+    const QDate date = calendarPage_->selectedDate().isValid() ? calendarPage_->selectedDate() : QDate::currentDate();
+    const QString filter = calendarFilterType_.isEmpty() ? QStringLiteral("all") : calendarFilterType_;
+    const QVector<DailyWordSummary> summaries = db_.fetchDailyWordSummaries(date, filter);
+    const int total = db_.fetchDailyEventCount(date, filter);
+    calendarPage_->setDailySummaries(date, total, summaries, db_.firstLearningEventDate());
 }
 
 void VibeSpellerWindow::refreshWordBooks() {
@@ -2237,6 +2413,154 @@ void VibeSpellerWindow::animateStatisticsPageBack() {
         group->deleteLater();
         inTransition_ = false;
         AppLogger::info(QStringLiteral("Transition"), QStringLiteral("stats back finished"));
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateCalendarRise() {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("calendar rise begin"));
+
+    if (stack_ != nullptr && stack_->currentWidget() == homePage_) {
+        rememberHomeCardIndex();
+    }
+
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || calendarPage_ == nullptr) {
+        stack_->setCurrentWidget(calendarPage_);
+        calendarPage_->syncLayoutForAnimation();
+        calendarPage_->setFocus();
+        inTransition_ = false;
+        return;
+    }
+
+    const QRect startRect(0, windowRect.height(), windowRect.width(), windowRect.height());
+    const QRect endRect(0, 0, windowRect.width(), windowRect.height());
+
+    calendarPage_->resize(windowRect.size());
+    calendarPage_->ensurePolished();
+    calendarPage_->syncLayoutForAnimation();
+
+    QPixmap snapshot(calendarPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        calendarPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        stack_->setCurrentWidget(calendarPage_);
+        calendarPage_->resize(windowRect.size());
+        calendarPage_->syncLayoutForAnimation();
+        calendarPage_->setFocus();
+        inTransition_ = false;
+        AppLogger::warn(QStringLiteral("Transition"), QStringLiteral("calendar rise fallback switch (snapshot null)"));
+        return;
+    }
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0);
+    card->setGeometry(startRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *riseAnim = new QPropertyAnimation(card, "geometry", group);
+    riseAnim->setDuration(kPageLaunchDurationMs + 100);
+    riseAnim->setStartValue(startRect);
+    riseAnim->setEndValue(endRect);
+    riseAnim->setEasingCurve(QEasingCurve::OutCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost, windowRect]() {
+        stack_->setCurrentWidget(calendarPage_);
+        calendarPage_->resize(windowRect.size());
+        calendarPage_->syncLayoutForAnimation();
+        calendarPage_->setFocus();
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        inTransition_ = false;
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("calendar rise finished"));
+    });
+
+    group->start();
+}
+
+void VibeSpellerWindow::animateCalendarBack() {
+    if (inTransition_) {
+        return;
+    }
+    inTransition_ = true;
+    AppLogger::step(QStringLiteral("Transition"), QStringLiteral("calendar back begin"));
+
+    const QRect windowRect = rect();
+    if (windowRect.isEmpty() || calendarPage_ == nullptr || homePage_ == nullptr) {
+        restoreHomeCardIndex(false);
+        stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
+        return;
+    }
+
+    QPixmap snapshot(calendarPage_->size() * devicePixelRatioF());
+    snapshot.setDevicePixelRatio(devicePixelRatioF());
+    snapshot.fill(Qt::transparent);
+    {
+        QPainter painter(&snapshot);
+        calendarPage_->render(&painter, QPoint(), QRegion(), QWidget::DrawChildren);
+    }
+
+    if (snapshot.isNull()) {
+        restoreHomeCardIndex(false);
+        stack_->setCurrentWidget(homePage_);
+        inTransition_ = false;
+        return;
+    }
+
+    restoreHomeCardIndex(false);
+    stack_->setCurrentWidget(homePage_);
+
+    auto *transitionHost = new QWidget(this);
+    transitionHost->setObjectName(QStringLiteral("__transition_host__"));
+    transitionHost->setAttribute(Qt::WA_TransparentForMouseEvents);
+    transitionHost->setAttribute(Qt::WA_NoSystemBackground);
+    transitionHost->setGeometry(windowRect);
+    transitionHost->show();
+    transitionHost->raise();
+
+    auto *card = new LaunchSnapshotCard(transitionHost);
+    card->setSnapshot(snapshot);
+    card->setCornerRadius(kUnifiedCornerRadiusPx);
+    card->setBorderWidth(0);
+    card->setGeometry(windowRect);
+    card->show();
+
+    auto *group = new QParallelAnimationGroup(this);
+    auto *backAnim = new QPropertyAnimation(card, "geometry", group);
+    backAnim->setDuration(kPageLaunchDurationMs);
+    backAnim->setStartValue(windowRect);
+    backAnim->setEndValue(QRect(0, windowRect.height(), windowRect.width(), windowRect.height()));
+    backAnim->setEasingCurve(QEasingCurve::InCubic);
+
+    connect(group, &QParallelAnimationGroup::finished, this, [this, group, transitionHost]() {
+        transitionHost->hide();
+        transitionHost->deleteLater();
+        group->deleteLater();
+        inTransition_ = false;
+        AppLogger::info(QStringLiteral("Transition"), QStringLiteral("calendar back finished"));
     });
 
     group->start();

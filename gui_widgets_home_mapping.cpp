@@ -61,6 +61,9 @@ public:
     Q_INVOKABLE void requestStats() {
         emit statsRequested();
     }
+    Q_INVOKABLE void requestCalendar() {
+        emit calendarRequested();
+    }
     Q_INVOKABLE void requestManagement() {
         emit managementRequested();
     }
@@ -70,6 +73,7 @@ signals:
     void currentIndexChanged(int index);
     void startRequested(int modeIndex, bool isReview, const QRect &globalRect);
     void changeBookRequested(int modeIndex);
+    void calendarRequested();
     void statsRequested();
     void managementRequested();
 
@@ -106,6 +110,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     connect(bridge, &DashboardBridge::startRequested, this, &HomePageWidget::handleStartRequest);
     connect(bridge, &DashboardBridge::changeBookRequested, this, &HomePageWidget::handleChangeBookRequest);
     connect(bridge, &DashboardBridge::currentIndexChanged, this, &HomePageWidget::handleCurrentIndexChanged);
+    connect(bridge, &DashboardBridge::calendarRequested, this, &HomePageWidget::handleCalendarRequest);
     connect(bridge, &DashboardBridge::statsRequested, this, &HomePageWidget::handleStatsRequest);
     connect(bridge, &DashboardBridge::managementRequested, this, &HomePageWidget::handleManagementRequest);
 }
@@ -230,6 +235,10 @@ void HomePageWidget::handleCurrentIndexChanged(int index) {
     AppLogger::info(QStringLiteral("Home"),
                     QStringLiteral("dashboard current index changed, index=%1").arg(currentCardIndex_));
     emit dashboardIndexChanged(currentCardIndex_);
+}
+
+void HomePageWidget::handleCalendarRequest() {
+    emit calendarClicked();
 }
 
 void HomePageWidget::handleStatsRequest() {

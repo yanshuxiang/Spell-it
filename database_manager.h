@@ -3,6 +3,7 @@
 
 #include <QDateTime>
 #include <QDate>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -56,6 +57,55 @@ enum class CountabilityAnswer {
     Both = 2,
 };
 
+struct LearningEvent {
+    QDateTime eventTime;
+    int wordId = -1;
+    QString trainingType;
+    SpellingResult result = SpellingResult::Unfamiliar;
+    bool skipped = false;
+    QString userInput;
+};
+
+struct DailyWordSummary {
+    int wordId = -1;
+    QString word;
+    QString trainingType;
+    int attempts = 0;
+    SpellingResult lastResult = SpellingResult::Unfamiliar;
+    QDateTime lastTime;
+};
+
+struct TrainingProgressDetail {
+    QString trainingType;
+    double easeFactor = 2.5;
+    int interval = 0;
+    QDateTime nextReview;
+    int status = 0;
+    int correctCount = 0;
+    int wrongCount = 0;
+    QDateTime updatedAt;
+};
+
+struct WordEventItem {
+    QDateTime eventTime;
+    QString trainingType;
+    SpellingResult result = SpellingResult::Unfamiliar;
+    bool skipped = false;
+    QString userInput;
+};
+
+struct WordFullDetail {
+    WordItem word;
+    QVector<TrainingProgressDetail> progressByType;
+    int spellingAttemptCount = 0;
+    int spellingCorrectCount = 0;
+    QDateTime spellingStatsUpdatedAt;
+    QVector<WordBookItem> books;
+    int totalEventCount = 0;
+    QDateTime lastEventTime;
+    QVector<WordEventItem> recentEvents;
+};
+
 class DatabaseManager {
 public:
     DatabaseManager();
@@ -101,7 +151,14 @@ public:
     bool clearSessionProgress(const QString &mode);
     bool hasSessionProgress(const QString &mode) const;
     bool recordSpellingAttempt(int wordId, bool correct);
+    bool recordLearningEvent(const LearningEvent &event);
     bool fetchWordDebugStats(int wordId, WordDebugStats &stats) const;
+    QVector<DailyWordSummary> fetchDailyWordSummaries(const QDate &date,
+                                                      const QString &trainingType = QStringLiteral("all")) const;
+    int fetchDailyEventCount(const QDate &date, const QString &trainingType = QStringLiteral("all")) const;
+    bool fetchWordFullDetail(int wordId, WordFullDetail &detail) const;
+    QDate firstLearningEventDate() const;
+    QHash<QDate, int> fetchStudyMinutesRange(const QDate &startDate, const QDate &endDate) const;
     bool setWordSkipForever(int wordId, bool skipForever = true);
 
     SpellingResult evaluateSpelling(const QString &input, const QString &target) const;

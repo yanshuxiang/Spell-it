@@ -10,6 +10,7 @@
 
 class QLabel;
 class QComboBox;
+class QTabBar;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
@@ -17,12 +18,16 @@ class QCloseEvent;
 class QEvent;
 class QKeyEvent;
 class QMouseEvent;
+class QResizeEvent;
 class HoverScaleButton;
 class QStackedWidget;
 class QTableWidget;
 class QTimer;
 class QVBoxLayout;
 class QSpacerItem;
+class QFrame;
+class QGridLayout;
+class QTextBrowser;
 class QProcess;
 class QThread;
 class RoundedProgressStrip;
@@ -85,6 +90,7 @@ signals:
     void changeBookRequested(const QString &trainingType);
     void dashboardIndexChanged(int index);
     void booksClicked();
+    void calendarClicked();
     void statsClicked();
     void managementClicked();
 
@@ -92,6 +98,7 @@ private:
     void handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect);
     void handleChangeBookRequest(int modeIndex);
     void handleCurrentIndexChanged(int index);
+    void handleCalendarRequest();
     void handleStatsRequest();
     void handleManagementRequest();
     void updateCardModel();
@@ -318,6 +325,80 @@ private:
     int hoveredBarIndex_ = -1;
 };
 
+class CalendarPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit CalendarPageWidget(QWidget *parent = nullptr);
+
+    void setMonth(const QDate &monthAnchor, const QHash<QDate, int> &studyMinutesByDate);
+    void setDailySummaries(const QDate &date,
+                           int totalEvents,
+                           const QVector<DailyWordSummary> &summaries,
+                           const QDate &eventStartDate);
+    QDate currentMonth() const;
+    QString selectedTrainingFilter() const;
+    QDate selectedDate() const;
+    void setTrainingFilter(const QString &trainingType);
+    void syncLayoutForAnimation();
+
+signals:
+    void backClicked();
+    void monthChanged(const QDate &monthAnchor);
+    void daySelected(const QDate &date);
+    void trainingFilterChanged(const QString &trainingType);
+    void wordDetailRequested(int wordId);
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    class CalendarCellButton;
+    void updateCalendarGeometry();
+
+    HoverScaleButton *backButton_ = nullptr;
+    QLabel *titleLabel_ = nullptr;
+    HoverScaleButton *prevButton_ = nullptr;
+    HoverScaleButton *nextButton_ = nullptr;
+    QWidget *calendarPanel_ = nullptr;
+    QFrame *drawerFrame_ = nullptr;
+    QGridLayout *calendarGrid_ = nullptr;
+    QLabel *selectedDateLabel_ = nullptr;
+    QLabel *eventCountLabel_ = nullptr;
+    QTabBar *trainingFilterTabs_ = nullptr;
+    QListWidget *dailyList_ = nullptr;
+    QLabel *emptyLabel_ = nullptr;
+
+    QVector<CalendarCellButton *> dayButtons_;
+    QVector<QDate> cellDates_;
+    QHash<QDate, int> studyMinutesByDate_;
+    QDate currentMonth_;
+    QDate selectedDate_;
+    QDate eventStartDate_;
+};
+
+class WordDetailPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit WordDetailPageWidget(QWidget *parent = nullptr);
+
+    void setLoading(int wordId);
+    void setError(const QString &message);
+    void setDetail(const WordFullDetail &detail);
+
+signals:
+    void backClicked();
+
+private:
+    void renderDetailHtml();
+
+    HoverScaleButton *backButton_ = nullptr;
+    QLabel *titleLabel_ = nullptr;
+    QTextBrowser *contentLabel_ = nullptr;
+    WordFullDetail detail_;
+    bool hasDetailData_ = false;
+    bool jsonExpanded_ = false;
+};
+
 class WordBooksPageWidget : public QWidget {
     Q_OBJECT
 public:
@@ -384,6 +465,12 @@ private slots:
     void onDeleteWordBook(int bookId);
     void onDownloadAudio(int bookId);
     void onAudioDownloadStopRequested();
+    void onOpenCalendar();
+    void onCalendarMonthChanged(const QDate &monthAnchor);
+    void onCalendarDaySelected(const QDate &date);
+    void onCalendarFilterChanged(const QString &trainingType);
+    void onCalendarWordDetailRequested(int wordId);
+    void onWordDetailBack();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -409,8 +496,12 @@ private:
     void animatePageToHomeTransition(QWidget *sourcePage, const QRect &targetRect);
     void animateStatisticsPageRise();
     void animateStatisticsPageBack();
+    void animateCalendarRise();
+    void animateCalendarBack();
     void animateWordBooksRise(const QString &trainingType);
     void animateWordBooksBack();
+    void refreshCalendarMonthData();
+    void refreshCalendarDayData();
     void applyRoundedWindowMask();
 
     void startSession(SessionMode mode, QVector<WordItem> words, int startIndex = 0);
@@ -446,6 +537,8 @@ private:
     PolysemyPageWidget *polysemyPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
     StatisticsPageWidget *statisticsPage_ = nullptr;
+    CalendarPageWidget *calendarPage_ = nullptr;
+    WordDetailPageWidget *wordDetailPage_ = nullptr;
     WordBooksPageWidget *wordBooksPage_ = nullptr;
 
     QString pendingCsvPath_;
@@ -472,6 +565,7 @@ private:
     QHash<QString, qreal> pronunciationVolumeCache_;
     int preservedHomeCardIndex_ = -1;
     bool inTransition_ = false;
+    QString calendarFilterType_ = QStringLiteral("all");
 };
 
 #endif // GUI_WIDGETS_H

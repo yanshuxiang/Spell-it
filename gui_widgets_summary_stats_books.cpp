@@ -2,19 +2,30 @@
 #include "gui_widgets_internal.h"
 
 #include <QBrush>
+#include <QBuffer>
 #include <QColor>
 #include <QFontMetrics>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QPaintEvent>
-#include <QComboBox>
+#include <QTabBar>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QTextBrowser>
 #include <QVBoxLayout>
 
 using namespace GuiWidgetsInternal;
@@ -530,6 +541,1001 @@ void StatisticsPageWidget::leaveEvent(QEvent *event) {
         hoverTip_->hide();
     }
     QWidget::leaveEvent(event);
+}
+
+class CalendarPageWidget::CalendarCellButton final : public QPushButton {
+public:
+    explicit CalendarCellButton(QWidget *parent = nullptr)
+        : QPushButton(parent) {
+        setFlat(true);
+        setFocusPolicy(Qt::NoFocus);
+        setCursor(Qt::PointingHandCursor);
+        setDiameter(32);
+    }
+
+    void setDiameter(int diameter) {
+        diameter_ = qBound(24, diameter, 40);
+        setFixedSize(diameter_, diameter_);
+    }
+
+    void setCellData(const QDate &date, bool inCurrentMonth, bool isFuture, int studyMinutes, bool selected) {
+        date_ = date;
+        setText((date.isValid() && inCurrentMonth) ? QString::number(date.day()) : QString());
+        const bool activeDate = date.isValid() && inCurrentMonth && !isFuture;
+        setEnabled(activeDate);
+
+        QString textColor = QStringLiteral("#111827");
+        if (!inCurrentMonth) {
+            textColor = QStringLiteral("#9ca3af");
+        } else if (isFuture) {
+            textColor = QStringLiteral("#9ca3af");
+        }
+
+        QString bgColor = QStringLiteral("transparent");
+        if (activeDate && studyMinutes > 5) {
+            if (studyMinutes <= 15) bgColor = QStringLiteral("#d1fae5");
+            else if (studyMinutes <= 30) bgColor = QStringLiteral("#86efac");
+            else if (studyMinutes <= 60) bgColor = QStringLiteral("#4ade80");
+            else bgColor = QStringLiteral("#16a34a");
+        }
+        QString borderColor = QStringLiteral("transparent");
+        QString borderWidth = QStringLiteral("0");
+        if (selected && activeDate) {
+            borderColor = QStringLiteral("#2563eb");
+            borderWidth = QStringLiteral("1");
+        }
+        const int radius = diameter_ / 2;
+        setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "  border: %1px solid %2;"
+            "  border-radius: %3px;"
+            "  background: %4;"
+            "  color: %5;"
+            "  font-size: 14px;"
+            "  font-weight: 600;"
+            "  padding: 0px;"
+            "}"
+            "QPushButton:disabled {"
+            "  color: %5;"
+            "  background: transparent;"
+            "  border: 0px solid transparent;"
+            "}")
+            .arg(borderWidth, borderColor, QString::number(radius), bgColor, textColor));
+        setToolTip(studyMinutes > 0
+                       ? QStringLiteral("%1：学习 %2 分钟").arg(date.toString(QStringLiteral("yyyy-MM-dd"))).arg(studyMinutes)
+                       : QString());
+    }
+
+    QDate date() const { return date_; }
+
+private:
+    QDate date_;
+    int diameter_ = 32;
+};
+
+CalendarPageWidget::CalendarPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(16, 12, 16, 14);
+    root->setSpacing(8);
+
+    auto *backRow = new QHBoxLayout();
+    backRow->setContentsMargins(0, 0, 0, 0);
+    backButton_ = new HoverScaleButton(QStringLiteral("返回"), this);
+    backButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton { background: transparent; color: #4b5563; font-size: 18px; font-weight: 700; padding: 8px 6px; }"
+        "HoverScaleButton:hover { color: #111827; }"));
+    backRow->addWidget(backButton_, 0, Qt::AlignLeft);
+    backRow->addStretch(1);
+    root->addLayout(backRow);
+
+    auto *centerRow = new QHBoxLayout();
+    centerRow->setContentsMargins(0, 0, 0, 0);
+    centerRow->setSpacing(0);
+
+    auto *centerHost = new QWidget(this);
+    centerHost->setMinimumWidth(300);
+    auto *centerHostLayout = new QHBoxLayout(centerHost);
+    centerHostLayout->setContentsMargins(0, 0, 0, 0);
+    centerHostLayout->setSpacing(16);
+
+    prevButton_ = new HoverScaleButton(QStringLiteral("<"), this);
+    nextButton_ = new HoverScaleButton(QStringLiteral(">"), this);
+    prevButton_->setFixedSize(34, 34);
+    nextButton_->setFixedSize(34, 34);
+    prevButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton { background: #f3f4f6; border-radius: 17px; color: #6b7280; font-size: 20px; font-weight: 700; }"
+        "HoverScaleButton:hover { color: #111827; background: #eceff3; }"));
+    nextButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton { background: #f3f4f6; border-radius: 17px; color: #6b7280; font-size: 20px; font-weight: 700; }"
+        "HoverScaleButton:hover { color: #111827; background: #eceff3; }"));
+    titleLabel_ = new QLabel(this);
+    titleLabel_->setAlignment(Qt::AlignCenter);
+    titleLabel_->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700; color: #111827;"));
+
+    centerHostLayout->addStretch(1);
+    centerHostLayout->addWidget(prevButton_, 0, Qt::AlignCenter);
+    centerHostLayout->addWidget(titleLabel_, 0, Qt::AlignCenter);
+    centerHostLayout->addWidget(nextButton_, 0, Qt::AlignCenter);
+    centerHostLayout->addStretch(1);
+
+    centerRow->addWidget(centerHost, 1, Qt::AlignHCenter);
+    root->addLayout(centerRow);
+
+    auto *divider = new QFrame(this);
+    divider->setFixedHeight(1);
+    divider->setStyleSheet(QStringLiteral("background: #e5e7eb; border: none;"));
+    root->addWidget(divider);
+
+    calendarPanel_ = new QWidget(this);
+    calendarPanel_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *calendarPanelLayout = new QVBoxLayout(calendarPanel_);
+    calendarPanelLayout->setContentsMargins(0, 0, 0, 0);
+    calendarPanelLayout->setSpacing(8);
+
+    auto *weekRow = new QGridLayout();
+    weekRow->setContentsMargins(0, 0, 0, 0);
+    weekRow->setHorizontalSpacing(0);
+    weekRow->setVerticalSpacing(0);
+    const QStringList weekNames = {QStringLiteral("MON"), QStringLiteral("TUE"), QStringLiteral("WED"),
+                                   QStringLiteral("THU"), QStringLiteral("FRI"), QStringLiteral("SAT"), QStringLiteral("SUN")};
+    for (int i = 0; i < weekNames.size(); ++i) {
+        auto *label = new QLabel(weekNames.at(i), calendarPanel_);
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet(QStringLiteral("font-size: 12px; color: #9ca3af; font-weight: 700; letter-spacing: 1px;"));
+        weekRow->addWidget(label, 0, i);
+    }
+    calendarPanelLayout->addLayout(weekRow);
+
+    calendarGrid_ = new QGridLayout();
+    calendarGrid_->setContentsMargins(0, 0, 0, 0);
+    calendarGrid_->setHorizontalSpacing(6);
+    calendarGrid_->setVerticalSpacing(4);
+
+    cellDates_.resize(42);
+    for (int i = 0; i < 42; ++i) {
+        auto *btn = new CalendarCellButton(calendarPanel_);
+        dayButtons_.push_back(btn);
+        const int row = i / 7;
+        const int col = i % 7;
+        calendarGrid_->addWidget(btn, row, col, Qt::AlignCenter);
+        connect(btn, &QPushButton::clicked, this, [this, i]() {
+            if (i < 0 || i >= cellDates_.size()) {
+                return;
+            }
+            const QDate date = cellDates_.at(i);
+            if (!date.isValid() || date > QDate::currentDate()) {
+                return;
+            }
+            selectedDate_ = date;
+            setMonth(currentMonth_, studyMinutesByDate_);
+            emit daySelected(date);
+        });
+    }
+    calendarPanelLayout->addLayout(calendarGrid_, 1);
+    root->addWidget(calendarPanel_, 0, Qt::AlignHCenter);
+
+    drawerFrame_ = new QFrame(this);
+    drawerFrame_->setObjectName(QStringLiteral("calendarDrawerFrame"));
+    drawerFrame_->setStyleSheet(QStringLiteral(
+        "QFrame#calendarDrawerFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; }"));
+    auto *drawerLayout = new QVBoxLayout(drawerFrame_);
+    drawerLayout->setContentsMargins(12, 10, 12, 10);
+    drawerLayout->setSpacing(8);
+
+    auto *metaTopRow = new QHBoxLayout();
+    metaTopRow->setContentsMargins(0, 0, 0, 0);
+    metaTopRow->setSpacing(0);
+    selectedDateLabel_ = new QLabel(QStringLiteral("请选择日期"), drawerFrame_);
+    selectedDateLabel_->setVisible(false);
+    eventCountLabel_ = new QLabel(QStringLiteral("0 次作答"), drawerFrame_);
+    eventCountLabel_->setVisible(false);
+
+    trainingFilterTabs_ = new QTabBar(drawerFrame_);
+    trainingFilterTabs_->setDocumentMode(true);
+    trainingFilterTabs_->setDrawBase(false);
+    trainingFilterTabs_->setExpanding(true);
+    trainingFilterTabs_->setElideMode(Qt::ElideNone);
+    trainingFilterTabs_->setUsesScrollButtons(false);
+    trainingFilterTabs_->setFixedHeight(42);
+    trainingFilterTabs_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    trainingFilterTabs_->setStyleSheet(QStringLiteral(
+        "QTabBar::tab {"
+        "  border: 1px solid #cbd5e1;"
+        "  border-right: none;"
+        "  padding: 8px 0px;"
+        "  min-width: 96px;"
+        "  margin: 0px;"
+        "  background: #f3f6fa;"
+        "  color: #64748b;"
+        "  font-size: 16px;"
+        "  font-weight: 600;"
+        "}"
+        "QTabBar::tab:first {"
+        "  border-top-left-radius: 11px;"
+        "  border-bottom-left-radius: 11px;"
+        "}"
+        "QTabBar::tab:last {"
+        "  border-right: 1px solid #cbd5e1;"
+        "  border-top-right-radius: 11px;"
+        "  border-bottom-right-radius: 11px;"
+        "}"
+        "QTabBar::tab:selected {"
+        "  background: #ffffff;"
+        "  border-color: #94a3b8;"
+        "  color: #0f172a;"
+        "  font-weight: 700;"
+        "}"
+        "QTabBar::tab:hover:!selected {"
+        "  background: #eef2f7;"
+        "  border-color: #a8b3c3;"
+        "  color: #334155;"
+        "}"));
+    const int tabAll = trainingFilterTabs_->addTab(QStringLiteral("全部"));
+    const int tabSpelling = trainingFilterTabs_->addTab(QStringLiteral("拼写"));
+    const int tabCountability = trainingFilterTabs_->addTab(QStringLiteral("可数性"));
+    const int tabPolysemy = trainingFilterTabs_->addTab(QStringLiteral("熟词生义"));
+    trainingFilterTabs_->setTabData(tabAll, QStringLiteral("all"));
+    trainingFilterTabs_->setTabData(tabSpelling, QStringLiteral("spelling"));
+    trainingFilterTabs_->setTabData(tabCountability, QStringLiteral("countability"));
+    trainingFilterTabs_->setTabData(tabPolysemy, QStringLiteral("polysemy"));
+    trainingFilterTabs_->setCurrentIndex(tabAll);
+    metaTopRow->addWidget(trainingFilterTabs_, 1);
+
+    dailyList_ = new QListWidget(drawerFrame_);
+    dailyList_->setStyleSheet(QStringLiteral(
+        "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; }"
+        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; }"
+        "QListWidget::item:selected { background: #eef2ff; color: #1f2937; }"));
+    emptyLabel_ = new QLabel(QStringLiteral("该日暂无单词明细"), drawerFrame_);
+    emptyLabel_->setAlignment(Qt::AlignCenter);
+    emptyLabel_->setStyleSheet(QStringLiteral("font-size: 13px; color: #64748b; padding: 12px;"));
+
+    drawerLayout->addLayout(metaTopRow);
+    drawerLayout->addWidget(dailyList_, 1);
+    drawerLayout->addWidget(emptyLabel_);
+    root->addWidget(drawerFrame_, 1);
+
+    connect(backButton_, &HoverScaleButton::clicked, this, &CalendarPageWidget::backClicked);
+    connect(prevButton_, &HoverScaleButton::clicked, this, [this]() {
+        const QDate next = currentMonth_.isValid() ? currentMonth_.addMonths(-1) : QDate::currentDate();
+        emit monthChanged(QDate(next.year(), next.month(), 1));
+    });
+    connect(nextButton_, &HoverScaleButton::clicked, this, [this]() {
+        const QDate next = currentMonth_.isValid() ? currentMonth_.addMonths(1) : QDate::currentDate();
+        emit monthChanged(QDate(next.year(), next.month(), 1));
+    });
+    connect(trainingFilterTabs_, &QTabBar::currentChanged, this, [this](int) {
+        emit trainingFilterChanged(selectedTrainingFilter());
+    });
+    connect(dailyList_, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        if (item == nullptr) {
+            return;
+        }
+        bool ok = false;
+        const int wordId = item->data(Qt::UserRole).toInt(&ok);
+        if (ok && wordId > 0) {
+            emit wordDetailRequested(wordId);
+        }
+    });
+
+    updateCalendarGeometry();
+}
+
+void CalendarPageWidget::setMonth(const QDate &monthAnchor, const QHash<QDate, int> &studyMinutesByDate) {
+    currentMonth_ = QDate(monthAnchor.year(), monthAnchor.month(), 1);
+    studyMinutesByDate_ = studyMinutesByDate;
+    titleLabel_->setText(currentMonth_.toString(QStringLiteral("yyyy年MM月")));
+
+    const QDate gridStart = currentMonth_.addDays(-(currentMonth_.dayOfWeek() - 1));
+    const QDate today = QDate::currentDate();
+    for (int i = 0; i < 42 && i < dayButtons_.size(); ++i) {
+        const QDate d = gridStart.addDays(i);
+        cellDates_[i] = d;
+        const bool inCurrentMonth = (d.month() == currentMonth_.month() && d.year() == currentMonth_.year());
+        const bool isFuture = d > today;
+        const int minutes = studyMinutesByDate_.value(d, 0);
+        dayButtons_[i]->setCellData(d, inCurrentMonth, isFuture, minutes, d == selectedDate_);
+    }
+}
+
+void CalendarPageWidget::setDailySummaries(const QDate &date,
+                                           int totalEvents,
+                                           const QVector<DailyWordSummary> &summaries,
+                                           const QDate &eventStartDate) {
+    selectedDate_ = date;
+    eventStartDate_ = eventStartDate;
+    selectedDateLabel_->setText(date.isValid()
+                                    ? date.toString(QStringLiteral("yyyy-MM-dd"))
+                                    : QStringLiteral("请选择日期"));
+    eventCountLabel_->setText(QStringLiteral("共 %1 次作答").arg(totalEvents));
+
+    auto resultText = [](SpellingResult result) -> QString {
+        switch (result) {
+        case SpellingResult::Mastered: return QStringLiteral("熟悉");
+        case SpellingResult::Blurry: return QStringLiteral("模糊");
+        case SpellingResult::Unfamiliar: default: return QStringLiteral("不熟悉");
+        }
+    };
+    auto trainingTypeText = [](const QString &trainingType) -> QString {
+        const QString type = trainingType.trimmed().toLower();
+        if (type == QStringLiteral("spelling")) {
+            return QStringLiteral("拼写");
+        }
+        if (type == QStringLiteral("countability")) {
+            return QStringLiteral("可数性");
+        }
+        if (type == QStringLiteral("polysemy")) {
+            return QStringLiteral("熟词生义");
+        }
+        return trainingType;
+    };
+
+    dailyList_->clear();
+    for (const DailyWordSummary &summary : summaries) {
+        QStringList parts;
+        parts << summary.word
+              << QStringLiteral("次数 %1").arg(summary.attempts)
+              << QStringLiteral("类型 %1").arg(trainingTypeText(summary.trainingType))
+              << QStringLiteral("最后 %1").arg(resultText(summary.lastResult));
+        if (summary.lastTime.isValid()) {
+            parts << summary.lastTime.toString(QStringLiteral("HH:mm"));
+        }
+        auto *item = new QListWidgetItem(parts.join(QStringLiteral("  ·  ")), dailyList_);
+        item->setData(Qt::UserRole, summary.wordId);
+    }
+
+    const bool hasData = !summaries.isEmpty();
+    dailyList_->setVisible(hasData);
+    emptyLabel_->setVisible(!hasData);
+    if (!hasData) {
+        QString text = QStringLiteral("该日暂无单词明细");
+        if (eventStartDate_.isValid()) {
+            text += QStringLiteral("（明细记录自 %1 起）").arg(eventStartDate_.toString(QStringLiteral("yyyy-MM-dd")));
+        }
+        emptyLabel_->setText(text);
+    }
+
+    setMonth(currentMonth_, studyMinutesByDate_);
+}
+
+QDate CalendarPageWidget::currentMonth() const {
+    return currentMonth_;
+}
+
+QString CalendarPageWidget::selectedTrainingFilter() const {
+    if (trainingFilterTabs_ == nullptr) {
+        return QStringLiteral("all");
+    }
+    const int index = trainingFilterTabs_->currentIndex();
+    if (index < 0) {
+        return QStringLiteral("all");
+    }
+    const QString data = trainingFilterTabs_->tabData(index).toString().trimmed().toLower();
+    return data.isEmpty() ? QStringLiteral("all") : data;
+}
+
+QDate CalendarPageWidget::selectedDate() const {
+    return selectedDate_;
+}
+
+void CalendarPageWidget::setTrainingFilter(const QString &trainingType) {
+    if (trainingFilterTabs_ == nullptr) {
+        return;
+    }
+    const QString target = trainingType.trimmed().toLower();
+    const QString desired = target.isEmpty() ? QStringLiteral("all") : target;
+    for (int i = 0; i < trainingFilterTabs_->count(); ++i) {
+        if (trainingFilterTabs_->tabData(i).toString().trimmed().toLower() == desired) {
+            const QSignalBlocker blocker(trainingFilterTabs_);
+            trainingFilterTabs_->setCurrentIndex(i);
+            return;
+        }
+    }
+    const QSignalBlocker blocker(trainingFilterTabs_);
+    trainingFilterTabs_->setCurrentIndex(0);
+}
+
+void CalendarPageWidget::syncLayoutForAnimation() {
+    if (layout() != nullptr) {
+        layout()->activate();
+    }
+    updateCalendarGeometry();
+}
+
+void CalendarPageWidget::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    updateCalendarGeometry();
+}
+
+void CalendarPageWidget::updateCalendarGeometry() {
+    if (calendarPanel_ == nullptr) {
+        return;
+    }
+
+    const int targetPanelHeight = qBound(160, qRound(height() * 0.25), 280);
+    const int maxAllowedWidth = qMax(220, width() - 32);
+    const int targetPanelWidth = qMin(maxAllowedWidth, qMax(220, qRound(targetPanelHeight * 1.22)));
+    calendarPanel_->setFixedSize(targetPanelWidth, targetPanelHeight);
+
+    const int byWidth = (targetPanelWidth - (calendarGrid_ != nullptr ? calendarGrid_->horizontalSpacing() * 6 : 36)) / 7;
+    const int dayAreaHeight = qMax(110, targetPanelHeight - 32);
+    const int byHeight = (dayAreaHeight - (calendarGrid_ != nullptr ? calendarGrid_->verticalSpacing() * 5 : 20)) / 6;
+    const int diameter = qBound(24, qMin(byWidth, byHeight), 40);
+    for (CalendarCellButton *button : dayButtons_) {
+        if (button != nullptr) {
+            button->setDiameter(diameter);
+        }
+    }
+}
+
+WordDetailPageWidget::WordDetailPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(16, 14, 16, 14);
+    root->setSpacing(8);
+
+    auto *header = new QHBoxLayout();
+    backButton_ = new HoverScaleButton(QStringLiteral("返回"), this);
+    backButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton { background: transparent; color: #4b5563; font-size: 16px; padding: 8px; }"
+        "HoverScaleButton:hover { color: #111827; }"));
+    titleLabel_ = new QLabel(QStringLiteral("单词详情"), this);
+    titleLabel_->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #0f172a;"));
+    header->addWidget(backButton_);
+    header->addStretch(1);
+    header->addWidget(titleLabel_);
+    header->addStretch(1);
+    root->addLayout(header);
+
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    auto *host = new QWidget(scrollArea);
+    auto *hostLayout = new QVBoxLayout(host);
+    hostLayout->setContentsMargins(0, 0, 0, 0);
+    contentLabel_ = new QTextBrowser(host);
+    contentLabel_->setReadOnly(true);
+    contentLabel_->setOpenLinks(false);
+    contentLabel_->setFrameShape(QFrame::NoFrame);
+    contentLabel_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    contentLabel_->setStyleSheet(QStringLiteral(
+        "QTextBrowser {"
+        "  background: transparent;"
+        "  border: none;"
+        "  font-size: 14px;"
+        "  color: #1f2937;"
+        "}"));
+    hostLayout->addWidget(contentLabel_);
+    scrollArea->setWidget(host);
+    root->addWidget(scrollArea, 1);
+
+    connect(contentLabel_, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
+        if (url.toString() == QStringLiteral("toggle-json")) {
+            jsonExpanded_ = !jsonExpanded_;
+            if (hasDetailData_) {
+                renderDetailHtml();
+            }
+        }
+    });
+    connect(backButton_, &HoverScaleButton::clicked, this, &WordDetailPageWidget::backClicked);
+}
+
+void WordDetailPageWidget::setLoading(int wordId) {
+    hasDetailData_ = false;
+    jsonExpanded_ = false;
+    Q_UNUSED(wordId);
+    titleLabel_->setText(QStringLiteral("单词详情"));
+    contentLabel_->setHtml(QStringLiteral(
+        "<div style='padding:10px 0;color:#475569;'>正在加载单词详情...</div>"));
+}
+
+void WordDetailPageWidget::setError(const QString &message) {
+    hasDetailData_ = false;
+    jsonExpanded_ = false;
+    titleLabel_->setText(QStringLiteral("单词详情"));
+    contentLabel_->setHtml(QStringLiteral(
+        "<div style='padding:10px 0;color:#374151;'>加载失败：%1</div>").arg(message.toHtmlEscaped()));
+}
+
+void WordDetailPageWidget::setDetail(const WordFullDetail &detail) {
+    detail_ = detail;
+    hasDetailData_ = true;
+    jsonExpanded_ = false;
+    titleLabel_->setText(QStringLiteral("单词详情"));
+    renderDetailHtml();
+}
+
+void WordDetailPageWidget::renderDetailHtml() {
+    if (!hasDetailData_) {
+        return;
+    }
+
+    const WordFullDetail &detail = detail_;
+
+    auto resultText = [](SpellingResult result) -> QString {
+        switch (result) {
+        case SpellingResult::Mastered: return QStringLiteral("熟悉");
+        case SpellingResult::Blurry: return QStringLiteral("模糊");
+        case SpellingResult::Unfamiliar: default: return QStringLiteral("不熟悉");
+        }
+    };
+    auto trainingTypeText = [](const QString &trainingType) -> QString {
+        const QString type = trainingType.trimmed().toLower();
+        if (type == QStringLiteral("spelling")) {
+            return QStringLiteral("拼写");
+        }
+        if (type == QStringLiteral("countability")) {
+            return QStringLiteral("可数性");
+        }
+        if (type == QStringLiteral("polysemy")) {
+            return QStringLiteral("熟词生义");
+        }
+        return trainingType;
+    };
+    auto statusText = [](int status) -> QString {
+        if (status == 0) return QStringLiteral("新词");
+        if (status == 1) return QStringLiteral("学习中");
+        if (status == 2) return QStringLiteral("已掌握");
+        return QString::number(status);
+    };
+
+    auto esc = [](const QString &value) -> QString {
+        return value.toHtmlEscaped();
+    };
+    auto hasValue = [](const QString &value) -> bool {
+        const QString trimmed = value.trimmed();
+        return !trimmed.isEmpty() && trimmed.compare(QStringLiteral("none"), Qt::CaseInsensitive) != 0;
+    };
+    auto cleanedValue = [hasValue](const QString &value) -> QString {
+        return hasValue(value) ? value.trimmed() : QString();
+    };
+    auto looksLikeJson = [](const QString &value) -> bool {
+        const QString text = value.trimmed();
+        if (text.isEmpty()) {
+            return false;
+        }
+        return (text.startsWith('{') && text.endsWith('}'))
+            || (text.startsWith('[') && text.endsWith(']'));
+    };
+    auto prettyDateTime = [](const QDateTime &time) -> QString {
+        return time.isValid() ? time.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) : QString();
+    };
+    auto renderJsonBlock = [cleanedValue, this](const QString &raw) -> QString {
+        const QString text = cleanedValue(raw);
+        if (text.isEmpty()) {
+            return QString();
+        }
+        if (!jsonExpanded_) {
+            return QStringLiteral(
+                "<a class='action' href='toggle-json'>展开结构化 JSON</a>");
+        }
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError) {
+            return QStringLiteral("<a class='action' href='toggle-json'>收起 JSON</a><pre class='json'>%1</pre><div class='muted'>JSON 解析失败：%2</div>")
+                .arg(text.toHtmlEscaped(), parseError.errorString().toHtmlEscaped());
+        }
+        const QString pretty = QString::fromUtf8(doc.toJson(QJsonDocument::Indented)).toHtmlEscaped();
+        return QStringLiteral("<a class='action' href='toggle-json'>收起 JSON</a><pre class='json'>%1</pre>").arg(pretty);
+    };
+
+    auto kvRow = [esc](const QString &key, const QString &value) -> QString {
+        return QStringLiteral("<tr><td class='k'>%1</td><td class='v'>%2</td></tr>")
+            .arg(esc(key), esc(value));
+    };
+
+    auto renderTrendImage = [](const QVector<double> &values) -> QString {
+        if (values.size() < 2) {
+            return QString();
+        }
+        const int width = 700;
+        const int height = 188;
+        const int left = 18;
+        const int right = 16;
+        const int top = 14;
+        const int bottom = 28;
+        const int chartWidth = qMax(10, width - left - right);
+        const int chartHeight = qMax(10, height - top - bottom);
+
+        double minValue = values.first();
+        double maxValue = values.first();
+        for (double value : values) {
+            minValue = qMin(minValue, value);
+            maxValue = qMax(maxValue, value);
+        }
+        if (qFuzzyCompare(minValue + 1.0, maxValue + 1.0)) {
+            minValue -= 0.2;
+            maxValue += 0.2;
+        }
+        const double padding = (maxValue - minValue) * 0.12;
+        minValue -= padding;
+        maxValue += padding;
+        if (maxValue <= minValue) {
+            maxValue = minValue + 1.0;
+        }
+
+        QPixmap pixmap(width, height);
+        pixmap.fill(Qt::white);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QColor gridColor(QStringLiteral("#e5e7eb"));
+        const QColor lineColor(QStringLiteral("#111827"));
+        const QPen gridPen(gridColor, 1.0);
+        painter.setPen(gridPen);
+        for (int i = 0; i < 3; ++i) {
+            const qreal y = top + (chartHeight * i) / 2.0;
+            painter.drawLine(QPointF(left, y), QPointF(left + chartWidth, y));
+        }
+        painter.drawLine(QPointF(left, top + chartHeight), QPointF(left + chartWidth, top + chartHeight));
+
+        auto pointAt = [&](int index, double value) -> QPointF {
+            const double xRatio = values.size() <= 1 ? 0.0 : static_cast<double>(index) / static_cast<double>(values.size() - 1);
+            const double yRatio = (value - minValue) / (maxValue - minValue);
+            const double x = left + chartWidth * xRatio;
+            const double y = top + chartHeight * (1.0 - yRatio);
+            return QPointF(x, y);
+        };
+
+        QPainterPath linePath;
+        linePath.moveTo(pointAt(0, values.first()));
+        for (int i = 1; i < values.size(); ++i) {
+            linePath.lineTo(pointAt(i, values.at(i)));
+        }
+        painter.setPen(QPen(lineColor, 1.6));
+        painter.drawPath(linePath);
+
+        painter.setPen(QPen(lineColor, 1.2));
+        painter.setBrush(Qt::white);
+        for (int i = 0; i < values.size(); ++i) {
+            painter.drawEllipse(pointAt(i, values.at(i)), 2.8, 2.8);
+        }
+
+        QByteArray pngBytes;
+        QBuffer buffer(&pngBytes);
+        if (!buffer.open(QIODevice::WriteOnly)) {
+            return QString();
+        }
+        if (!pixmap.save(&buffer, "PNG")) {
+            return QString();
+        }
+        return QStringLiteral("<img class='trend-image' src='data:image/png;base64,%1' alt='训练趋势图' />")
+            .arg(QString::fromLatin1(pngBytes.toBase64()));
+    };
+
+    QString overviewItems;
+    QString detailSections;
+
+    const TrainingProgressDetail *primaryProgress = nullptr;
+    for (const TrainingProgressDetail &progress : detail.progressByType) {
+        if (progress.trainingType.trimmed().compare(QStringLiteral("spelling"), Qt::CaseInsensitive) == 0) {
+            primaryProgress = &progress;
+            break;
+        }
+    }
+    if (primaryProgress == nullptr && !detail.progressByType.isEmpty()) {
+        primaryProgress = &detail.progressByType.first();
+    }
+
+    if (primaryProgress != nullptr) {
+        overviewItems += QStringLiteral(
+            "<td class='metric-cell'>"
+            "<div class='metric-k'>熟练系数（EF） <span class='hint' title='值越高通常表示越容易。答对 +0.1，模糊 -0.05，不熟 -0.2。'>?</span></div>"
+            "<div class='metric-v'>%1</div>"
+            "</td>")
+            .arg(QString::number(primaryProgress->easeFactor, 'f', 2).toHtmlEscaped());
+        overviewItems += QStringLiteral(
+            "<td class='metric-cell'>"
+            "<div class='metric-k'>当前间隔（天）</div>"
+            "<div class='metric-v'>%1</div>"
+            "</td>")
+            .arg(QString::number(primaryProgress->interval).toHtmlEscaped());
+
+        const QString nextReview = prettyDateTime(primaryProgress->nextReview);
+        if (!nextReview.isEmpty()) {
+            overviewItems += QStringLiteral(
+                "<td class='metric-cell'>"
+                "<div class='metric-k'>下次复习</div>"
+                "<div class='metric-v metric-v-small'>%1</div>"
+                "</td>")
+                .arg(nextReview.toHtmlEscaped());
+        }
+    }
+
+    QString trendSection;
+    if (primaryProgress != nullptr) {
+        QVector<WordEventItem> eventsDesc;
+        const QString targetType = primaryProgress->trainingType.trimmed().toLower();
+        for (const WordEventItem &event : detail.recentEvents) {
+            if (event.trainingType.trimmed().toLower() == targetType) {
+                eventsDesc.push_back(event);
+            }
+            if (eventsDesc.size() >= 30) {
+                break;
+            }
+        }
+        if (!eventsDesc.isEmpty()) {
+            QVector<WordEventItem> eventsAsc;
+            QVector<double> efAsc;
+            eventsAsc.reserve(eventsDesc.size());
+            efAsc.reserve(eventsDesc.size());
+
+            double currentEf = primaryProgress->easeFactor;
+            QVector<double> afterDesc;
+            afterDesc.reserve(eventsDesc.size());
+            for (const WordEventItem &event : eventsDesc) {
+                afterDesc.push_back(currentEf);
+                if (event.result == SpellingResult::Mastered) {
+                    currentEf = qMax(1.3, currentEf - 0.1);
+                } else if (event.result == SpellingResult::Blurry) {
+                    currentEf = qMin(3.0, currentEf + 0.05);
+                } else {
+                    currentEf = qMin(3.0, currentEf + 0.2);
+                }
+            }
+            for (int i = eventsDesc.size() - 1; i >= 0; --i) {
+                eventsAsc.push_back(eventsDesc.at(i));
+                efAsc.push_back(afterDesc.at(i));
+            }
+
+            QString trendRows;
+            const int rowCount = qMin(6, eventsAsc.size());
+            for (int i = eventsAsc.size() - rowCount; i < eventsAsc.size(); ++i) {
+                const WordEventItem &event = eventsAsc.at(i);
+                trendRows += QStringLiteral(
+                    "<tr>"
+                    "<td>%1</td>"
+                    "<td>%2</td>"
+                    "<td>%3</td>"
+                    "<td>%4</td>"
+                    "</tr>")
+                    .arg(esc(prettyDateTime(event.eventTime)),
+                         esc(resultText(event.result)),
+                         esc(QString::number(efAsc.at(i), 'f', 2)),
+                         esc(event.skipped ? QStringLiteral("是") : QStringLiteral("否")));
+            }
+
+            QString trendContent = QStringLiteral("<div class='section-title'>训练进度趋势</div>");
+            if (efAsc.size() >= 2) {
+                trendContent += renderTrendImage(efAsc);
+                trendContent += QStringLiteral("<div class='muted'>类型：%1（最近 %2 次）</div>")
+                    .arg(esc(trainingTypeText(primaryProgress->trainingType)),
+                         esc(QString::number(efAsc.size())));
+            } else {
+                trendContent += QStringLiteral(
+                    "<div class='muted'>当前熟练系数：%1，最近一次时间：%2</div>")
+                    .arg(esc(QString::number(efAsc.first(), 'f', 2)),
+                         esc(prettyDateTime(eventsAsc.last().eventTime)));
+            }
+            if (!trendRows.isEmpty()) {
+                trendContent += QStringLiteral(
+                "<table class='grid compact'>"
+                "<thead><tr><th>时间</th><th>结果</th><th>熟练系数</th><th>跳过</th></tr></thead>"
+                "<tbody>%1</tbody>"
+                "</table>")
+                    .arg(trendRows);
+            }
+            trendSection = QStringLiteral("<div class='section-card'>%1</div>").arg(trendContent);
+        }
+    }
+
+    QString baseRows;
+    if (hasValue(detail.word.word)) {
+        baseRows += kvRow(QStringLiteral("单词"), cleanedValue(detail.word.word));
+    }
+    if (hasValue(detail.word.phonetic)) {
+        baseRows += kvRow(QStringLiteral("音标"), cleanedValue(detail.word.phonetic));
+    }
+    if (hasValue(detail.word.translation)) {
+        baseRows += kvRow(QStringLiteral("释义"), cleanedValue(detail.word.translation));
+    }
+    if (hasValue(detail.word.partOfSpeech)) {
+        baseRows += kvRow(QStringLiteral("词性"), cleanedValue(detail.word.partOfSpeech));
+    }
+    if (hasValue(detail.word.countabilityLabel)) {
+        baseRows += kvRow(QStringLiteral("可数性"), cleanedValue(detail.word.countabilityLabel));
+    }
+    if (hasValue(detail.word.countabilityPlural)) {
+        baseRows += kvRow(QStringLiteral("复数"), cleanedValue(detail.word.countabilityPlural));
+    }
+    if (hasValue(detail.word.countabilityNotes)) {
+        const QString notes = cleanedValue(detail.word.countabilityNotes);
+        if (!looksLikeJson(notes)) {
+            baseRows += kvRow(QStringLiteral("备注"), notes);
+        }
+    }
+    if (detail.word.skipForever) {
+        baseRows += kvRow(QStringLiteral("永久跳过"), QStringLiteral("是"));
+    }
+    const QString nextReviewText = prettyDateTime(detail.word.nextReview);
+    if (!nextReviewText.isEmpty()) {
+        baseRows += kvRow(QStringLiteral("下次复习"), nextReviewText);
+    }
+    QString jsonContent;
+    const QString polysemyJsonBlock = renderJsonBlock(detail.word.polysemyJson);
+    if (!polysemyJsonBlock.isEmpty()) {
+        jsonContent += QStringLiteral("<div class='sub-title'>熟词生义 JSON</div>%1").arg(polysemyJsonBlock);
+    }
+    if (hasValue(detail.word.countabilityNotes)) {
+        const QString notes = cleanedValue(detail.word.countabilityNotes);
+        if (looksLikeJson(notes)) {
+            const QString notesJsonBlock = renderJsonBlock(notes);
+            if (!notesJsonBlock.isEmpty()) {
+                jsonContent += QStringLiteral("<div class='sub-title'>备注 JSON</div>%1").arg(notesJsonBlock);
+            }
+        }
+    }
+
+    if (!baseRows.isEmpty() || !jsonContent.isEmpty()) {
+        QString baseSection = QStringLiteral("<div class='section-card'><div class='section-title'>基础信息</div>");
+        if (!baseRows.isEmpty()) {
+            baseSection += QStringLiteral("<table class='kv'>%1</table>").arg(baseRows);
+        }
+        if (!jsonContent.isEmpty()) {
+            baseSection += jsonContent;
+        }
+        baseSection += QStringLiteral("</div>");
+        detailSections += baseSection;
+    }
+
+    if (!detail.progressByType.isEmpty()) {
+        QString rows;
+        for (const TrainingProgressDetail &p : detail.progressByType) {
+            rows += QStringLiteral(
+                "<tr>"
+                "<td>%1</td><td>%2</td><td>%3</td><td>%4</td><td>%5</td><td>%6</td><td>%7</td><td>%8</td>"
+                "</tr>")
+                .arg(esc(hasValue(p.trainingType) ? trainingTypeText(cleanedValue(p.trainingType)) : QStringLiteral("未知")),
+                     esc(QString::number(p.easeFactor, 'f', 2)),
+                     esc(QString::number(p.interval)),
+                     esc(statusText(p.status)),
+                     esc(QString::number(p.correctCount)),
+                     esc(QString::number(p.wrongCount)),
+                     esc(prettyDateTime(p.nextReview)),
+                     esc(prettyDateTime(p.updatedAt)));
+        }
+        detailSections += QStringLiteral(
+            "<div class='section-card'>"
+            "<div class='section-title'>训练进度</div>"
+            "<table class='grid'>"
+            "<thead><tr><th>类型</th><th>熟练系数</th><th>间隔</th><th>状态</th><th>正确</th><th>错误</th><th>下次复习</th><th>更新时间</th></tr></thead>"
+            "<tbody>%1</tbody>"
+            "</table>"
+            "</div>").arg(rows);
+    }
+
+    const bool hasSpellingStats = detail.spellingAttemptCount > 0
+                               || detail.spellingCorrectCount > 0
+                               || detail.spellingStatsUpdatedAt.isValid();
+    if (hasSpellingStats) {
+        QString statsRows;
+        if (detail.spellingAttemptCount > 0) {
+            statsRows += kvRow(QStringLiteral("作答次数"), QString::number(detail.spellingAttemptCount));
+        }
+        if (detail.spellingCorrectCount > 0) {
+            statsRows += kvRow(QStringLiteral("答对次数"), QString::number(detail.spellingCorrectCount));
+        }
+        const QString updated = prettyDateTime(detail.spellingStatsUpdatedAt);
+        if (!updated.isEmpty()) {
+            statsRows += kvRow(QStringLiteral("更新时间"), updated);
+        }
+        if (!statsRows.isEmpty()) {
+            detailSections += QStringLiteral(
+                "<div class='section-card'>"
+                "<div class='section-title'>拼写统计</div>"
+                "<table class='kv'>%1</table>"
+                "</div>").arg(statsRows);
+        }
+    }
+
+    if (!detail.books.isEmpty()) {
+        QString booksSection = QStringLiteral("<div class='section-card'><div class='section-title'>所属词书</div>");
+        booksSection += QStringLiteral("<ul class='list'>");
+        for (const WordBookItem &book : detail.books) {
+            booksSection += QStringLiteral("<li>%1 <span class='muted'>（当前绑定：%2）</span></li>")
+                .arg(esc(hasValue(book.name) ? cleanedValue(book.name) : QStringLiteral("未命名词书")),
+                     esc(book.isActive ? QStringLiteral("是") : QStringLiteral("否")));
+        }
+        booksSection += QStringLiteral("</ul>");
+        booksSection += QStringLiteral("</div>");
+        detailSections += booksSection;
+    }
+
+    const bool hasEvents = detail.totalEventCount > 0
+                        || detail.lastEventTime.isValid()
+                        || !detail.recentEvents.isEmpty();
+    if (hasEvents) {
+        QString eventsSection = QStringLiteral("<div class='section-card'><div class='section-title'>学习事件</div>");
+        QString eventMetaRows;
+        if (detail.totalEventCount > 0) {
+            eventMetaRows += kvRow(QStringLiteral("总作答"), QString::number(detail.totalEventCount));
+        }
+        const QString lastTime = prettyDateTime(detail.lastEventTime);
+        if (!lastTime.isEmpty()) {
+            eventMetaRows += kvRow(QStringLiteral("最近作答"), lastTime);
+        }
+        if (!eventMetaRows.isEmpty()) {
+            eventsSection += QStringLiteral("<table class='kv'>%1</table>").arg(eventMetaRows);
+        }
+        if (!detail.recentEvents.isEmpty()) {
+            QString eventRows;
+            const int itemCount = qMin(12, detail.recentEvents.size());
+            for (int i = 0; i < itemCount; ++i) {
+                const WordEventItem &event = detail.recentEvents.at(i);
+                const QString eventInput = hasValue(event.userInput) ? cleanedValue(event.userInput) : QStringLiteral("—");
+                eventRows += QStringLiteral(
+                    "<tr>"
+                    "<td>%1</td>"
+                    "<td>%2</td>"
+                    "<td>%3</td>"
+                    "<td>%4</td>"
+                    "<td>%5</td>"
+                    "</tr>")
+                    .arg(esc(hasValue(event.trainingType) ? trainingTypeText(cleanedValue(event.trainingType)) : QStringLiteral("未知")),
+                         esc(resultText(event.result)),
+                         esc(event.skipped ? QStringLiteral("是") : QStringLiteral("否")),
+                         esc(eventInput),
+                         esc(prettyDateTime(event.eventTime)));
+            }
+            eventsSection += QStringLiteral(
+                "<table class='grid compact'>"
+                "<thead><tr><th>类型</th><th>结果</th><th>跳过</th><th>输入</th><th>时间</th></tr></thead>"
+                "<tbody>%1</tbody>"
+                "</table>").arg(eventRows);
+        }
+        eventsSection += QStringLiteral("</div>");
+        detailSections += eventsSection;
+    }
+
+    QString body;
+    if (!overviewItems.isEmpty()) {
+        body += QStringLiteral(
+            "<div class='section-card'>"
+            "<div class='section-title'>概览</div>"
+            "<table class='metric-table'><tr>%1</tr></table>"
+            "</div>").arg(overviewItems);
+    }
+    if (!trendSection.isEmpty()) {
+        body += trendSection;
+    }
+    body += detailSections;
+    if (body.isEmpty()) {
+        body = QStringLiteral(
+            "<div class='section-card'><div class='section-title'>单词详情</div><div class='muted'>暂无可展示的数据</div></div>");
+    }
+
+    const QString html = QStringLiteral(
+        "<style>"
+        "body{font-family:'PingFang SC','Microsoft YaHei','Helvetica Neue',sans-serif;color:#1f2937;}"
+        ".section-card{border:1px solid #d8dee6;border-radius:10px;padding:12px 14px;margin:0 0 14px 0;background:#ffffff;}"
+        ".section-title{font-size:17px;font-weight:700;color:#0f172a;margin:0 0 10px 0;}"
+        ".metric-table{width:100%;border-collapse:separate;border-spacing:8px;}"
+        ".metric-cell{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;vertical-align:top;}"
+        ".metric-k{font-size:13px;font-weight:600;color:#64748b;margin-bottom:6px;}"
+        ".metric-v{font-size:30px;font-weight:700;line-height:1.1;color:#0f172a;}"
+        ".metric-v-small{font-size:22px;}"
+        ".hint{display:inline-block;width:15px;height:15px;line-height:15px;text-align:center;border-radius:50%;border:1px solid #cbd5e1;color:#64748b;font-size:11px;}"
+        ".sub-title{font-size:14px;font-weight:700;color:#334155;margin:10px 0 6px 0;}"
+        ".muted{color:#64748b;font-size:13px;line-height:1.45;}"
+        ".action{display:inline-block;margin:4px 0 8px 0;color:#1f2937;text-decoration:underline;font-size:13px;}"
+        ".kv{width:100%;border-collapse:collapse;}"
+        ".kv td{padding:6px 0;vertical-align:top;border-bottom:1px solid #f1f5f9;}"
+        ".kv tr:last-child td{border-bottom:none;}"
+        ".kv .k{width:116px;color:#64748b;font-weight:600;}"
+        ".kv .v{color:#0f172a;word-break:break-word;overflow-wrap:anywhere;}"
+        ".grid{width:100%;border-collapse:collapse;margin-top:8px;}"
+        ".grid th,.grid td{border-bottom:1px solid #f1f5f9;padding:6px 8px;text-align:left;font-size:12px;word-break:break-word;overflow-wrap:anywhere;}"
+        ".grid th{color:#64748b;font-weight:700;background:transparent;}"
+        ".grid.compact th,.grid.compact td{font-size:11px;padding:5px 6px;}"
+        ".list{margin:0;padding-left:18px;}"
+        ".list li{margin:4px 0;}"
+        ".trend-image{display:block;width:100%;height:auto;max-width:700px;border:1px solid #e5e7eb;margin:2px 0 8px 0;}"
+        ".json{margin:0;border:1px solid #e5e7eb;background:#ffffff;color:#1f2937;padding:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;}"
+        "</style>"
+        "%1")
+        .arg(body);
+    contentLabel_->setHtml(html);
 }
 
 WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
