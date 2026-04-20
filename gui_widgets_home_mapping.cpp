@@ -145,6 +145,7 @@ void HomePageWidget::updateCardModel() {
         item.insert(QStringLiteral("hasActiveBook"), card.hasActiveBook);
         item.insert(QStringLiteral("learningEnabled"), card.learningEnabled);
         item.insert(QStringLiteral("reviewEnabled"), card.reviewEnabled);
+        item.insert(QStringLiteral("changeBookEnabled"), card.changeBookEnabled);
         item.insert(QStringLiteral("mastered"), card.masteredWords);
         item.insert(QStringLiteral("total"), card.totalWords);
         item.insert(QStringLiteral("unlearned"), card.unlearnedCount);
@@ -161,9 +162,17 @@ void HomePageWidget::updateCardModel() {
 }
 
 void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRect &globalRect) {
-    if (modeIndex < 0 || modeIndex > 2) {
+    if (modeIndex < 0 || modeIndex > 3) {
         AppLogger::warn(QStringLiteral("Home"),
                         QStringLiteral("ignore start request, invalid modeIndex=%1").arg(modeIndex));
+        return;
+    }
+    if (modeIndex == 3) {
+        if (isReview) {
+            emit startPhraseClusterReviewClicked();
+        } else {
+            emit startPhraseClusterLearningClicked();
+        }
         return;
     }
     AppLogger::step(QStringLiteral("Home"),
@@ -217,6 +226,9 @@ void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRec
 }
 
 void HomePageWidget::handleChangeBookRequest(int modeIndex) {
+    if (modeIndex == 3) {
+        return;
+    }
     QString trainingType = QStringLiteral("spelling");
     if (modeIndex == 1) {
         trainingType = QStringLiteral("countability");

@@ -63,6 +63,7 @@ struct DashboardCardState {
     bool hasActiveBook = false;
     bool learningEnabled = false;
     bool reviewEnabled = false;
+    bool changeBookEnabled = true;
     int activeBookId = -1;
 };
 
@@ -87,6 +88,8 @@ signals:
     void startCountabilityReviewClicked();
     void startPolysemyLearningClicked();
     void startPolysemyReviewClicked();
+    void startPhraseClusterLearningClicked();
+    void startPhraseClusterReviewClicked();
     void changeBookRequested(const QString &trainingType);
     void dashboardIndexChanged(int index);
     void booksClicked();
@@ -325,6 +328,15 @@ private:
     int hoveredBarIndex_ = -1;
 };
 
+class PhraseClusterPageWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit PhraseClusterPageWidget(QWidget *parent = nullptr);
+
+signals:
+    void backClicked();
+};
+
 class CalendarPageWidget : public QWidget {
     Q_OBJECT
 public:
@@ -453,6 +465,8 @@ private slots:
     void onStartCountabilityReview();
     void onStartPolysemyLearning();
     void onStartPolysemyReview();
+    void onStartPhraseClusterLearning();
+    void onStartPhraseClusterReview();
     void onSubmitAnswer(const QString &text);
     void onCountabilityAnswer(CountabilityAnswer answer);
     void onPolysemyRated(SpellingResult result);
@@ -471,6 +485,7 @@ private slots:
     void onCalendarFilterChanged(const QString &trainingType);
     void onCalendarWordDetailRequested(int wordId);
     void onWordDetailBack();
+    void onPhraseClusterBack();
 
 protected:
     void changeEvent(QEvent *event) override;
@@ -537,6 +552,7 @@ private:
     PolysemyPageWidget *polysemyPage_ = nullptr;
     SummaryPageWidget *summaryPage_ = nullptr;
     StatisticsPageWidget *statisticsPage_ = nullptr;
+    PhraseClusterPageWidget *phraseClusterPage_ = nullptr;
     CalendarPageWidget *calendarPage_ = nullptr;
     WordDetailPageWidget *wordDetailPage_ = nullptr;
     WordBooksPageWidget *wordBooksPage_ = nullptr;

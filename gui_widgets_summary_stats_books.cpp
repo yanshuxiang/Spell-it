@@ -613,6 +613,71 @@ private:
     int diameter_ = 32;
 };
 
+PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
+    : QWidget(parent) {
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(22, 18, 22, 20);
+    root->setSpacing(14);
+
+    auto *header = new QHBoxLayout();
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(12);
+
+    auto *backButton = new HoverScaleButton(QStringLiteral("返回"), this);
+    backButton->setFixedHeight(42);
+    backButton->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 700; color: #475569;"
+        "padding: 0 14px; border-radius: 12px;"
+        "background: #f3f4f6; border: 1px solid #e2e8f0;"
+        "HoverScaleButton:hover { background: #eceff3; }"));
+
+    auto *title = new QLabel(QStringLiteral("词群翻译训练"), this);
+    title->setAlignment(Qt::AlignCenter);
+    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 800; color: #0f172a;"));
+
+    auto *rightPlaceholder = new QWidget(this);
+    rightPlaceholder->setFixedSize(72, 42);
+
+    header->addWidget(backButton, 0, Qt::AlignLeft);
+    header->addStretch(1);
+    header->addWidget(title, 0, Qt::AlignCenter);
+    header->addStretch(1);
+    header->addWidget(rightPlaceholder, 0, Qt::AlignRight);
+
+    auto *panel = new QFrame(this);
+    panel->setStyleSheet(QStringLiteral(
+        "QFrame { background: #ffffff; border: 1px solid #d8dee6; border-radius: 16px; }"));
+    auto *panelLayout = new QVBoxLayout(panel);
+    panelLayout->setContentsMargins(20, 18, 20, 18);
+    panelLayout->setSpacing(12);
+
+    auto *panelTitle = new QLabel(QStringLiteral("词群训练面板"), panel);
+    panelTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #0f172a;"));
+    auto *panelDesc = new QLabel(QStringLiteral("占位页面已就绪，后续可接入词群卡片、分组练习与错题复习逻辑。"), panel);
+    panelDesc->setWordWrap(true);
+    panelDesc->setStyleSheet(QStringLiteral("font-size: 15px; color: #64748b; line-height: 1.6;"));
+
+    auto *contentPlaceholder = new QFrame(panel);
+    contentPlaceholder->setMinimumHeight(260);
+    contentPlaceholder->setStyleSheet(QStringLiteral(
+        "QFrame { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; }"));
+    auto *placeholderLayout = new QVBoxLayout(contentPlaceholder);
+    placeholderLayout->setContentsMargins(12, 12, 12, 12);
+    auto *placeholderText = new QLabel(QStringLiteral("这里将放置词群卡片列表与训练入口按钮"), contentPlaceholder);
+    placeholderText->setAlignment(Qt::AlignCenter);
+    placeholderText->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 600; color: #94a3b8;"));
+    placeholderLayout->addWidget(placeholderText, 1, Qt::AlignCenter);
+
+    panelLayout->addWidget(panelTitle);
+    panelLayout->addWidget(panelDesc);
+    panelLayout->addWidget(contentPlaceholder, 1);
+
+    root->addLayout(header);
+    root->addWidget(panel, 1);
+
+    connect(backButton, &HoverScaleButton::clicked, this, &PhraseClusterPageWidget::backClicked);
+}
+
 CalendarPageWidget::CalendarPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);

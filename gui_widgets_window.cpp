@@ -96,6 +96,9 @@ int dashboardIndexForTrainingType(const QString &trainingType) {
     if (type == QStringLiteral("polysemy")) {
         return 2;
     }
+    if (type == QStringLiteral("phrase_cluster")) {
+        return 3;
+    }
     return 0;
 }
 
@@ -212,6 +215,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     polysemyPage_ = new PolysemyPageWidget(this);
     summaryPage_ = new SummaryPageWidget(this);
     statisticsPage_ = new StatisticsPageWidget(this);
+    phraseClusterPage_ = new PhraseClusterPageWidget(this);
     calendarPage_ = new CalendarPageWidget(this);
     wordDetailPage_ = new WordDetailPageWidget(this);
     wordBooksPage_ = new WordBooksPageWidget(this);
@@ -226,6 +230,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     stack_->addWidget(polysemyPage_);
     stack_->addWidget(summaryPage_);
     stack_->addWidget(statisticsPage_);
+    stack_->addWidget(phraseClusterPage_);
     stack_->addWidget(calendarPage_);
     stack_->addWidget(wordDetailPage_);
     stack_->addWidget(wordBooksPage_);
@@ -258,6 +263,8 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(homePage_, &HomePageWidget::startCountabilityReviewClicked, this, &VibeSpellerWindow::onStartCountabilityReview);
     connect(homePage_, &HomePageWidget::startPolysemyLearningClicked, this, &VibeSpellerWindow::onStartPolysemyLearning);
     connect(homePage_, &HomePageWidget::startPolysemyReviewClicked, this, &VibeSpellerWindow::onStartPolysemyReview);
+    connect(homePage_, &HomePageWidget::startPhraseClusterLearningClicked, this, &VibeSpellerWindow::onStartPhraseClusterLearning);
+    connect(homePage_, &HomePageWidget::startPhraseClusterReviewClicked, this, &VibeSpellerWindow::onStartPhraseClusterReview);
     connect(homePage_, &HomePageWidget::changeBookRequested, this, &VibeSpellerWindow::onChangeBookForTraining);
     connect(homePage_, &HomePageWidget::dashboardIndexChanged, this, [this](int index) {
         db_.setLastDashboardCardIndex(index);
@@ -276,6 +283,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(calendarPage_, &CalendarPageWidget::trainingFilterChanged, this, &VibeSpellerWindow::onCalendarFilterChanged);
     connect(calendarPage_, &CalendarPageWidget::wordDetailRequested, this, &VibeSpellerWindow::onCalendarWordDetailRequested);
     connect(wordDetailPage_, &WordDetailPageWidget::backClicked, this, &VibeSpellerWindow::onWordDetailBack);
+    connect(phraseClusterPage_, &PhraseClusterPageWidget::backClicked, this, &VibeSpellerWindow::onPhraseClusterBack);
 
     connect(mappingPage_, &MappingPageWidget::cancelled, this, [this]() {
         if (returnToWordBooksAfterImport_) {
@@ -598,6 +606,26 @@ void VibeSpellerWindow::onStartPolysemyReview() {
         return;
     }
     startSession(SessionMode::PolysemyReview, words, 0);
+}
+
+void VibeSpellerWindow::onStartPhraseClusterLearning() {
+    if (inTransition_) {
+        return;
+    }
+    if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
+        return;
+    }
+    stack_->setCurrentWidget(phraseClusterPage_);
+}
+
+void VibeSpellerWindow::onStartPhraseClusterReview() {
+    if (inTransition_) {
+        return;
+    }
+    if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
+        return;
+    }
+    stack_->setCurrentWidget(phraseClusterPage_);
 }
 
 void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
@@ -1169,6 +1197,13 @@ void VibeSpellerWindow::onWordDetailBack() {
     stack_->setCurrentWidget(calendarPage_);
 }
 
+void VibeSpellerWindow::onPhraseClusterBack() {
+    if (stack_ == nullptr || homePage_ == nullptr) {
+        return;
+    }
+    stack_->setCurrentWidget(homePage_);
+}
+
 void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
     AppLogger::step(QStringLiteral("BookBinding"),
                     QStringLiteral("change book requested, trainingType=%1").arg(trainingType));
@@ -1615,14 +1650,30 @@ void VibeSpellerWindow::refreshHomeCounts() {
         card.dueReviewCount = db_.dueReviewCountForTraining(trainingType, QDateTime::currentDateTime());
         card.learningEnabled = card.hasActiveBook && card.unlearnedCount > 0;
         card.reviewEnabled = card.dueReviewCount > 0;
+        card.changeBookEnabled = true;
         return card;
     };
 
     QVector<DashboardCardState> cards;
-    cards.reserve(3);
+    cards.reserve(4);
     cards.push_back(buildCard(QStringLiteral("spelling"), QStringLiteral("拼写"), QStringLiteral("#0f172a")));
     cards.push_back(buildCard(QStringLiteral("countability"), QStringLiteral("可数性辨析"), QStringLiteral("#0ea5a4")));
     cards.push_back(buildCard(QStringLiteral("polysemy"), QStringLiteral("熟词生义"), QStringLiteral("#f59e0b")));
+    DashboardCardState phraseCard;
+    phraseCard.trainingType = QStringLiteral("phrase_cluster");
+    phraseCard.modeTitle = QStringLiteral("词群翻译");
+    phraseCard.themeColor = QStringLiteral("#6366f1");
+    phraseCard.bookName = QStringLiteral("四六级翻译词群");
+    phraseCard.coverName = QStringLiteral("PHRASE");
+    phraseCard.totalWords = 0;
+    phraseCard.masteredWords = 0;
+    phraseCard.unlearnedCount = 1;
+    phraseCard.dueReviewCount = 1;
+    phraseCard.hasActiveBook = true;
+    phraseCard.learningEnabled = true;
+    phraseCard.reviewEnabled = true;
+    phraseCard.changeBookEnabled = false;
+    cards.push_back(phraseCard);
 
     int todayLearning = 0;
     int todayReview = 0;
@@ -1635,11 +1686,11 @@ void VibeSpellerWindow::refreshHomeCounts() {
         todayStudyMinutes = today.studyMinutes;
     }
 
-    const int dashboardIndex = qBound(0, db_.lastDashboardCardIndex(), 2);
+    const int dashboardIndex = qBound(0, db_.lastDashboardCardIndex(), 3);
     homePage_->setDashboardCards(cards, dashboardIndex, todayLearning, todayReview, todayStudyMinutes);
     AppLogger::info(
         QStringLiteral("Home"),
-        QStringLiteral("counts refreshed, idx=%1, spelling(unlearned=%2,due=%3,total=%4), countability(unlearned=%5,due=%6,total=%7), polysemy(unlearned=%8,due=%9,total=%10)")
+        QStringLiteral("counts refreshed, idx=%1, spelling(unlearned=%2,due=%3,total=%4), countability(unlearned=%5,due=%6,total=%7), polysemy(unlearned=%8,due=%9,total=%10), phrase(unlearned=%11,due=%12,total=%13)")
             .arg(dashboardIndex)
             .arg(cards.value(0).unlearnedCount)
             .arg(cards.value(0).dueReviewCount)
@@ -1649,7 +1700,10 @@ void VibeSpellerWindow::refreshHomeCounts() {
             .arg(cards.value(1).totalWords)
             .arg(cards.value(2).unlearnedCount)
             .arg(cards.value(2).dueReviewCount)
-            .arg(cards.value(2).totalWords));
+            .arg(cards.value(2).totalWords)
+            .arg(cards.value(3).unlearnedCount)
+            .arg(cards.value(3).dueReviewCount)
+            .arg(cards.value(3).totalWords));
 }
 
 void VibeSpellerWindow::refreshCalendarMonthData() {
@@ -2976,7 +3030,7 @@ void VibeSpellerWindow::rememberHomeCardIndex() {
     if (homePage_ == nullptr) {
         return;
     }
-    preservedHomeCardIndex_ = qBound(0, homePage_->currentCardIndex(), 2);
+    preservedHomeCardIndex_ = qBound(0, homePage_->currentCardIndex(), 3);
     if (!db_.setLastDashboardCardIndex(preservedHomeCardIndex_)) {
         AppLogger::warn(QStringLiteral("Home"),
                         QStringLiteral("remember home card index failed, idx=%1, error=%2")
@@ -2992,7 +3046,7 @@ void VibeSpellerWindow::restoreHomeCardIndex(bool refreshCounts) {
     if (preservedHomeCardIndex_ < 0) {
         return;
     }
-    const int index = qBound(0, preservedHomeCardIndex_, 2);
+    const int index = qBound(0, preservedHomeCardIndex_, 3);
     if (!db_.setLastDashboardCardIndex(index)) {
         AppLogger::warn(QStringLiteral("Home"),
                         QStringLiteral("restore home card index failed, idx=%1, error=%2")
@@ -3066,7 +3120,7 @@ bool VibeSpellerWindow::ensureActiveBookForTraining(const QString &trainingType,
 }
 
 SessionMode VibeSpellerWindow::modeForDashboardRequest(int modeIndex, bool isReview) const {
-    const int index = qBound(0, modeIndex, 2);
+    const int index = qBound(0, modeIndex, 3);
     if (index == 1) {
         return isReview ? SessionMode::CountabilityReview : SessionMode::CountabilityLearning;
     }
