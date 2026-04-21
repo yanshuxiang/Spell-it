@@ -24,6 +24,7 @@ class QStackedWidget;
 class QTableWidget;
 class QTimer;
 class QVBoxLayout;
+class QHBoxLayout;
 class QSpacerItem;
 class QFrame;
 class QGridLayout;
@@ -332,9 +333,64 @@ class PhraseClusterPageWidget : public QWidget {
     Q_OBJECT
 public:
     explicit PhraseClusterPageWidget(QWidget *parent = nullptr);
+    void setDatabaseManager(DatabaseManager *db);
+    void openMode(bool reviewMode);
+    void openManagementPanel();
 
 signals:
     void backClicked();
+
+private:
+    void setManagementOnlyView(bool managementOnly);
+    void refreshManagementButtonsLayout();
+    void rebuildPhraseBookManagement(const QVector<PhraseBookItem> &books, int activeBookId);
+    void refreshBooks();
+    void reloadSession();
+    void showCurrentPhrase();
+    QString normalizedAnswer(const QString &text) const;
+    QString tryMatchAnswer(const PhraseItem &item, const QString &input) const;
+
+    DatabaseManager *db_ = nullptr;
+    bool reviewMode_ = false;
+    bool managementOnlyView_ = false;
+    bool currentAnswered_ = false;
+    int currentIndex_ = -1;
+    int sessionSize_ = 5;
+    int correctCount_ = 0;
+    int wrongCount_ = 0;
+    QVector<PhraseItem> currentBatch_;
+
+    HoverScaleButton *backButton_ = nullptr;
+    QLabel *titleLabel_ = nullptr;
+    QLabel *titleMetaLabel_ = nullptr;
+    QFrame *controlPanel_ = nullptr;
+    QTabBar *modeTabs_ = nullptr;
+    QComboBox *bookCombo_ = nullptr;
+    QComboBox *sessionSizeCombo_ = nullptr;
+    HoverScaleButton *manageButton_ = nullptr;
+    QFrame *managementPanel_ = nullptr;
+    QHBoxLayout *managementButtonsLayout_ = nullptr;
+    HoverScaleButton *addBookButton_ = nullptr;
+    HoverScaleButton *deleteBookButton_ = nullptr;
+    HoverScaleButton *importJsonButton_ = nullptr;
+    HoverScaleButton *importCsvButton_ = nullptr;
+    QFrame *trainPanel_ = nullptr;
+    QWidget *bookManageView_ = nullptr;
+    QLabel *manageCurrentTitle_ = nullptr;
+    QWidget *manageCurrentHost_ = nullptr;
+    QVBoxLayout *manageCurrentLayout_ = nullptr;
+    QLabel *manageOtherTitle_ = nullptr;
+    QListWidget *manageOtherList_ = nullptr;
+    HoverScaleButton *manageAddButton_ = nullptr;
+    QLabel *progressLabel_ = nullptr;
+    QLabel *clusterLabel_ = nullptr;
+    QLabel *metaLabel_ = nullptr;
+    QLabel *exampleLabel_ = nullptr;
+    QLineEdit *answerEdit_ = nullptr;
+    QLabel *feedbackLabel_ = nullptr;
+    HoverScaleButton *submitButton_ = nullptr;
+    HoverScaleButton *skipButton_ = nullptr;
+    HoverScaleButton *nextButton_ = nullptr;
 };
 
 class CalendarPageWidget : public QWidget {

@@ -6,12 +6,15 @@
 #include <QColor>
 #include <QFontMetrics>
 #include <QFrame>
+#include <QComboBox>
+#include <QDir>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMouseEvent>
+#include <QMenu>
 #include <QPaintEvent>
 #include <QTabBar>
 #include <QJsonArray>
@@ -19,6 +22,10 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -616,66 +623,956 @@ private:
 PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
-    root->setContentsMargins(22, 18, 22, 20);
-    root->setSpacing(14);
+    root->setContentsMargins(18, 14, 18, 14);
+    root->setSpacing(10);
 
     auto *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
-    header->setSpacing(12);
+    header->setSpacing(14);
 
-    auto *backButton = new HoverScaleButton(QStringLiteral("返回"), this);
-    backButton->setFixedHeight(42);
-    backButton->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 700; color: #475569;"
-        "padding: 0 14px; border-radius: 12px;"
-        "background: #f3f4f6; border: 1px solid #e2e8f0;"
+    backButton_ = new HoverScaleButton(this);
+    backButton_->setFixedSize(46, 46);
+    backButton_->setIcon(createBackLineIcon());
+    backButton_->setIconSize(QSize(20, 20));
+    backButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "background: #f3f4f6;"
+        "color: #475569;"
+        "border: none;"
+        "border-radius: 14px;"
+        "}"
         "HoverScaleButton:hover { background: #eceff3; }"));
 
-    auto *title = new QLabel(QStringLiteral("词群翻译训练"), this);
-    title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 800; color: #0f172a;"));
+    titleLabel_ = new QLabel(QStringLiteral("词群翻译训练"), this);
+    titleLabel_->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a;"));
+    titleMetaLabel_ = new QLabel(QStringLiteral(""), this);
+    titleMetaLabel_->setStyleSheet(QStringLiteral("font-size: 15px; color: #6b7280;"));
+    titleMetaLabel_->setVisible(false);
 
-    auto *rightPlaceholder = new QWidget(this);
-    rightPlaceholder->setFixedSize(72, 42);
+    auto *titleCol = new QVBoxLayout();
+    titleCol->setContentsMargins(0, 0, 0, 0);
+    titleCol->setSpacing(4);
+    titleCol->addWidget(titleLabel_);
+    titleCol->addWidget(titleMetaLabel_);
 
-    header->addWidget(backButton, 0, Qt::AlignLeft);
-    header->addStretch(1);
-    header->addWidget(title, 0, Qt::AlignCenter);
-    header->addStretch(1);
-    header->addWidget(rightPlaceholder, 0, Qt::AlignRight);
-
-    auto *panel = new QFrame(this);
-    panel->setStyleSheet(QStringLiteral(
-        "QFrame { background: #ffffff; border: 1px solid #d8dee6; border-radius: 16px; }"));
-    auto *panelLayout = new QVBoxLayout(panel);
-    panelLayout->setContentsMargins(20, 18, 20, 18);
-    panelLayout->setSpacing(12);
-
-    auto *panelTitle = new QLabel(QStringLiteral("词群训练面板"), panel);
-    panelTitle->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #0f172a;"));
-    auto *panelDesc = new QLabel(QStringLiteral("占位页面已就绪，后续可接入词群卡片、分组练习与错题复习逻辑。"), panel);
-    panelDesc->setWordWrap(true);
-    panelDesc->setStyleSheet(QStringLiteral("font-size: 15px; color: #64748b; line-height: 1.6;"));
-
-    auto *contentPlaceholder = new QFrame(panel);
-    contentPlaceholder->setMinimumHeight(260);
-    contentPlaceholder->setStyleSheet(QStringLiteral(
-        "QFrame { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; }"));
-    auto *placeholderLayout = new QVBoxLayout(contentPlaceholder);
-    placeholderLayout->setContentsMargins(12, 12, 12, 12);
-    auto *placeholderText = new QLabel(QStringLiteral("这里将放置词群卡片列表与训练入口按钮"), contentPlaceholder);
-    placeholderText->setAlignment(Qt::AlignCenter);
-    placeholderText->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 600; color: #94a3b8;"));
-    placeholderLayout->addWidget(placeholderText, 1, Qt::AlignCenter);
-
-    panelLayout->addWidget(panelTitle);
-    panelLayout->addWidget(panelDesc);
-    panelLayout->addWidget(contentPlaceholder, 1);
-
+    header->addWidget(backButton_, 0, Qt::AlignTop);
+    header->addLayout(titleCol, 1);
     root->addLayout(header);
-    root->addWidget(panel, 1);
 
-    connect(backButton, &HoverScaleButton::clicked, this, &PhraseClusterPageWidget::backClicked);
+    controlPanel_ = new QFrame(this);
+    controlPanel_->setStyleSheet(QStringLiteral(
+        "QFrame { background: #ffffff; border: 1px solid #d8dee6; border-radius: 14px; }"));
+    auto *controlLayout = new QVBoxLayout(controlPanel_);
+    controlLayout->setContentsMargins(12, 10, 12, 10);
+    controlLayout->setSpacing(8);
+
+    modeTabs_ = new QTabBar(controlPanel_);
+    modeTabs_->setDocumentMode(true);
+    modeTabs_->setDrawBase(false);
+    modeTabs_->setExpanding(false);
+    modeTabs_->addTab(QStringLiteral("学习"));
+    modeTabs_->addTab(QStringLiteral("复习"));
+    modeTabs_->setStyleSheet(QStringLiteral(
+        "QTabBar::tab {"
+        "  border: 1px solid #cbd5e1; border-right: none; min-width: 70px;"
+        "  padding: 8px 10px; background: #f8fafc; color: #64748b; font-size: 14px; font-weight: 600;}"
+        "QTabBar::tab:first { border-top-left-radius: 10px; border-bottom-left-radius: 10px; }"
+        "QTabBar::tab:last { border-right: 1px solid #cbd5e1; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }"
+        "QTabBar::tab:selected { background: #ffffff; color: #0f172a; border-color: #94a3b8; }"));
+
+    bookCombo_ = new QComboBox(controlPanel_);
+    bookCombo_->setMinimumWidth(180);
+    bookCombo_->setStyleSheet(QStringLiteral(
+        "QComboBox { min-height: 36px; padding: 0 10px; border: 1px solid #d1d9e5; border-radius: 10px; background: #ffffff; font-size: 14px; }"));
+
+    sessionSizeCombo_ = new QComboBox(controlPanel_);
+    sessionSizeCombo_->addItem(QStringLiteral("每组 5 题"), 5);
+    sessionSizeCombo_->addItem(QStringLiteral("每组 10 题"), 10);
+    sessionSizeCombo_->addItem(QStringLiteral("每组 15 题"), 15);
+    sessionSizeCombo_->addItem(QStringLiteral("每组 20 题"), 20);
+    sessionSizeCombo_->setCurrentIndex(0);
+    sessionSizeCombo_->setStyleSheet(QStringLiteral(
+        "QComboBox { min-height: 36px; padding: 0 10px; border: 1px solid #d1d9e5; border-radius: 10px; background: #ffffff; font-size: 14px; }"));
+
+    manageButton_ = new HoverScaleButton(QStringLiteral("管理词群词书"), controlPanel_);
+    manageButton_->setFixedHeight(36);
+    manageButton_->setMinimumWidth(132);
+    manageButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 14px; font-weight: 700; color: #334155; border-radius: 10px;"
+        "background: #eef2f7; border: 1px solid #d4dbe6; }"
+        "HoverScaleButton:hover { background: #e6ebf1; }"));
+
+    auto *controlTopRow = new QHBoxLayout();
+    controlTopRow->setContentsMargins(0, 0, 0, 0);
+    controlTopRow->setSpacing(8);
+    controlTopRow->addWidget(modeTabs_, 0, Qt::AlignLeft);
+    controlTopRow->addWidget(bookCombo_, 1);
+    controlTopRow->addWidget(sessionSizeCombo_, 0);
+    controlTopRow->addWidget(manageButton_, 0);
+
+    managementPanel_ = new QFrame(controlPanel_);
+    managementPanel_->setStyleSheet(QStringLiteral(
+        "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }"));
+    managementButtonsLayout_ = new QHBoxLayout(managementPanel_);
+    managementButtonsLayout_->setContentsMargins(8, 8, 8, 8);
+    managementButtonsLayout_->setSpacing(8);
+
+    addBookButton_ = new HoverScaleButton(QStringLiteral("新增词书"), managementPanel_);
+    deleteBookButton_ = new HoverScaleButton(QStringLiteral("删除词书"), managementPanel_);
+    importJsonButton_ = new HoverScaleButton(QStringLiteral("导入 JSON"), managementPanel_);
+    importCsvButton_ = new HoverScaleButton(QStringLiteral("导入 CSV"), managementPanel_);
+    const QString actionStyle = QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 13px; font-weight: 700; color: #334155; padding: 6px 10px;"
+        "border-radius: 8px; background: #ffffff; border: 1px solid #d1d9e5; }"
+        "HoverScaleButton:hover { background: #f3f7fc; }");
+    addBookButton_->setStyleSheet(actionStyle);
+    deleteBookButton_->setStyleSheet(actionStyle);
+    importJsonButton_->setStyleSheet(actionStyle);
+    importCsvButton_->setStyleSheet(actionStyle);
+    addBookButton_->setMinimumWidth(96);
+    deleteBookButton_->setMinimumWidth(96);
+    importJsonButton_->setMinimumWidth(104);
+    importCsvButton_->setMinimumWidth(104);
+    managementPanel_->setVisible(false);
+    refreshManagementButtonsLayout();
+
+    controlLayout->addLayout(controlTopRow);
+    controlLayout->addWidget(managementPanel_);
+    root->addWidget(controlPanel_);
+
+    trainPanel_ = new QFrame(this);
+    trainPanel_->setStyleSheet(QStringLiteral(
+        "QFrame { background: transparent; border: none; }"));
+    auto *trainLayout = new QVBoxLayout(trainPanel_);
+    trainLayout->setContentsMargins(12, 6, 12, 18);
+    trainLayout->setSpacing(8);
+
+    progressLabel_ = new QLabel(QStringLiteral("准备开始"), trainPanel_);
+    progressLabel_->setAlignment(Qt::AlignCenter);
+    progressLabel_->setStyleSheet(QStringLiteral("font-size: 14px; color: #4b5563; font-weight: 600;"));
+
+    clusterLabel_ = new QLabel(QStringLiteral("暂无词群"), trainPanel_);
+    clusterLabel_->setAlignment(Qt::AlignCenter);
+    clusterLabel_->setWordWrap(true);
+    clusterLabel_->setMinimumHeight(150);
+    clusterLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    clusterLabel_->setMargin(8);
+    clusterLabel_->setStyleSheet(QStringLiteral("font-size: 35px; font-weight: 700; color: #111827;"));
+
+    metaLabel_ = new QLabel(QStringLiteral("来源：—"), trainPanel_);
+    metaLabel_->setAlignment(Qt::AlignCenter);
+    metaLabel_->setWordWrap(true);
+    metaLabel_->setStyleSheet(QStringLiteral("font-size: 14px; color: #4b5563;"));
+
+    exampleLabel_ = new QLabel(trainPanel_);
+    exampleLabel_->setAlignment(Qt::AlignCenter);
+    exampleLabel_->setWordWrap(true);
+    exampleLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 16px; color: #6b7280; line-height: 1.5; padding: 4px 8px;"));
+
+    answerEdit_ = new QLineEdit(trainPanel_);
+    answerEdit_->setPlaceholderText(QStringLiteral("输入英文表达（严格匹配）"));
+    answerEdit_->setAlignment(Qt::AlignCenter);
+    answerEdit_->setFixedWidth(360);
+    QFont phraseInputFont = answerEdit_->font();
+    phraseInputFont.setPixelSize(30);
+    answerEdit_->setFont(phraseInputFont);
+    const int phraseInputHeight = qMax(64, QFontMetrics(phraseInputFont).height() + 26);
+    answerEdit_->setFixedHeight(phraseInputHeight);
+    answerEdit_->setFrame(false);
+    answerEdit_->setTextMargins(0, 0, 0, 0);
+    answerEdit_->setStyleSheet(QStringLiteral(
+        "QLineEdit {"
+        "border: none;"
+        "border-bottom: 2px solid #e5e7eb;"
+        "color: #111827;"
+        "padding: 6px 8px;"
+        "background: transparent;"
+        "}"
+        "QLineEdit:focus { border-bottom: 2px solid #334155; }"));
+
+    feedbackLabel_ = new QLabel(trainPanel_);
+    feedbackLabel_->setAlignment(Qt::AlignCenter);
+    feedbackLabel_->setWordWrap(true);
+    feedbackLabel_->setMinimumHeight(56);
+    feedbackLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
+    feedbackLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 14px; color: #6b7280;"));
+
+    submitButton_ = new HoverScaleButton(QStringLiteral("提交"), trainPanel_);
+    skipButton_ = new HoverScaleButton(QStringLiteral("跳过"), trainPanel_);
+    nextButton_ = new HoverScaleButton(QStringLiteral("下一题"), trainPanel_);
+    submitButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 16px; font-weight: 700; color: #ffffff; background: #0f172a; border-radius: 10px; padding: 8px 14px; }"
+        "HoverScaleButton:hover { background: #111f38; }"));
+    skipButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 16px; font-weight: 700; color: #334155; background: #eef2f7; border: 1px solid #d1d9e5; border-radius: 10px; padding: 8px 14px; }"
+        "HoverScaleButton:hover { background: #e6ecf3; }"));
+    nextButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 16px; font-weight: 700; color: #334155; background: #eef2f7; border: 1px solid #d1d9e5; border-radius: 10px; padding: 8px 14px; }"
+        "HoverScaleButton:hover { background: #e6ecf3; }"));
+    submitButton_->setVisible(false);
+    skipButton_->setVisible(false);
+    nextButton_->setVisible(false);
+
+    trainLayout->addWidget(progressLabel_);
+    trainLayout->addStretch(1);
+    trainLayout->addWidget(clusterLabel_);
+    trainLayout->addSpacing(8);
+    trainLayout->addWidget(metaLabel_);
+    trainLayout->addWidget(exampleLabel_);
+    trainLayout->addSpacing(12);
+    auto *answerRow = new QHBoxLayout();
+    answerRow->setContentsMargins(0, 0, 0, 0);
+    answerRow->addStretch(1);
+    answerRow->addWidget(answerEdit_, 0, Qt::AlignHCenter);
+    answerRow->addStretch(1);
+    trainLayout->addLayout(answerRow);
+    trainLayout->addSpacing(12);
+    trainLayout->addWidget(feedbackLabel_);
+    trainLayout->addStretch(2);
+
+    root->addWidget(trainPanel_, 1);
+
+    bookManageView_ = new QWidget(this);
+    auto *manageRoot = new QVBoxLayout(bookManageView_);
+    manageRoot->setContentsMargins(0, 0, 0, 0);
+    manageRoot->setSpacing(10);
+
+    manageCurrentTitle_ = new QLabel(QStringLiteral("词群 · 当前绑定词书"), bookManageView_);
+    manageCurrentTitle_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
+    manageCurrentHost_ = new QWidget(bookManageView_);
+    manageCurrentLayout_ = new QVBoxLayout(manageCurrentHost_);
+    manageCurrentLayout_->setContentsMargins(0, 0, 0, 0);
+    manageCurrentLayout_->setSpacing(10);
+
+    manageOtherTitle_ = new QLabel(QStringLiteral("其他词群词书"), bookManageView_);
+    manageOtherTitle_->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700; color: #334155;"));
+    manageOtherList_ = new QListWidget(bookManageView_);
+    manageOtherList_->setSpacing(8);
+    manageOtherList_->setSelectionMode(QAbstractItemView::NoSelection);
+    manageOtherList_->setFrameShape(QFrame::NoFrame);
+    manageOtherList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    manageOtherList_->setStyleSheet(QStringLiteral(
+        "QListWidget { border: none; background: transparent; outline: none; }"
+        "QListWidget::item { border: none; padding: 0; margin: 0; }"));
+
+    manageAddButton_ = new HoverScaleButton(QStringLiteral("添加词群词书"), bookManageView_);
+    manageAddButton_->setFixedHeight(60);
+    manageAddButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "font-size: 22px; font-weight: 700; border-radius: 18px;"
+        "background: #0f1b3d; color: #ffffff; }"
+        "HoverScaleButton:hover { background: #13224b; }"));
+
+    manageRoot->addWidget(manageCurrentTitle_);
+    manageRoot->addWidget(manageCurrentHost_, 3);
+    manageRoot->addWidget(manageOtherTitle_);
+    manageRoot->addWidget(manageOtherList_, 4);
+    manageRoot->addWidget(manageAddButton_);
+
+    root->addWidget(bookManageView_, 1);
+    bookManageView_->setVisible(false);
+
+    connect(backButton_, &HoverScaleButton::clicked, this, &PhraseClusterPageWidget::backClicked);
+    connect(manageButton_, &HoverScaleButton::clicked, this, [this]() {
+        setManagementOnlyView(true);
+    });
+    connect(modeTabs_, &QTabBar::currentChanged, this, [this](int idx) {
+        reviewMode_ = (idx == 1);
+        reloadSession();
+    });
+    connect(bookCombo_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        if (db_ == nullptr || idx < 0) {
+            return;
+        }
+        const int bookId = bookCombo_->itemData(idx).toInt();
+        if (bookId <= 0) {
+            return;
+        }
+        if (!db_->setActivePhraseBook(bookId)) {
+            showWarningPrompt(this, QStringLiteral("切换失败"), db_->lastError());
+            return;
+        }
+        refreshBooks();
+        reloadSession();
+    });
+    connect(sessionSizeCombo_, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        Q_UNUSED(idx);
+        sessionSize_ = sessionSizeCombo_->currentData().toInt();
+        if (sessionSize_ <= 0) {
+            sessionSize_ = 5;
+        }
+        reloadSession();
+    });
+
+    connect(addBookButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr) {
+            return;
+        }
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, QStringLiteral("新增词群词书"), QStringLiteral("词书名称："), QLineEdit::Normal,
+            QStringLiteral("词群词书"), &ok);
+        if (!ok) {
+            return;
+        }
+        int newBookId = -1;
+        if (!db_->createPhraseBook(name, &newBookId)) {
+            showWarningPrompt(this, QStringLiteral("创建失败"), db_->lastError());
+            return;
+        }
+        refreshBooks();
+        reloadSession();
+    });
+    connect(manageAddButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr) {
+            return;
+        }
+        QMenu menu(this);
+        QAction *createAction = menu.addAction(QStringLiteral("新增空词书"));
+        QAction *importJsonAction = menu.addAction(QStringLiteral("导入 JSON 到新词书"));
+        QAction *importCsvAction = menu.addAction(QStringLiteral("导入 CSV 到新词书"));
+        const QPoint pos = manageAddButton_->mapToGlobal(QPoint(manageAddButton_->width() / 2, 0));
+        QAction *selected = menu.exec(pos);
+        if (selected == nullptr) {
+            return;
+        }
+
+        bool ok = false;
+        QString defaultName = QStringLiteral("词群词书");
+        QString sourcePath;
+        if (selected == importJsonAction) {
+            sourcePath = QFileDialog::getOpenFileName(
+                this, QStringLiteral("导入词群 JSON"), QDir::homePath(),
+                QStringLiteral("JSON Files (*.json *.jsonl);;All Files (*)"));
+            if (sourcePath.isEmpty()) {
+                return;
+            }
+            defaultName = QFileInfo(sourcePath).completeBaseName();
+        } else if (selected == importCsvAction) {
+            sourcePath = QFileDialog::getOpenFileName(
+                this, QStringLiteral("导入词群 CSV"), QDir::homePath(),
+                QStringLiteral("CSV Files (*.csv);;All Files (*)"));
+            if (sourcePath.isEmpty()) {
+                return;
+            }
+            defaultName = QFileInfo(sourcePath).completeBaseName();
+        }
+
+        const QString name = QInputDialog::getText(
+            this, QStringLiteral("新增词群词书"), QStringLiteral("词书名称："), QLineEdit::Normal,
+            defaultName, &ok);
+        if (!ok || name.trimmed().isEmpty()) {
+            return;
+        }
+
+        int newBookId = -1;
+        if (!db_->createPhraseBook(name, &newBookId)) {
+            showWarningPrompt(this, QStringLiteral("创建失败"), db_->lastError());
+            return;
+        }
+
+        if (!sourcePath.isEmpty() && newBookId > 0) {
+            int imported = 0;
+            bool okImport = false;
+            if (selected == importJsonAction) {
+                okImport = db_->importPhraseBookFromJson(sourcePath, newBookId, imported);
+            } else if (selected == importCsvAction) {
+                okImport = db_->importPhraseBookFromCsv(sourcePath, newBookId, imported);
+            }
+            if (!okImport) {
+                showWarningPrompt(this, QStringLiteral("导入失败"), db_->lastError());
+            } else {
+                showInfoPrompt(this, QStringLiteral("导入完成"), QStringLiteral("成功导入 %1 条词群关联").arg(imported));
+            }
+        }
+        refreshBooks();
+    });
+    connect(deleteBookButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr) {
+            return;
+        }
+        const int idx = bookCombo_->currentIndex();
+        if (idx < 0) {
+            return;
+        }
+        const int bookId = bookCombo_->itemData(idx).toInt();
+        if (bookId <= 0) {
+            return;
+        }
+        const bool confirmed = showQuestionPrompt(this,
+                                                  QStringLiteral("删除词群词书"),
+                                                  QStringLiteral("确认删除当前词群词书吗？"));
+        if (!confirmed) {
+            return;
+        }
+        if (!db_->deletePhraseBook(bookId)) {
+            showWarningPrompt(this, QStringLiteral("删除失败"), db_->lastError());
+            return;
+        }
+        refreshBooks();
+        reloadSession();
+    });
+    connect(importJsonButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr) {
+            return;
+        }
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("导入词群 JSON"), QDir::homePath(),
+            QStringLiteral("JSON Files (*.json *.jsonl);;All Files (*)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        int imported = 0;
+        const int targetBookId = db_->activePhraseBookId();
+        if (!db_->importPhraseBookFromJson(path, targetBookId, imported)) {
+            showWarningPrompt(this, QStringLiteral("导入失败"), db_->lastError());
+            return;
+        }
+        showInfoPrompt(this, QStringLiteral("导入完成"), QStringLiteral("成功导入 %1 条词群关联").arg(imported));
+        refreshBooks();
+        reloadSession();
+    });
+    connect(importCsvButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr) {
+            return;
+        }
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("导入词群 CSV"), QDir::homePath(),
+            QStringLiteral("CSV Files (*.csv);;All Files (*)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        int imported = 0;
+        const int targetBookId = db_->activePhraseBookId();
+        if (!db_->importPhraseBookFromCsv(path, targetBookId, imported)) {
+            showWarningPrompt(this, QStringLiteral("导入失败"), db_->lastError());
+            return;
+        }
+        showInfoPrompt(this, QStringLiteral("导入完成"), QStringLiteral("成功导入 %1 条词群关联").arg(imported));
+        refreshBooks();
+        reloadSession();
+    });
+
+    const auto goNext = [this]() {
+        if (!currentAnswered_) {
+            feedbackLabel_->setText(QStringLiteral("请先回车提交当前题目。"));
+            feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 600; color: #b45309;"));
+            return;
+        }
+        ++currentIndex_;
+        if (currentIndex_ >= currentBatch_.size()) {
+            showInfoPrompt(this,
+                           QStringLiteral("本组完成"),
+                           QStringLiteral("共 %1 题，正确 %2，错误 %3")
+                               .arg(currentBatch_.size())
+                               .arg(correctCount_)
+                               .arg(wrongCount_));
+            reloadSession();
+            return;
+        }
+        showCurrentPhrase();
+    };
+
+    const auto submitCurrent = [this]() {
+        if (db_ == nullptr || currentIndex_ < 0 || currentIndex_ >= currentBatch_.size()) {
+            return;
+        }
+        if (currentAnswered_) {
+            return;
+        }
+        const QString userInput = answerEdit_->text().trimmed();
+        if (userInput.isEmpty()) {
+            feedbackLabel_->setText(QStringLiteral("请输入答案后再提交。"));
+            feedbackLabel_->setStyleSheet(QStringLiteral(
+                "font-size: 14px; font-weight: 600; color: #b45309;"));
+            return;
+        }
+        const PhraseItem item = currentBatch_.at(currentIndex_);
+        const QString matched = tryMatchAnswer(item, userInput);
+        const bool correct = !matched.isEmpty();
+        if (!db_->applyPhraseReviewResult(item.id, correct, false, QDateTime::currentDateTime())) {
+            showWarningPrompt(this, QStringLiteral("保存失败"), db_->lastError());
+            return;
+        }
+        PhraseLearningEvent event;
+        event.eventTime = QDateTime::currentDateTime();
+        event.phraseId = item.id;
+        event.mode = reviewMode_ ? QStringLiteral("review") : QStringLiteral("learning");
+        event.correct = correct;
+        event.skipped = false;
+        event.userInput = userInput;
+        event.matchedAnswer = matched;
+        db_->recordPhraseLearningEvent(event);
+
+        if (correct) {
+            ++correctCount_;
+            feedbackLabel_->setText(
+                QStringLiteral("回答正确\n标准表达：%1").arg(item.keywordsEn.join(QStringLiteral(" / "))));
+            feedbackLabel_->setStyleSheet(QStringLiteral(
+                "font-size: 14px; font-weight: 700; color: #16a34a;"));
+        } else {
+            ++wrongCount_;
+            feedbackLabel_->setText(
+                QStringLiteral("回答不正确\n标准表达：%1").arg(item.keywordsEn.join(QStringLiteral(" / "))));
+            feedbackLabel_->setStyleSheet(QStringLiteral(
+                "font-size: 14px; font-weight: 700; color: #ef4444;"));
+        }
+        currentAnswered_ = true;
+        nextButton_->setEnabled(true);
+    };
+    connect(submitButton_, &HoverScaleButton::clicked, this, submitCurrent);
+    connect(nextButton_, &HoverScaleButton::clicked, this, goNext);
+    connect(answerEdit_, &QLineEdit::returnPressed, this, [this, submitCurrent, goNext]() {
+        if (currentAnswered_) {
+            goNext();
+            return;
+        }
+        submitCurrent();
+    });
+
+    connect(skipButton_, &HoverScaleButton::clicked, this, [this]() {
+        if (db_ == nullptr || currentIndex_ < 0 || currentIndex_ >= currentBatch_.size()) {
+            return;
+        }
+        if (currentAnswered_) {
+            return;
+        }
+        const PhraseItem item = currentBatch_.at(currentIndex_);
+        if (!db_->applyPhraseReviewResult(item.id, false, true, QDateTime::currentDateTime())) {
+            showWarningPrompt(this, QStringLiteral("保存失败"), db_->lastError());
+            return;
+        }
+        PhraseLearningEvent event;
+        event.eventTime = QDateTime::currentDateTime();
+        event.phraseId = item.id;
+        event.mode = reviewMode_ ? QStringLiteral("review") : QStringLiteral("learning");
+        event.correct = false;
+        event.skipped = true;
+        event.userInput = answerEdit_->text().trimmed();
+        event.matchedAnswer = QString();
+        db_->recordPhraseLearningEvent(event);
+        ++wrongCount_;
+        feedbackLabel_->setText(
+            QStringLiteral("已跳过\n标准表达：%1").arg(item.keywordsEn.join(QStringLiteral(" / "))));
+        feedbackLabel_->setStyleSheet(QStringLiteral(
+            "font-size: 14px; font-weight: 700; color: #b45309;"));
+        currentAnswered_ = true;
+        nextButton_->setEnabled(true);
+    });
+
+    sessionSize_ = 5;
+    nextButton_->setEnabled(false);
+    refreshBooks();
+    reloadSession();
+    setManagementOnlyView(false);
+}
+
+void PhraseClusterPageWidget::setDatabaseManager(DatabaseManager *db) {
+    db_ = db;
+    refreshBooks();
+    reloadSession();
+}
+
+void PhraseClusterPageWidget::openMode(bool reviewMode) {
+    setManagementOnlyView(false);
+    reviewMode_ = reviewMode;
+    if (modeTabs_ != nullptr) {
+        const QSignalBlocker blocker(modeTabs_);
+        modeTabs_->setCurrentIndex(reviewMode ? 1 : 0);
+    }
+    if (managementPanel_ != nullptr) {
+        managementPanel_->setVisible(false);
+    }
+    reloadSession();
+}
+
+void PhraseClusterPageWidget::openManagementPanel() {
+    setManagementOnlyView(true);
+    refreshBooks();
+}
+
+void PhraseClusterPageWidget::setManagementOnlyView(bool managementOnly) {
+    managementOnlyView_ = managementOnly;
+    if (titleLabel_ != nullptr) {
+        titleLabel_->setText(managementOnly ? QStringLiteral("词群词书管理") : QStringLiteral("词群翻译训练"));
+    }
+    if (titleMetaLabel_ != nullptr) {
+        titleMetaLabel_->setVisible(managementOnly);
+    }
+    Q_UNUSED(modeTabs_);
+    Q_UNUSED(sessionSizeCombo_);
+    Q_UNUSED(manageButton_);
+    if (managementPanel_ != nullptr) {
+        managementPanel_->setVisible(false);
+    }
+    refreshManagementButtonsLayout();
+    if (controlPanel_ != nullptr) {
+        controlPanel_->setVisible(false);
+    }
+    if (trainPanel_ != nullptr) {
+        trainPanel_->setVisible(!managementOnly);
+    }
+    if (bookManageView_ != nullptr) {
+        bookManageView_->setVisible(managementOnly);
+    }
+}
+
+void PhraseClusterPageWidget::refreshManagementButtonsLayout() {
+    if (managementButtonsLayout_ == nullptr || managementPanel_ == nullptr) {
+        return;
+    }
+    while (QLayoutItem *item = managementButtonsLayout_->takeAt(0)) {
+        delete item;
+    }
+    if (addBookButton_ == nullptr || deleteBookButton_ == nullptr || importJsonButton_ == nullptr || importCsvButton_ == nullptr) {
+        return;
+    }
+
+    addBookButton_->setVisible(!managementOnlyView_);
+    deleteBookButton_->setVisible(!managementOnlyView_);
+
+    if (managementOnlyView_) {
+        importJsonButton_->setMinimumWidth(180);
+        importCsvButton_->setMinimumWidth(180);
+        importJsonButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        importCsvButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        managementButtonsLayout_->addWidget(importJsonButton_, 1);
+        managementButtonsLayout_->addSpacing(12);
+        managementButtonsLayout_->addWidget(importCsvButton_, 1);
+    } else {
+        importJsonButton_->setMinimumWidth(104);
+        importCsvButton_->setMinimumWidth(104);
+        addBookButton_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        deleteBookButton_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        importJsonButton_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        importCsvButton_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        managementButtonsLayout_->addWidget(addBookButton_);
+        managementButtonsLayout_->addWidget(deleteBookButton_);
+        managementButtonsLayout_->addStretch(1);
+        managementButtonsLayout_->addWidget(importJsonButton_);
+        managementButtonsLayout_->addWidget(importCsvButton_);
+    }
+    managementPanel_->updateGeometry();
+}
+
+void PhraseClusterPageWidget::refreshBooks() {
+    if (db_ == nullptr || bookCombo_ == nullptr) {
+        return;
+    }
+    const QVector<PhraseBookItem> books = db_->fetchPhraseBooks();
+    const int activeBookId = db_->activePhraseBookId();
+    rebuildPhraseBookManagement(books, activeBookId);
+    {
+        const QSignalBlocker blocker(bookCombo_);
+        bookCombo_->clear();
+        int currentIndex = -1;
+        for (const PhraseBookItem &book : books) {
+            const QString text = QStringLiteral("%1（%2）").arg(book.name).arg(book.itemCount);
+            bookCombo_->addItem(text, book.id);
+            if (book.id == activeBookId) {
+                currentIndex = bookCombo_->count() - 1;
+            }
+        }
+        if (currentIndex >= 0) {
+            bookCombo_->setCurrentIndex(currentIndex);
+        }
+    }
+    const bool hasBooks = bookCombo_->count() > 0;
+    deleteBookButton_->setEnabled(hasBooks);
+    importJsonButton_->setEnabled(true);
+    importCsvButton_->setEnabled(true);
+}
+
+void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBookItem> &books, int activeBookId) {
+    if (manageCurrentLayout_ == nullptr || manageOtherList_ == nullptr) {
+        return;
+    }
+    int totalItems = 0;
+    for (const PhraseBookItem &book : books) {
+        totalItems += book.itemCount;
+    }
+    if (titleMetaLabel_ != nullptr) {
+        titleMetaLabel_->setText(QStringLiteral("共 %1 本词群词书 · %2 词群").arg(books.size()).arg(totalItems));
+    }
+
+    while (QLayoutItem *item = manageCurrentLayout_->takeAt(0)) {
+        if (item->widget() != nullptr) {
+            item->widget()->deleteLater();
+        }
+        delete item;
+    }
+    manageOtherList_->clear();
+
+    const auto createBookRow = [this](QWidget *parent, const PhraseBookItem &book, bool current) -> QWidget * {
+        auto *row = new QWidget(parent);
+        row->setObjectName(QStringLiteral("phraseBookRow"));
+        row->setStyleSheet(QStringLiteral(
+            "QWidget#phraseBookRow {"
+            "  background: %1;"
+            "  border: 1px solid %2;"
+            "  border-radius: 18px;"
+            "}").arg(current ? QStringLiteral("#f8fafc") : QStringLiteral("#ffffff"),
+                     current ? QStringLiteral("#dbe4ef") : QStringLiteral("#e9eef5")));
+
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(14, 12, 14, 12);
+        layout->setSpacing(12);
+
+        const QColor baseColor(coverColorForBook(book.id));
+        const QString coverTop = baseColor.lighter(106).name();
+        const QString coverBottom = baseColor.darker(102).name();
+        auto *cover = new QLabel(coverTextForBook(book.name), row);
+        cover->setAlignment(Qt::AlignCenter);
+        cover->setFixedSize(68, 84);
+        cover->setWordWrap(true);
+        cover->setStyleSheet(QStringLiteral(
+            "font-size: 12px; line-height: 1.1; font-weight: 700; color: rgba(255,255,255,0.95);"
+            "border-radius: 14px;"
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 %1, stop:1 %2);")
+                                 .arg(coverTop, coverBottom));
+        layout->addWidget(cover);
+
+        auto *title = new QLabel(book.name, row);
+        title->setStyleSheet(QStringLiteral(
+            "font-size: 20px; font-weight: 700; color: #0f172a; background: transparent; border: none;"));
+        title->setWordWrap(true);
+        auto *count = new QLabel(QStringLiteral("%1 词群").arg(book.itemCount), row);
+        count->setStyleSheet(QStringLiteral("font-size: 15px; color: #94a3b8; background: transparent; border: none;"));
+        auto *status = new QLabel(current ? QStringLiteral("[学习中]") : QStringLiteral("[未学习]"), row);
+        status->setStyleSheet(QStringLiteral("font-size: 12px; font-weight: 700; color: #475569;"));
+
+        auto *textLayout = new QVBoxLayout();
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(5);
+        textLayout->addWidget(title);
+        textLayout->addWidget(count);
+        textLayout->addWidget(status);
+        textLayout->addStretch();
+        layout->addLayout(textLayout, 1);
+
+        auto *rightLayout = new QVBoxLayout();
+        rightLayout->setContentsMargins(0, 0, 0, 0);
+        rightLayout->setSpacing(6);
+        rightLayout->setAlignment(Qt::AlignTop | Qt::AlignRight);
+
+        if (!current) {
+            auto *activateBtn = new HoverScaleButton(QStringLiteral("绑定"), row);
+            activateBtn->setFixedSize(88, 34);
+            activateBtn->setStyleSheet(QStringLiteral(
+                "HoverScaleButton {"
+                "  font-size: 13px; font-weight: 700; border-radius: 17px;"
+                "  padding: 0 12px; border: 1px solid rgba(15,23,42,0.14);"
+                "  background: #f8fafc; color: #0f172a;"
+                "}"
+                "HoverScaleButton:hover { background: #eef2f7; }"));
+            connect(activateBtn, &HoverScaleButton::clicked, this, [this, book]() {
+                if (db_ == nullptr) {
+                    return;
+                }
+                if (!db_->setActivePhraseBook(book.id)) {
+                    showWarningPrompt(this, QStringLiteral("切换失败"), db_->lastError());
+                    return;
+                }
+                refreshBooks();
+                reloadSession();
+            });
+            rightLayout->addWidget(activateBtn, 0, Qt::AlignRight);
+        }
+
+        auto *deleteBtn = new HoverScaleButton(QStringLiteral("🗑"), row);
+        deleteBtn->setObjectName(QStringLiteral("phraseBookDeleteEmojiButton"));
+        deleteBtn->setFixedSize(26, 26);
+        deleteBtn->setToolTip(QStringLiteral("删除词书"));
+        deleteBtn->setStyleSheet(QStringLiteral(
+            "#phraseBookDeleteEmojiButton {"
+            "  border: none; border-radius: 8px; padding: 0;"
+            "  background: transparent; font-size: 12px; color: #64748b;"
+            "}"
+            "#phraseBookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
+        connect(deleteBtn, &HoverScaleButton::clicked, this, [this, book]() {
+            if (db_ == nullptr) {
+                return;
+            }
+            const bool confirmed = showQuestionPrompt(
+                this, QStringLiteral("删除词群词书"), QStringLiteral("确认删除“%1”吗？").arg(book.name));
+            if (!confirmed) {
+                return;
+            }
+            if (!db_->deletePhraseBook(book.id)) {
+                showWarningPrompt(this, QStringLiteral("删除失败"), db_->lastError());
+                return;
+            }
+            refreshBooks();
+            reloadSession();
+        });
+        rightLayout->addWidget(deleteBtn, 0, Qt::AlignRight);
+
+        layout->addLayout(rightLayout);
+        return row;
+    };
+
+    bool hasCurrent = false;
+    for (const PhraseBookItem &book : books) {
+        if (book.id == activeBookId || book.isActive) {
+            manageCurrentLayout_->addWidget(createBookRow(manageCurrentHost_, book, true));
+            hasCurrent = true;
+        }
+    }
+    if (!hasCurrent) {
+        auto *emptyCurrent = new QWidget(manageCurrentHost_);
+        emptyCurrent->setStyleSheet(QStringLiteral(
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
+        auto *emptyCurrentLayout = new QVBoxLayout(emptyCurrent);
+        emptyCurrentLayout->setContentsMargins(16, 12, 16, 12);
+        auto *emptyTitle = new QLabel(QStringLiteral("暂无当前绑定词群词书"), emptyCurrent);
+        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
+        auto *emptyDesc = new QLabel(QStringLiteral("请在下方选择词群词书并绑定到学习"), emptyCurrent);
+        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+        emptyCurrentLayout->addWidget(emptyTitle);
+        emptyCurrentLayout->addWidget(emptyDesc);
+        manageCurrentLayout_->addWidget(emptyCurrent);
+    }
+    manageCurrentLayout_->addStretch(1);
+
+    int otherCount = 0;
+    for (const PhraseBookItem &book : books) {
+        if (book.id == activeBookId || book.isActive) {
+            continue;
+        }
+        auto *itemWidget = createBookRow(manageOtherList_, book, false);
+        auto *item = new QListWidgetItem(manageOtherList_);
+        item->setSizeHint(itemWidget->sizeHint());
+        manageOtherList_->addItem(item);
+        manageOtherList_->setItemWidget(item, itemWidget);
+        ++otherCount;
+    }
+    if (manageOtherTitle_ != nullptr) {
+        manageOtherTitle_->setText(QStringLiteral("其他词群词书"));
+    }
+    if (otherCount <= 0) {
+        auto *emptyWidget = new QWidget(manageOtherList_);
+        emptyWidget->setStyleSheet(QStringLiteral(
+            "background: #f8fafc; border: 1px dashed #d8e1ec; border-radius: 18px;"));
+        auto *emptyLayout = new QVBoxLayout(emptyWidget);
+        emptyLayout->setContentsMargins(16, 12, 16, 12);
+        auto *emptyTitle = new QLabel(QStringLiteral("无其他词群词书"), emptyWidget);
+        emptyTitle->setStyleSheet(QStringLiteral("font-size: 18px; font-weight: 700; color: #334155;"));
+        auto *emptyDesc = new QLabel(QStringLiteral("点击底部“添加词群词书”创建或导入"), emptyWidget);
+        emptyDesc->setStyleSheet(QStringLiteral("font-size: 14px; color: #64748b;"));
+        emptyLayout->addWidget(emptyTitle);
+        emptyLayout->addWidget(emptyDesc);
+        auto *item = new QListWidgetItem(manageOtherList_);
+        item->setSizeHint(emptyWidget->sizeHint());
+        manageOtherList_->addItem(item);
+        manageOtherList_->setItemWidget(item, emptyWidget);
+    }
+}
+
+void PhraseClusterPageWidget::reloadSession() {
+    currentBatch_.clear();
+    currentIndex_ = -1;
+    currentAnswered_ = false;
+    correctCount_ = 0;
+    wrongCount_ = 0;
+    nextButton_->setEnabled(false);
+    feedbackLabel_->setText(QStringLiteral("请选择模式并开始训练。"));
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 600; color: #6b7280;"));
+    clusterLabel_->setStyleSheet(QStringLiteral("font-size: 34px; font-weight: 700; color: #111827;"));
+
+    if (db_ == nullptr) {
+        progressLabel_->setText(QStringLiteral("数据库未连接"));
+        clusterLabel_->setText(QStringLiteral("暂无词群"));
+        metaLabel_->setText(QStringLiteral("来源：—"));
+        exampleLabel_->setText(QStringLiteral("—"));
+        answerEdit_->clear();
+        answerEdit_->setEnabled(false);
+        submitButton_->setEnabled(false);
+        skipButton_->setEnabled(false);
+        return;
+    }
+
+    if (sessionSize_ <= 0) {
+        sessionSize_ = 5;
+    }
+    if (reviewMode_) {
+        currentBatch_ = db_->fetchPhraseReviewBatch(QDateTime::currentDateTime(), sessionSize_);
+    } else {
+        currentBatch_ = db_->fetchPhraseLearningBatch(sessionSize_);
+    }
+
+    if (currentBatch_.isEmpty()) {
+        progressLabel_->setText(reviewMode_ ? QStringLiteral("暂无复习任务") : QStringLiteral("暂无学习任务"));
+        clusterLabel_->setText(reviewMode_
+                                   ? QStringLiteral("当前没有到期词群")
+                                   : QStringLiteral("当前词群词书暂无新词群"));
+        metaLabel_->setText(QStringLiteral("请先导入词群数据或切换词群词书。"));
+        exampleLabel_->setText(QStringLiteral("导入 JSON/CSV 后可在此开始训练。"));
+        answerEdit_->clear();
+        answerEdit_->setEnabled(false);
+        submitButton_->setEnabled(false);
+        skipButton_->setEnabled(false);
+        return;
+    }
+
+    currentIndex_ = 0;
+    answerEdit_->setEnabled(true);
+    submitButton_->setEnabled(true);
+    skipButton_->setEnabled(true);
+    showCurrentPhrase();
+}
+
+void PhraseClusterPageWidget::showCurrentPhrase() {
+    if (currentIndex_ < 0 || currentIndex_ >= currentBatch_.size()) {
+        return;
+    }
+    currentAnswered_ = false;
+    nextButton_->setEnabled(false);
+    answerEdit_->clear();
+    answerEdit_->setFocus();
+    clusterLabel_->setStyleSheet(QStringLiteral("font-size: 45px; font-weight: 700; color: #111827;"));
+    feedbackLabel_->setText(QStringLiteral("请输入英文表达并提交。"));
+    feedbackLabel_->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 600; color: #6b7280;"));
+
+    const PhraseItem item = currentBatch_.at(currentIndex_);
+    progressLabel_->setText(
+        QStringLiteral("%1模式 · %2 / %3")
+            .arg(reviewMode_ ? QStringLiteral("复习") : QStringLiteral("学习"))
+            .arg(currentIndex_ + 1, 2, 10, QLatin1Char('0'))
+            .arg(currentBatch_.size()));
+    clusterLabel_->setText(item.clusterZh);
+    const QString source = item.examLabels.isEmpty()
+                               ? QStringLiteral("来源：未标注套题")
+                               : QStringLiteral("来源：%1").arg(item.examLabels.join(QStringLiteral(" · ")));
+    metaLabel_->setText(source);
+    if (!item.examplesCn.isEmpty()) {
+        exampleLabel_->setText(QStringLiteral("例句：%1").arg(item.examplesCn.first()));
+    } else {
+        exampleLabel_->setText(QStringLiteral("例句：—"));
+    }
+}
+
+QString PhraseClusterPageWidget::normalizedAnswer(const QString &text) const {
+    return text.trimmed().toLower().simplified();
+}
+
+QString PhraseClusterPageWidget::tryMatchAnswer(const PhraseItem &item, const QString &input) const {
+    const QString normalizedInput = normalizedAnswer(input);
+    if (normalizedInput.isEmpty()) {
+        return QString();
+    }
+    for (const QString &answer : item.keywordsEn) {
+        if (normalizedAnswer(answer) == normalizedInput) {
+            return answer;
+        }
+    }
+    return QString();
 }
 
 CalendarPageWidget::CalendarPageWidget(QWidget *parent)

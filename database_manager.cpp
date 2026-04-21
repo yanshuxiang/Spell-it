@@ -4,10 +4,16 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCryptographicHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QSqlRecord>
+#include <QSet>
 #include <QTextStream>
 #include <QUuid>
 #include <QtGlobal>
@@ -17,7 +23,9 @@ constexpr const char *kDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
 constexpr const char *kTrainingTypeSpelling = "spelling";
 constexpr const char *kTrainingTypeCountability = "countability";
 constexpr const char *kTrainingTypePolysemy = "polysemy";
+constexpr const char *kTrainingTypePhraseCluster = "phrase_cluster";
 constexpr const char *kSettingCsvPromptHandled = "csv_prompt_handled";
+constexpr const char *kPhraseConfigKey = "phrase_cluster";
 constexpr const char *kDefaultTrainingTypes[] = {
     kTrainingTypeSpelling,
     kTrainingTypeCountability,
@@ -157,6 +165,106 @@ QDateTime parseLocalDateTime(const QString &text) {
     }
     dt = QDateTime::fromString(text, Qt::ISODate);
     return dt;
+}
+
+QString phraseDelimitedToJsonArray(const QString &text) {
+    const QString cleaned = text.trimmed();
+    if (cleaned.isEmpty()) {
+        return QStringLiteral("[]");
+    }
+    QString normalized = cleaned;
+    normalized.replace(QStringLiteral("；"), QStringLiteral(";"));
+    normalized.replace(QStringLiteral("，"), QStringLiteral(","));
+    normalized.replace(QStringLiteral("、"), QStringLiteral(","));
+    normalized.replace(QStringLiteral("｜"), QStringLiteral("|"));
+    normalized.replace(QStringLiteral("／"), QStringLiteral("/"));
+
+    const QStringList rawParts = normalized.split(QRegularExpression(QStringLiteral("[,;|/]")), Qt::SkipEmptyParts);
+    QJsonArray arr;
+    QSet<QString> seen;
+    for (const QString &part : rawParts) {
+        const QString item = part.trimmed();
+        if (item.isEmpty()) {
+            continue;
+        }
+        const QString key = item.toLower();
+        if (seen.contains(key)) {
+            continue;
+        }
+        seen.insert(key);
+        arr.push_back(item);
+    }
+    return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+QStringList jsonArrayToStringListSafe(const QString &jsonText) {
+    QStringList values;
+    const QString trimmed = jsonText.trimmed();
+    if (trimmed.isEmpty()) {
+        return values;
+    }
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(trimmed.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isArray()) {
+        return values;
+    }
+    QSet<QString> seen;
+    for (const QJsonValue &value : doc.array()) {
+        const QString text = value.toString().trimmed();
+        if (text.isEmpty()) {
+            continue;
+        }
+        const QString key = text.toLower();
+        if (seen.contains(key)) {
+            continue;
+        }
+        seen.insert(key);
+        values.push_back(text);
+    }
+    return values;
+}
+
+QString jsonArrayFromStringList(const QStringList &list) {
+    QJsonArray arr;
+    QSet<QString> seen;
+    for (const QString &raw : list) {
+        const QString item = raw.trimmed();
+        if (item.isEmpty()) {
+            continue;
+        }
+        const QString key = item.toLower();
+        if (seen.contains(key)) {
+            continue;
+        }
+        seen.insert(key);
+        arr.push_back(item);
+    }
+    return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+QString phraseResultCode(bool correct) {
+    return correct ? QStringLiteral("correct") : QStringLiteral("wrong");
+}
+
+PhraseItem readPhraseFromQuery(const QSqlQuery &query) {
+    PhraseItem item;
+    item.id = query.value(QStringLiteral("id")).toInt();
+    item.clusterZh = query.value(QStringLiteral("cluster_zh")).toString();
+    item.keywordsEn = jsonArrayToStringListSafe(query.value(QStringLiteral("keywords_en_json")).toString());
+    item.theme = query.value(QStringLiteral("theme")).toString();
+    item.examLabels = jsonArrayToStringListSafe(query.value(QStringLiteral("exam_labels_json")).toString());
+    item.examplesCn = jsonArrayToStringListSafe(query.value(QStringLiteral("examples_cn_json")).toString());
+    item.easeFactor = query.value(QStringLiteral("ease_factor")).toDouble();
+    item.interval = query.value(QStringLiteral("interval")).toInt();
+    item.nextReview = parseLocalDateTime(query.value(QStringLiteral("next_review")).toString());
+    item.status = query.value(QStringLiteral("status")).toInt();
+    if (item.keywordsEn.isEmpty()) {
+        const QString fallback = query.value(QStringLiteral("keywords_en_json")).toString().trimmed();
+        if (!fallback.isEmpty()) {
+            item.keywordsEn = fallback.split(QRegularExpression(QStringLiteral("\\s*[,;|/]\\s*")), Qt::SkipEmptyParts);
+        }
+    }
+    return item;
 }
 
 // 判断一段 CSV 文本中是否存在未闭合的引号，用于支持跨行字段。
@@ -546,6 +654,125 @@ bool DatabaseManager::initialize() {
         return false;
     }
 
+    const QString createPhraseBooksSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_books ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "name TEXT NOT NULL UNIQUE,"
+        "is_active INTEGER NOT NULL DEFAULT 0,"
+        "created_at TEXT"
+        ")");
+    if (!query.exec(createPhraseBooksSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createPhraseItemsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_items ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "cluster_zh TEXT NOT NULL UNIQUE,"
+        "keywords_en_json TEXT NOT NULL,"
+        "theme TEXT,"
+        "exam_labels_json TEXT,"
+        "examples_cn_json TEXT,"
+        "created_at TEXT"
+        ")");
+    if (!query.exec(createPhraseItemsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_items_theme "
+            "ON phrase_items(theme)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createPhraseBookItemsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_book_items ("
+        "book_id INTEGER NOT NULL,"
+        "phrase_id INTEGER NOT NULL,"
+        "PRIMARY KEY(book_id, phrase_id)"
+        ")");
+    if (!query.exec(createPhraseBookItemsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_book_items_book "
+            "ON phrase_book_items(book_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_book_items_phrase "
+            "ON phrase_book_items(phrase_id)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createPhraseProgressSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_training_progress ("
+        "phrase_id INTEGER PRIMARY KEY,"
+        "ease_factor REAL DEFAULT 2.5,"
+        "interval INTEGER DEFAULT 0,"
+        "next_review TEXT,"
+        "status INTEGER DEFAULT 0,"
+        "correct_count INTEGER DEFAULT 0,"
+        "wrong_count INTEGER DEFAULT 0,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createPhraseProgressSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_progress_review "
+            "ON phrase_training_progress(next_review)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createPhraseEventsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_learning_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "event_time TEXT NOT NULL,"
+        "event_date TEXT NOT NULL,"
+        "phrase_id INTEGER NOT NULL,"
+        "mode TEXT NOT NULL,"
+        "result TEXT NOT NULL,"
+        "skipped INTEGER NOT NULL DEFAULT 0,"
+        "user_input TEXT,"
+        "matched_answer TEXT"
+        ")");
+    if (!query.exec(createPhraseEventsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_events_date "
+            "ON phrase_learning_events(event_date)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_phrase_events_phrase_time "
+            "ON phrase_learning_events(phrase_id, event_time)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createPhraseConfigsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS phrase_training_configs ("
+        "config_key TEXT PRIMARY KEY,"
+        "active_book_id INTEGER,"
+        "session_size INTEGER DEFAULT 10,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createPhraseConfigsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
     QSqlQuery seedTraining(database());
     seedTraining.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO training_configs(training_type, active_book_id, last_card_index, updated_at) "
@@ -554,6 +781,46 @@ bool DatabaseManager::initialize() {
         seedTraining.bindValue(0, QString::fromLatin1(trainingType));
         if (!seedTraining.exec()) {
             lastError_ = seedTraining.lastError().text();
+            return false;
+        }
+    }
+
+    QSqlQuery seedPhraseConfig(database());
+    seedPhraseConfig.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO phrase_training_configs(config_key, active_book_id, session_size, updated_at) "
+        "VALUES(?, NULL, 10, datetime('now','localtime'))"));
+    seedPhraseConfig.bindValue(0, QString::fromLatin1(kPhraseConfigKey));
+    if (!seedPhraseConfig.exec()) {
+        lastError_ = seedPhraseConfig.lastError().text();
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "UPDATE phrase_books "
+            "SET is_active = 1 "
+            "WHERE id = (SELECT id FROM phrase_books ORDER BY is_active DESC, id ASC LIMIT 1) "
+            "AND NOT EXISTS (SELECT 1 FROM phrase_books WHERE is_active = 1)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    int activePhraseBookId = -1;
+    QSqlQuery phraseActiveQuery(database());
+    if (phraseActiveQuery.exec(QStringLiteral(
+            "SELECT id FROM phrase_books WHERE is_active = 1 ORDER BY id ASC LIMIT 1"))
+        && phraseActiveQuery.next()) {
+        activePhraseBookId = phraseActiveQuery.value(0).toInt();
+    }
+    if (activePhraseBookId > 0) {
+        QSqlQuery bindPhraseConfig(database());
+        bindPhraseConfig.prepare(QStringLiteral(
+            "UPDATE phrase_training_configs "
+            "SET active_book_id = ?, updated_at = datetime('now','localtime') "
+            "WHERE config_key = ? AND active_book_id IS NULL"));
+        bindPhraseConfig.bindValue(0, activePhraseBookId);
+        bindPhraseConfig.bindValue(1, QString::fromLatin1(kPhraseConfigKey));
+        if (!bindPhraseConfig.exec()) {
+            lastError_ = bindPhraseConfig.lastError().text();
             return false;
         }
     }
@@ -2723,4 +2990,888 @@ bool DatabaseManager::setWordSkipForever(int wordId, bool skipForever) {
         return false;
     }
     return true;
+}
+
+QVector<PhraseBookItem> DatabaseManager::fetchPhraseBooks() const {
+    QVector<PhraseBookItem> books;
+    if (!ensureDatabaseOpen()) {
+        return books;
+    }
+
+    QSqlQuery query(database());
+    if (!query.exec(QStringLiteral(
+            "SELECT b.id, b.name, b.is_active, "
+            "       COUNT(pbi.phrase_id) AS item_count, "
+            "       SUM(CASE WHEN COALESCE(ptp.status, 0) > 0 THEN 1 ELSE 0 END) AS learned_count "
+            "FROM phrase_books b "
+            "LEFT JOIN phrase_book_items pbi ON pbi.book_id = b.id "
+            "LEFT JOIN phrase_training_progress ptp ON ptp.phrase_id = pbi.phrase_id "
+            "GROUP BY b.id, b.name, b.is_active "
+            "ORDER BY b.is_active DESC, b.id ASC"))) {
+        lastError_ = query.lastError().text();
+        return books;
+    }
+
+    while (query.next()) {
+        PhraseBookItem item;
+        item.id = query.value(0).toInt();
+        item.name = query.value(1).toString();
+        item.isActive = query.value(2).toInt() == 1;
+        item.itemCount = query.value(3).toInt();
+        item.learnedCount = query.value(4).toInt();
+        books.push_back(item);
+    }
+    return books;
+}
+
+int DatabaseManager::activePhraseBookId() const {
+    if (!ensureDatabaseOpen()) {
+        return -1;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT active_book_id "
+        "FROM phrase_training_configs "
+        "WHERE config_key = ?"));
+    query.bindValue(0, QString::fromLatin1(kPhraseConfigKey));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return -1;
+    }
+    if (query.next() && !query.value(0).isNull()) {
+        return query.value(0).toInt();
+    }
+
+    if (!query.exec(QStringLiteral(
+            "SELECT id FROM phrase_books WHERE is_active = 1 ORDER BY id ASC LIMIT 1"))) {
+        lastError_ = query.lastError().text();
+        return -1;
+    }
+    if (!query.next()) {
+        return -1;
+    }
+    return query.value(0).toInt();
+}
+
+bool DatabaseManager::setActivePhraseBook(int bookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (bookId <= 0) {
+        lastError_ = QStringLiteral("无效的词群词书 ID");
+        return false;
+    }
+
+    QSqlQuery verify(database());
+    verify.prepare(QStringLiteral("SELECT COUNT(*) FROM phrase_books WHERE id = ?"));
+    verify.bindValue(0, bookId);
+    if (!verify.exec() || !verify.next()) {
+        lastError_ = verify.lastError().text();
+        return false;
+    }
+    if (verify.value(0).toInt() <= 0) {
+        lastError_ = QStringLiteral("词群词书不存在");
+        return false;
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("UPDATE phrase_books SET is_active = 0"))) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    query.prepare(QStringLiteral("UPDATE phrase_books SET is_active = 1 WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral(
+        "INSERT INTO phrase_training_configs(config_key, active_book_id, session_size, updated_at) "
+        "VALUES(?, ?, 10, datetime('now','localtime')) "
+        "ON CONFLICT(config_key) DO UPDATE SET "
+        "active_book_id = excluded.active_book_id, "
+        "updated_at = excluded.updated_at"));
+    query.bindValue(0, QString::fromLatin1(kPhraseConfigKey));
+    query.bindValue(1, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::createPhraseBook(const QString &name, int *newBookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    QString base = name.trimmed();
+    if (base.isEmpty()) {
+        lastError_ = QStringLiteral("词群词书名称不能为空");
+        return false;
+    }
+
+    QSqlQuery countQuery(database());
+    if (!countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM phrase_books")) || !countQuery.next()) {
+        lastError_ = countQuery.lastError().text();
+        return false;
+    }
+    const bool shouldActivate = countQuery.value(0).toInt() <= 0;
+
+    QString finalName = base;
+    int suffix = 2;
+    while (true) {
+        QSqlQuery exists(database());
+        exists.prepare(QStringLiteral("SELECT COUNT(*) FROM phrase_books WHERE name = ?"));
+        exists.bindValue(0, finalName);
+        if (!exists.exec() || !exists.next()) {
+            lastError_ = exists.lastError().text();
+            return false;
+        }
+        if (exists.value(0).toInt() == 0) {
+            break;
+        }
+        finalName = QStringLiteral("%1%2").arg(base.left(18)).arg(suffix++);
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "INSERT INTO phrase_books(name, is_active, created_at) VALUES(?, ?, datetime('now','localtime'))"));
+    query.bindValue(0, finalName);
+    query.bindValue(1, shouldActivate ? 1 : 0);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    const int bookId = query.lastInsertId().toInt();
+    if (shouldActivate) {
+        query.prepare(QStringLiteral(
+            "INSERT INTO phrase_training_configs(config_key, active_book_id, session_size, updated_at) "
+            "VALUES(?, ?, 10, datetime('now','localtime')) "
+            "ON CONFLICT(config_key) DO UPDATE SET "
+            "active_book_id = excluded.active_book_id, "
+            "updated_at = excluded.updated_at"));
+        query.bindValue(0, QString::fromLatin1(kPhraseConfigKey));
+        query.bindValue(1, bookId);
+        if (!query.exec()) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    if (newBookId != nullptr) {
+        *newBookId = bookId;
+    }
+    return true;
+}
+
+bool DatabaseManager::deletePhraseBook(int bookId) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (bookId <= 0) {
+        lastError_ = QStringLiteral("无效的词群词书 ID");
+        return false;
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM phrase_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec() || !query.next()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (query.value(0).toInt() <= 0) {
+        db.rollback();
+        lastError_ = QStringLiteral("词群词书不存在");
+        return false;
+    }
+
+    query.prepare(QStringLiteral("DELETE FROM phrase_book_items WHERE book_id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral("DELETE FROM phrase_books WHERE id = ?"));
+    query.bindValue(0, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    query.prepare(QStringLiteral(
+        "UPDATE phrase_training_configs "
+        "SET active_book_id = NULL, updated_at = datetime('now','localtime') "
+        "WHERE config_key = ? AND active_book_id = ?"));
+    query.bindValue(0, QString::fromLatin1(kPhraseConfigKey));
+    query.bindValue(1, bookId);
+    if (!query.exec()) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    int fallbackId = -1;
+    if (!query.exec(QStringLiteral("SELECT id FROM phrase_books ORDER BY is_active DESC, id ASC LIMIT 1"))) {
+        db.rollback();
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (query.next()) {
+        fallbackId = query.value(0).toInt();
+    }
+    if (fallbackId > 0) {
+        if (!query.exec(QStringLiteral("UPDATE phrase_books SET is_active = 0"))) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        query.prepare(QStringLiteral("UPDATE phrase_books SET is_active = 1 WHERE id = ?"));
+        query.bindValue(0, fallbackId);
+        if (!query.exec()) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+        query.prepare(QStringLiteral(
+            "UPDATE phrase_training_configs "
+            "SET active_book_id = ?, updated_at = datetime('now','localtime') "
+            "WHERE config_key = ?"));
+        query.bindValue(0, fallbackId);
+        query.bindValue(1, QString::fromLatin1(kPhraseConfigKey));
+        if (!query.exec()) {
+            db.rollback();
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::importPhraseBookFromJson(const QString &jsonPath,
+                                               int targetBookId,
+                                               int &importedCount) {
+    importedCount = 0;
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    int bookId = targetBookId;
+    if (bookId <= 0) {
+        QString bookName = QFileInfo(jsonPath).completeBaseName().trimmed();
+        if (bookName.isEmpty()) {
+            bookName = QStringLiteral("词群词书");
+        }
+        if (!createPhraseBook(bookName.left(20), &bookId)) {
+            return false;
+        }
+        if (!setActivePhraseBook(bookId)) {
+            return false;
+        }
+    }
+
+    QFile file(jsonPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        lastError_ = QStringLiteral("无法打开 JSON 文件: %1").arg(jsonPath);
+        return false;
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    QJsonArray cards;
+    const QString suffix = QFileInfo(jsonPath).suffix().toLower();
+    if (suffix == QStringLiteral("jsonl")) {
+        const QStringList lines = QString::fromUtf8(bytes).split('\n', Qt::SkipEmptyParts);
+        for (const QString &line : lines) {
+            QJsonParseError error;
+            const QJsonDocument doc = QJsonDocument::fromJson(line.trimmed().toUtf8(), &error);
+            if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+                continue;
+            }
+            cards.push_back(doc.object());
+        }
+    } else {
+        QJsonParseError error;
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes, &error);
+        if (error.error != QJsonParseError::NoError) {
+            lastError_ = QStringLiteral("JSON 解析失败：%1").arg(error.errorString());
+            return false;
+        }
+        if (doc.isArray()) {
+            cards = doc.array();
+        } else if (doc.isObject()) {
+            const QJsonObject obj = doc.object();
+            if (obj.value(QStringLiteral("cards")).isArray()) {
+                cards = obj.value(QStringLiteral("cards")).toArray();
+            }
+        }
+    }
+    if (cards.isEmpty()) {
+        lastError_ = QStringLiteral("JSON 中未找到可导入的词群数据");
+        return false;
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery upsertItem(db);
+    upsertItem.prepare(QStringLiteral(
+        "INSERT INTO phrase_items(cluster_zh, keywords_en_json, theme, exam_labels_json, examples_cn_json, created_at) "
+        "VALUES(?, ?, ?, ?, ?, datetime('now','localtime')) "
+        "ON CONFLICT(cluster_zh) DO UPDATE SET "
+        "keywords_en_json = CASE WHEN length(trim(excluded.keywords_en_json)) > 2 THEN excluded.keywords_en_json ELSE phrase_items.keywords_en_json END, "
+        "theme = CASE WHEN length(trim(excluded.theme)) > 0 THEN excluded.theme ELSE phrase_items.theme END, "
+        "exam_labels_json = CASE WHEN length(trim(excluded.exam_labels_json)) > 2 THEN excluded.exam_labels_json ELSE phrase_items.exam_labels_json END, "
+        "examples_cn_json = CASE WHEN length(trim(excluded.examples_cn_json)) > 2 THEN excluded.examples_cn_json ELSE phrase_items.examples_cn_json END"));
+
+    QSqlQuery fetchPhraseId(db);
+    fetchPhraseId.prepare(QStringLiteral("SELECT id FROM phrase_items WHERE cluster_zh = ?"));
+    QSqlQuery bindPhrase(db);
+    bindPhrase.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO phrase_book_items(book_id, phrase_id) VALUES(?, ?)"));
+
+    for (const QJsonValue &value : cards) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject obj = value.toObject();
+        const QString clusterZh = obj.value(QStringLiteral("cluster_zh")).toString().trimmed();
+        if (clusterZh.isEmpty()) {
+            continue;
+        }
+
+        QStringList keywords;
+        const QJsonValue kwValue = obj.value(QStringLiteral("keywords_en"));
+        if (kwValue.isArray()) {
+            for (const QJsonValue &kw : kwValue.toArray()) {
+                const QString s = kw.toString().trimmed();
+                if (!s.isEmpty()) {
+                    keywords.push_back(s);
+                }
+            }
+        } else if (kwValue.isString()) {
+            keywords = kwValue.toString().split(QRegularExpression(QStringLiteral("\\s*[,;|/]\\s*")), Qt::SkipEmptyParts);
+        }
+        const QString keywordsJson = jsonArrayFromStringList(keywords);
+
+        QStringList examLabels;
+        const QJsonValue examValue = obj.value(QStringLiteral("exam_labels"));
+        if (examValue.isArray()) {
+            for (const QJsonValue &e : examValue.toArray()) {
+                const QString s = e.toString().trimmed();
+                if (!s.isEmpty()) {
+                    examLabels.push_back(s);
+                }
+            }
+        } else if (obj.value(QStringLiteral("exam_label")).isString()) {
+            examLabels.push_back(obj.value(QStringLiteral("exam_label")).toString().trimmed());
+        }
+        const QString examJson = jsonArrayFromStringList(examLabels);
+
+        QStringList examples;
+        const QJsonValue examplesValue = obj.value(QStringLiteral("examples_cn"));
+        if (examplesValue.isArray()) {
+            for (const QJsonValue &e : examplesValue.toArray()) {
+                const QString s = e.toString().trimmed();
+                if (!s.isEmpty()) {
+                    examples.push_back(s);
+                }
+            }
+        } else if (obj.value(QStringLiteral("source_sentence")).isString()) {
+            examples.push_back(obj.value(QStringLiteral("source_sentence")).toString().trimmed());
+        }
+        const QString examplesJson = jsonArrayFromStringList(examples);
+
+        upsertItem.bindValue(0, clusterZh);
+        upsertItem.bindValue(1, keywordsJson);
+        upsertItem.bindValue(2, obj.value(QStringLiteral("theme")).toString().trimmed());
+        upsertItem.bindValue(3, examJson);
+        upsertItem.bindValue(4, examplesJson);
+        if (!upsertItem.exec()) {
+            db.rollback();
+            lastError_ = upsertItem.lastError().text();
+            return false;
+        }
+
+        fetchPhraseId.bindValue(0, clusterZh);
+        if (!fetchPhraseId.exec() || !fetchPhraseId.next()) {
+            db.rollback();
+            lastError_ = fetchPhraseId.lastError().text();
+            return false;
+        }
+        const int phraseId = fetchPhraseId.value(0).toInt();
+        if (phraseId <= 0) {
+            continue;
+        }
+        bindPhrase.bindValue(0, bookId);
+        bindPhrase.bindValue(1, phraseId);
+        if (!bindPhrase.exec()) {
+            db.rollback();
+            lastError_ = bindPhrase.lastError().text();
+            return false;
+        }
+        if (bindPhrase.numRowsAffected() > 0) {
+            ++importedCount;
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::importPhraseBookFromCsv(const QString &csvPath,
+                                              int targetBookId,
+                                              int &importedCount) {
+    importedCount = 0;
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+
+    QFile file(csvPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        lastError_ = QStringLiteral("无法打开 CSV 文件: %1").arg(csvPath);
+        return false;
+    }
+    QTextStream in(&file);
+    in.setEncoding(QStringConverter::Utf8);
+    if (in.atEnd()) {
+        lastError_ = QStringLiteral("CSV 文件为空");
+        return false;
+    }
+    QStringList headers = parseCsvLine(readCsvRecord(in));
+    if (!headers.isEmpty()) {
+        headers[0].remove(QChar(0xFEFF));
+    }
+
+    auto findHeader = [&headers](const QStringList &candidates) -> int {
+        for (int i = 0; i < headers.size(); ++i) {
+            const QString h = headers.at(i).trimmed().toLower();
+            for (const QString &candidate : candidates) {
+                if (h == candidate || h.contains(candidate)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    };
+
+    const int clusterCol = findHeader({QStringLiteral("cluster_zh"), QStringLiteral("词群"), QStringLiteral("中文词群"), QStringLiteral("phrase")});
+    const int keywordsCol = findHeader({QStringLiteral("keywords_en"), QStringLiteral("英文表达"), QStringLiteral("answer"), QStringLiteral("answers"), QStringLiteral("keywords")});
+    const int themeCol = findHeader({QStringLiteral("theme"), QStringLiteral("主题")});
+    const int examCol = findHeader({QStringLiteral("exam_labels"), QStringLiteral("exam_label"), QStringLiteral("年份"), QStringLiteral("套题"), QStringLiteral("来源")});
+    const int examplesCol = findHeader({QStringLiteral("examples_cn"), QStringLiteral("example"), QStringLiteral("source_sentence"), QStringLiteral("例句")});
+
+    if (clusterCol < 0 || keywordsCol < 0) {
+        lastError_ = QStringLiteral("CSV 缺少必要列（中文词群 / 英文表达）");
+        return false;
+    }
+
+    int bookId = targetBookId;
+    if (bookId <= 0) {
+        QString bookName = QFileInfo(csvPath).completeBaseName().trimmed();
+        if (bookName.isEmpty()) {
+            bookName = QStringLiteral("词群词书");
+        }
+        if (!createPhraseBook(bookName.left(20), &bookId)) {
+            return false;
+        }
+        if (!setActivePhraseBook(bookId)) {
+            return false;
+        }
+    }
+
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery upsertItem(db);
+    upsertItem.prepare(QStringLiteral(
+        "INSERT INTO phrase_items(cluster_zh, keywords_en_json, theme, exam_labels_json, examples_cn_json, created_at) "
+        "VALUES(?, ?, ?, ?, ?, datetime('now','localtime')) "
+        "ON CONFLICT(cluster_zh) DO UPDATE SET "
+        "keywords_en_json = CASE WHEN length(trim(excluded.keywords_en_json)) > 2 THEN excluded.keywords_en_json ELSE phrase_items.keywords_en_json END, "
+        "theme = CASE WHEN length(trim(excluded.theme)) > 0 THEN excluded.theme ELSE phrase_items.theme END, "
+        "exam_labels_json = CASE WHEN length(trim(excluded.exam_labels_json)) > 2 THEN excluded.exam_labels_json ELSE phrase_items.exam_labels_json END, "
+        "examples_cn_json = CASE WHEN length(trim(excluded.examples_cn_json)) > 2 THEN excluded.examples_cn_json ELSE phrase_items.examples_cn_json END"));
+
+    QSqlQuery fetchPhraseId(db);
+    fetchPhraseId.prepare(QStringLiteral("SELECT id FROM phrase_items WHERE cluster_zh = ?"));
+    QSqlQuery bindPhrase(db);
+    bindPhrase.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO phrase_book_items(book_id, phrase_id) VALUES(?, ?)"));
+
+    while (true) {
+        const QString record = readCsvRecord(in);
+        if (record.isNull()) {
+            break;
+        }
+        if (record.trimmed().isEmpty()) {
+            continue;
+        }
+        const QStringList cols = parseCsvLine(record);
+        if (clusterCol >= cols.size() || keywordsCol >= cols.size()) {
+            continue;
+        }
+
+        const QString clusterZh = cols.at(clusterCol).trimmed();
+        if (clusterZh.isEmpty()) {
+            continue;
+        }
+        const QString keywordsJson = phraseDelimitedToJsonArray(cols.at(keywordsCol));
+        if (keywordsJson == QStringLiteral("[]")) {
+            continue;
+        }
+        const QString theme = (themeCol >= 0 && themeCol < cols.size()) ? cols.at(themeCol).trimmed() : QString();
+        const QString examJson = (examCol >= 0 && examCol < cols.size())
+                                     ? phraseDelimitedToJsonArray(cols.at(examCol))
+                                     : QStringLiteral("[]");
+        const QString examplesJson = (examplesCol >= 0 && examplesCol < cols.size())
+                                         ? phraseDelimitedToJsonArray(cols.at(examplesCol))
+                                         : QStringLiteral("[]");
+
+        upsertItem.bindValue(0, clusterZh);
+        upsertItem.bindValue(1, keywordsJson);
+        upsertItem.bindValue(2, theme);
+        upsertItem.bindValue(3, examJson);
+        upsertItem.bindValue(4, examplesJson);
+        if (!upsertItem.exec()) {
+            db.rollback();
+            lastError_ = upsertItem.lastError().text();
+            return false;
+        }
+
+        fetchPhraseId.bindValue(0, clusterZh);
+        if (!fetchPhraseId.exec() || !fetchPhraseId.next()) {
+            db.rollback();
+            lastError_ = fetchPhraseId.lastError().text();
+            return false;
+        }
+        const int phraseId = fetchPhraseId.value(0).toInt();
+        if (phraseId <= 0) {
+            continue;
+        }
+
+        bindPhrase.bindValue(0, bookId);
+        bindPhrase.bindValue(1, phraseId);
+        if (!bindPhrase.exec()) {
+            db.rollback();
+            lastError_ = bindPhrase.lastError().text();
+            return false;
+        }
+        if (bindPhrase.numRowsAffected() > 0) {
+            ++importedCount;
+        }
+    }
+
+    if (!db.commit()) {
+        lastError_ = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVector<PhraseItem> DatabaseManager::fetchPhraseLearningBatch(int limit) const {
+    QVector<PhraseItem> items;
+    if (!ensureDatabaseOpen()) {
+        return items;
+    }
+    const int activeBookId = activePhraseBookId();
+    if (activeBookId <= 0) {
+        return items;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT p.id, p.cluster_zh, p.keywords_en_json, p.theme, p.exam_labels_json, p.examples_cn_json, "
+        "       COALESCE(tp.ease_factor, 2.5) AS ease_factor, "
+        "       COALESCE(tp.interval, 0) AS interval, "
+        "       tp.next_review AS next_review, "
+        "       COALESCE(tp.status, 0) AS status "
+        "FROM phrase_book_items pbi "
+        "JOIN phrase_items p ON p.id = pbi.phrase_id "
+        "LEFT JOIN phrase_training_progress tp ON tp.phrase_id = p.id "
+        "WHERE pbi.book_id = ? "
+        "  AND (tp.phrase_id IS NULL OR COALESCE(tp.status, 0) = 0) "
+        "ORDER BY p.id ASC LIMIT ?"));
+    query.bindValue(0, activeBookId);
+    query.bindValue(1, qMax(1, limit));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return items;
+    }
+    while (query.next()) {
+        items.push_back(readPhraseFromQuery(query));
+    }
+    return items;
+}
+
+QVector<PhraseItem> DatabaseManager::fetchPhraseReviewBatch(const QDateTime &now, int limit) const {
+    QVector<PhraseItem> items;
+    if (!ensureDatabaseOpen()) {
+        return items;
+    }
+    const int activeBookId = activePhraseBookId();
+    if (activeBookId <= 0) {
+        return items;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT p.id, p.cluster_zh, p.keywords_en_json, p.theme, p.exam_labels_json, p.examples_cn_json, "
+        "       tp.ease_factor AS ease_factor, tp.interval AS interval, tp.next_review AS next_review, tp.status AS status "
+        "FROM phrase_training_progress tp "
+        "JOIN phrase_items p ON p.id = tp.phrase_id "
+        "JOIN phrase_book_items pbi ON pbi.phrase_id = p.id "
+        "WHERE pbi.book_id = ? "
+        "  AND COALESCE(tp.status, 0) != 0 "
+        "  AND tp.next_review IS NOT NULL "
+        "  AND date(tp.next_review) <= date(?) "
+        "ORDER BY tp.next_review ASC, p.id ASC LIMIT ?"));
+    query.bindValue(0, activeBookId);
+    query.bindValue(1, now.toString(kDateTimeFormat));
+    query.bindValue(2, qMax(1, limit));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return items;
+    }
+    while (query.next()) {
+        items.push_back(readPhraseFromQuery(query));
+    }
+    return items;
+}
+
+bool DatabaseManager::applyPhraseReviewResult(int phraseId,
+                                              bool correct,
+                                              bool skipped,
+                                              const QDateTime &now) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (phraseId <= 0) {
+        lastError_ = QStringLiteral("无效的词群 ID");
+        return false;
+    }
+
+    double currentEaseFactor = 2.5;
+    int currentInterval = 0;
+    bool isLearningRow = true;
+
+    QSqlQuery progressQuery(database());
+    progressQuery.prepare(QStringLiteral(
+        "SELECT ease_factor, interval, status FROM phrase_training_progress WHERE phrase_id = ?"));
+    progressQuery.bindValue(0, phraseId);
+    if (!progressQuery.exec()) {
+        lastError_ = progressQuery.lastError().text();
+        return false;
+    }
+    if (progressQuery.next()) {
+        currentEaseFactor = progressQuery.value(0).toDouble();
+        currentInterval = progressQuery.value(1).toInt();
+        isLearningRow = progressQuery.value(2).toInt() == 0;
+    }
+
+    SpellingResult effective = correct ? SpellingResult::Mastered : SpellingResult::Unfamiliar;
+    if (skipped) {
+        effective = SpellingResult::Unfamiliar;
+    }
+
+    int newInterval = 0;
+    double newEaseFactor = qMax(1.3, currentEaseFactor);
+    switch (effective) {
+    case SpellingResult::Mastered:
+        newInterval = nextIntervalForMastered(currentInterval);
+        newEaseFactor = qMin(3.0, currentEaseFactor + 0.1);
+        break;
+    case SpellingResult::Blurry:
+        newInterval = nextIntervalForBlurry(currentInterval);
+        newEaseFactor = qMax(1.3, currentEaseFactor - 0.05);
+        break;
+    case SpellingResult::Unfamiliar:
+    default:
+        newInterval = nextIntervalForUnfamiliar();
+        newEaseFactor = qMax(1.3, currentEaseFactor - 0.2);
+        break;
+    }
+
+    const int newStatus = (newInterval >= 30) ? 2 : 1;
+    const QDateTime nextReviewTime = now.addDays(newInterval);
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO phrase_training_progress("
+        "phrase_id, ease_factor, interval, next_review, status, correct_count, wrong_count, updated_at"
+        ") VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(phrase_id) DO UPDATE SET "
+        "ease_factor = excluded.ease_factor, "
+        "interval = excluded.interval, "
+        "next_review = excluded.next_review, "
+        "status = excluded.status, "
+        "correct_count = phrase_training_progress.correct_count + excluded.correct_count, "
+        "wrong_count = phrase_training_progress.wrong_count + excluded.wrong_count, "
+        "updated_at = excluded.updated_at"));
+    query.bindValue(0, phraseId);
+    query.bindValue(1, newEaseFactor);
+    query.bindValue(2, newInterval);
+    query.bindValue(3, nextReviewTime.toString(kDateTimeFormat));
+    query.bindValue(4, newStatus);
+    query.bindValue(5, effective == SpellingResult::Mastered ? 1 : 0);
+    query.bindValue(6, effective == SpellingResult::Mastered ? 0 : 1);
+    query.bindValue(7, now.toString(kDateTimeFormat));
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    Q_UNUSED(isLearningRow);
+    return true;
+}
+
+bool DatabaseManager::recordPhraseLearningEvent(const PhraseLearningEvent &event) {
+    if (!ensureDatabaseOpen()) {
+        return false;
+    }
+    if (event.phraseId <= 0) {
+        lastError_ = QStringLiteral("无效的词群 ID");
+        return false;
+    }
+    const QString mode = event.mode.trimmed().toLower();
+    if (mode != QStringLiteral("learning") && mode != QStringLiteral("review")) {
+        lastError_ = QStringLiteral("词群事件模式无效：%1").arg(event.mode);
+        return false;
+    }
+
+    const QDateTime eventTime = event.eventTime.isValid() ? event.eventTime : QDateTime::currentDateTime();
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO phrase_learning_events("
+        "event_time, event_date, phrase_id, mode, result, skipped, user_input, matched_answer"
+        ") VALUES(?, ?, ?, ?, ?, ?, ?, ?)"));
+    query.bindValue(0, eventTime.toString(kDateTimeFormat));
+    query.bindValue(1, eventTime.date().toString(Qt::ISODate));
+    query.bindValue(2, event.phraseId);
+    query.bindValue(3, mode);
+    query.bindValue(4, phraseResultCode(event.correct));
+    query.bindValue(5, event.skipped ? 1 : 0);
+    query.bindValue(6, event.userInput);
+    query.bindValue(7, event.matchedAnswer);
+    if (!query.exec()) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+PhraseDashboardStats DatabaseManager::phraseDashboardStats(const QDateTime &now) const {
+    PhraseDashboardStats stats;
+    if (!ensureDatabaseOpen()) {
+        return stats;
+    }
+
+    stats.activeBookId = activePhraseBookId();
+    stats.hasActiveBook = stats.activeBookId > 0;
+    if (!stats.hasActiveBook) {
+        return stats;
+    }
+
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("SELECT name FROM phrase_books WHERE id = ?"));
+    query.bindValue(0, stats.activeBookId);
+    if (query.exec() && query.next()) {
+        stats.activeBookName = query.value(0).toString();
+    }
+
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM phrase_book_items WHERE book_id = ?"));
+    query.bindValue(0, stats.activeBookId);
+    if (query.exec() && query.next()) {
+        stats.totalCount = query.value(0).toInt();
+    }
+
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM phrase_book_items pbi "
+        "JOIN phrase_training_progress ptp ON ptp.phrase_id = pbi.phrase_id "
+        "WHERE pbi.book_id = ? AND COALESCE(ptp.status, 0) > 0"));
+    query.bindValue(0, stats.activeBookId);
+    if (query.exec() && query.next()) {
+        stats.learnedCount = query.value(0).toInt();
+    }
+
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM phrase_book_items pbi "
+        "LEFT JOIN phrase_training_progress ptp ON ptp.phrase_id = pbi.phrase_id "
+        "WHERE pbi.book_id = ? AND (ptp.phrase_id IS NULL OR COALESCE(ptp.status, 0) = 0)"));
+    query.bindValue(0, stats.activeBookId);
+    if (query.exec() && query.next()) {
+        stats.unlearnedCount = query.value(0).toInt();
+    }
+
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) "
+        "FROM phrase_book_items pbi "
+        "JOIN phrase_training_progress ptp ON ptp.phrase_id = pbi.phrase_id "
+        "WHERE pbi.book_id = ? "
+        "  AND COALESCE(ptp.status, 0) > 0 "
+        "  AND ptp.next_review IS NOT NULL "
+        "  AND date(ptp.next_review) <= date(?)"));
+    query.bindValue(0, stats.activeBookId);
+    query.bindValue(1, now.toString(kDateTimeFormat));
+    if (query.exec() && query.next()) {
+        stats.dueReviewCount = query.value(0).toInt();
+    }
+
+    return stats;
 }

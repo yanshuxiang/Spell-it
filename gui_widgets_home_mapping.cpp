@@ -227,6 +227,12 @@ void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRec
 
 void HomePageWidget::handleChangeBookRequest(int modeIndex) {
     if (modeIndex == 3) {
+        const QString trainingType = QStringLiteral("phrase_cluster");
+        AppLogger::step(QStringLiteral("Home"),
+                        QStringLiteral("change book request, modeIndex=%1, type=%2")
+                            .arg(modeIndex)
+                            .arg(trainingType));
+        emit changeBookRequested(trainingType);
         return;
     }
     QString trainingType = QStringLiteral("spelling");

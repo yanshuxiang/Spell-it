@@ -392,6 +392,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     });
 
     initializeDatabase();
+    phraseClusterPage_->setDatabaseManager(&db_);
     refreshHomeCounts();
     refreshWordBooks();
     applyRoundedWindowMask();
@@ -622,6 +623,7 @@ void VibeSpellerWindow::onStartPhraseClusterLearning() {
     if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
         return;
     }
+    phraseClusterPage_->openMode(false);
     stack_->setCurrentWidget(phraseClusterPage_);
 }
 
@@ -632,6 +634,7 @@ void VibeSpellerWindow::onStartPhraseClusterReview() {
     if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
         return;
     }
+    phraseClusterPage_->openMode(true);
     stack_->setCurrentWidget(phraseClusterPage_);
 }
 
@@ -1132,6 +1135,12 @@ void VibeSpellerWindow::onOpenWordBooks() {
         return;
     }
     const int index = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
+    if (index == 3 && phraseClusterPage_ != nullptr && stack_ != nullptr) {
+        phraseClusterPage_->openMode(false);
+        stack_->setCurrentWidget(phraseClusterPage_);
+        phraseClusterPage_->openManagementPanel();
+        return;
+    }
     const SessionMode mode = modeForDashboardRequest(index, false);
     AppLogger::step(QStringLiteral("BookBinding"),
                     QStringLiteral("open word books from dashboard, index=%1, mode=%2")
@@ -1208,12 +1217,22 @@ void VibeSpellerWindow::onPhraseClusterBack() {
     if (stack_ == nullptr || homePage_ == nullptr) {
         return;
     }
+    refreshHomeCounts();
     stack_->setCurrentWidget(homePage_);
 }
 
 void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
     AppLogger::step(QStringLiteral("BookBinding"),
                     QStringLiteral("change book requested, trainingType=%1").arg(trainingType));
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QStringLiteral("phrase_cluster")) {
+        if (phraseClusterPage_ != nullptr && stack_ != nullptr) {
+            phraseClusterPage_->openMode(false);
+            stack_->setCurrentWidget(phraseClusterPage_);
+            phraseClusterPage_->openManagementPanel();
+        }
+        return;
+    }
     animateWordBooksRise(trainingType);
 }
 
@@ -1672,14 +1691,18 @@ void VibeSpellerWindow::refreshHomeCounts() {
     phraseCard.themeColor = QStringLiteral("#6366f1");
     phraseCard.bookName = QStringLiteral("四六级翻译词群");
     phraseCard.coverName = QStringLiteral("PHRASE");
-    phraseCard.totalWords = 0;
-    phraseCard.masteredWords = 0;
-    phraseCard.unlearnedCount = 1;
-    phraseCard.dueReviewCount = 1;
+    const PhraseDashboardStats phraseStats = db_.phraseDashboardStats();
+    phraseCard.totalWords = phraseStats.totalCount;
+    phraseCard.masteredWords = phraseStats.learnedCount;
+    phraseCard.unlearnedCount = phraseStats.unlearnedCount;
+    phraseCard.dueReviewCount = phraseStats.dueReviewCount;
     phraseCard.hasActiveBook = true;
-    phraseCard.learningEnabled = true;
-    phraseCard.reviewEnabled = true;
-    phraseCard.changeBookEnabled = false;
+    phraseCard.bookName = phraseStats.hasActiveBook
+                              ? phraseStats.activeBookName
+                              : QStringLiteral("未绑定词群词书（点底部书库）");
+    phraseCard.learningEnabled = phraseStats.hasActiveBook && phraseStats.unlearnedCount > 0;
+    phraseCard.reviewEnabled = phraseStats.hasActiveBook && phraseStats.dueReviewCount > 0;
+    phraseCard.changeBookEnabled = true;
     cards.push_back(phraseCard);
 
     int todayLearning = 0;

@@ -106,6 +106,47 @@ struct WordFullDetail {
     QVector<WordEventItem> recentEvents;
 };
 
+struct PhraseItem {
+    int id = -1;
+    QString clusterZh;
+    QStringList keywordsEn;
+    QString theme;
+    QStringList examLabels;
+    QStringList examplesCn;
+    double easeFactor = 2.5;
+    int interval = 0;
+    QDateTime nextReview;
+    int status = 0;
+};
+
+struct PhraseBookItem {
+    int id = -1;
+    QString name;
+    int itemCount = 0;
+    int learnedCount = 0;
+    bool isActive = false;
+};
+
+struct PhraseLearningEvent {
+    QDateTime eventTime;
+    int phraseId = -1;
+    QString mode;
+    bool correct = false;
+    bool skipped = false;
+    QString userInput;
+    QString matchedAnswer;
+};
+
+struct PhraseDashboardStats {
+    int activeBookId = -1;
+    QString activeBookName;
+    bool hasActiveBook = false;
+    int totalCount = 0;
+    int learnedCount = 0;
+    int unlearnedCount = 0;
+    int dueReviewCount = 0;
+};
+
 class DatabaseManager {
 public:
     DatabaseManager();
@@ -160,6 +201,25 @@ public:
     QDate firstLearningEventDate() const;
     QHash<QDate, int> fetchStudyMinutesRange(const QDate &startDate, const QDate &endDate) const;
     bool setWordSkipForever(int wordId, bool skipForever = true);
+    QVector<PhraseBookItem> fetchPhraseBooks() const;
+    int activePhraseBookId() const;
+    bool setActivePhraseBook(int bookId);
+    bool createPhraseBook(const QString &name, int *newBookId = nullptr);
+    bool deletePhraseBook(int bookId);
+    bool importPhraseBookFromJson(const QString &jsonPath,
+                                  int targetBookId,
+                                  int &importedCount);
+    bool importPhraseBookFromCsv(const QString &csvPath,
+                                 int targetBookId,
+                                 int &importedCount);
+    QVector<PhraseItem> fetchPhraseLearningBatch(int limit) const;
+    QVector<PhraseItem> fetchPhraseReviewBatch(const QDateTime &now, int limit) const;
+    bool applyPhraseReviewResult(int phraseId,
+                                 bool correct,
+                                 bool skipped = false,
+                                 const QDateTime &now = QDateTime::currentDateTime());
+    bool recordPhraseLearningEvent(const PhraseLearningEvent &event);
+    PhraseDashboardStats phraseDashboardStats(const QDateTime &now = QDateTime::currentDateTime()) const;
 
     SpellingResult evaluateSpelling(const QString &input, const QString &target) const;
 
