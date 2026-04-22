@@ -123,7 +123,8 @@ public:
 
     void setCsvData(const QString &csvPath,
                     const QStringList &headers,
-                    const QVector<QStringList> &previewRows);
+                    const QVector<QStringList> &previewRows,
+                    const QString &trainingType);
 
 signals:
     void importConfirmed(int wordColumn, int translationColumn, int phoneticColumn,
@@ -131,7 +132,17 @@ signals:
     void cancelled();
 
 private:
+    void applyTrainingTypeVisibility();
+
+    QString currentTrainingType_;
     QLabel *filePathLabel_ = nullptr;
+    QWidget *wordRow_ = nullptr;
+    QWidget *translationRow_ = nullptr;
+    QWidget *phoneticRow_ = nullptr;
+    QWidget *countabilityRow_ = nullptr;
+    QWidget *pluralRow_ = nullptr;
+    QWidget *notesRow_ = nullptr;
+    QWidget *polysemyRow_ = nullptr;
     QComboBox *wordCombo_ = nullptr;
     QComboBox *translationCombo_ = nullptr;
     QComboBox *phoneticCombo_ = nullptr;
@@ -495,6 +506,7 @@ private:
     bool isManagementMode_ = false;
     QString currentTrainingType_;
     QString currentTrainingDisplayName_;
+    QLabel *titleLabel_ = nullptr;
     QLabel *metaLabel_ = nullptr;
     QLabel *currentTitleLabel_ = nullptr;
     QWidget *currentCardHost_ = nullptr;
@@ -614,6 +626,7 @@ private:
     WordBooksPageWidget *wordBooksPage_ = nullptr;
 
     QString pendingCsvPath_;
+    QString pendingImportTrainingType_;
     bool returnToWordBooksAfterImport_ = false;
     QVector<WordItem> currentWords_;
     QVector<PracticeRecord> records_;

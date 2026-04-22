@@ -43,6 +43,13 @@ constexpr int kPageLaunchDurationMs = 300;
 constexpr int kCardBorderPx = 2;
 constexpr int kCountabilityFeedbackMs = 450;
 
+bool isKnownTrainingTypeForUi(const QString &trainingType) {
+    const QString type = trainingType.trimmed().toLower();
+    return type == QStringLiteral("spelling")
+        || type == QStringLiteral("countability")
+        || type == QStringLiteral("polysemy");
+}
+
 QString countabilityAnswerText(CountabilityAnswer answer) {
     switch (answer) {
     case CountabilityAnswer::Countable:
@@ -279,7 +286,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(homePage_, &HomePageWidget::booksClicked, this, &VibeSpellerWindow::onOpenWordBooks);
     connect(homePage_, &HomePageWidget::calendarClicked, this, &VibeSpellerWindow::onOpenCalendar);
     connect(homePage_, &HomePageWidget::managementClicked, this, [this]() {
-        animateWordBooksRise(QStringLiteral("none"));
+        // 词书管理入口已在仪表盘底栏禁用，保留连接仅作兼容，不执行任何动作。
     });
     connect(homePage_, &HomePageWidget::statsClicked, this, &VibeSpellerWindow::animateStatisticsPageRise);
 
@@ -300,6 +307,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
             stack_->setCurrentWidget(homePage_);
         }
         returnToWordBooksAfterImport_ = false;
+        pendingImportTrainingType_.clear();
     });
 
     connect(mappingPage_, &MappingPageWidget::importConfirmed, this,
@@ -332,6 +340,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
                                        plurCol,
                                        polyCol,
                                        noteCol,
+                                       pendingImportTrainingType_,
                                        importedCount)) {
                     showErrorPrompt(this,
                                     QStringLiteral("导入失败"),
@@ -347,6 +356,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
                                    .arg(importedCount));
 
                 pendingCsvPath_.clear();
+                pendingImportTrainingType_.clear();
                 refreshHomeCounts();
                 refreshWordBooks();
                 AppLogger::info(QStringLiteral("Import"),
@@ -1763,8 +1773,12 @@ void VibeSpellerWindow::refreshWordBooks() {
         const int dashboardIndex = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
         trainingType = trainingTypeForMode(modeForDashboardRequest(dashboardIndex, false));
     }
+    trainingType = trainingType.trimmed().toLower();
+    if (!isKnownTrainingTypeForUi(trainingType)) {
+        trainingType = QStringLiteral("spelling");
+    }
     const int activeBookId = db_.activeBookIdForTraining(trainingType);
-    const QVector<WordBookItem> books = db_.fetchWordBooks();
+    const QVector<WordBookItem> books = db_.fetchWordBooks(trainingType);
     wordBooksPage_->setWordBooks(books,
                                  activeBookId,
                                  trainingType,
@@ -1828,14 +1842,26 @@ bool VibeSpellerWindow::pickCsvAndShowMapping(bool returnToWordBooks) {
         return false;
     }
 
+    QString importTrainingType = pendingBookSelectionTrainingType_.trimmed().toLower();
+    if (importTrainingType.isEmpty() || importTrainingType == QStringLiteral("none")) {
+        const int dashboardIndex = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
+        importTrainingType = trainingTypeForMode(modeForDashboardRequest(dashboardIndex, false));
+    }
+    importTrainingType = importTrainingType.trimmed().toLower();
+    if (!isKnownTrainingTypeForUi(importTrainingType)) {
+        importTrainingType = QStringLiteral("spelling");
+    }
+
     pendingCsvPath_ = csvPath;
+    pendingImportTrainingType_ = importTrainingType;
     returnToWordBooksAfterImport_ = returnToWordBooks;
-    mappingPage_->setCsvData(csvPath, headers, previewRows);
+    mappingPage_->setCsvData(csvPath, headers, previewRows, importTrainingType);
     stack_->setCurrentWidget(mappingPage_);
     inTransition_ = false;
     AppLogger::info(QStringLiteral("Import"),
-                    QStringLiteral("open mapping page, csv=%1, headers=%2, previewRows=%3")
+                    QStringLiteral("open mapping page, csv=%1, type=%2, headers=%3, previewRows=%4")
                         .arg(csvPath)
+                        .arg(importTrainingType)
                         .arg(headers.size())
                         .arg(previewRows.size()));
     return true;

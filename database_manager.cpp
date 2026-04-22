@@ -3,6 +3,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -39,11 +40,113 @@ bool isKnownTrainingType(const QString &trainingType) {
         || type == QString::fromLatin1(kTrainingTypePolysemy);
 }
 
+QString normalizeTrainingTypeOrDefault(const QString &trainingType) {
+    const QString type = trainingType.trimmed().toLower();
+    if (type == QString::fromLatin1(kTrainingTypeCountability)
+        || type == QString::fromLatin1(kTrainingTypePolysemy)
+        || type == QString::fromLatin1(kTrainingTypeSpelling)) {
+        return type;
+    }
+    return QString::fromLatin1(kTrainingTypeSpelling);
+}
+
 bool isCountabilityLabelValid(const QString &label) {
     const QString normalized = label.trimmed().toUpper();
     return normalized == QStringLiteral("C")
         || normalized == QStringLiteral("U")
         || normalized == QStringLiteral("B");
+}
+
+bool isMissingTextValue(const QString &raw) {
+    QString text = raw.trimmed();
+    if (text.startsWith('"') && text.endsWith('"') && text.size() >= 2) {
+        text = text.mid(1, text.size() - 2).trimmed();
+    }
+    const QString lower = text.toLower();
+    return lower.isEmpty()
+        || lower == QStringLiteral("none")
+        || lower == QStringLiteral("null")
+        || lower == QStringLiteral("n/a")
+        || lower == QStringLiteral("na")
+        || lower == QStringLiteral("nil")
+        || lower == QStringLiteral("nan")
+        || lower == QStringLiteral("暂无")
+        || lower == QStringLiteral("无");
+}
+
+bool jsonValueHasDisplayableText(const QJsonValue &value) {
+    if (value.isUndefined() || value.isNull()) {
+        return false;
+    }
+    if (value.isString()) {
+        return !isMissingTextValue(value.toString());
+    }
+    if (value.isDouble() || value.isBool()) {
+        return true;
+    }
+    if (value.isArray()) {
+        const QJsonArray arr = value.toArray();
+        for (const QJsonValue &v : arr) {
+            if (jsonValueHasDisplayableText(v)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (value.isObject()) {
+        const QJsonObject obj = value.toObject();
+        static const QStringList kPrimaryKeys = {
+            QStringLiteral("definition"),
+            QStringLiteral("meaning"),
+            QStringLiteral("note"),
+            QStringLiteral("example"),
+            QStringLiteral("value"),
+            QStringLiteral("gem_meaning"),
+            QStringLiteral("exam_value"),
+        };
+        for (const QString &key : kPrimaryKeys) {
+            if (jsonValueHasDisplayableText(obj.value(key))) {
+                return true;
+            }
+        }
+
+        if (obj.contains(QStringLiteral("polysemy_data"))
+            && jsonValueHasDisplayableText(obj.value(QStringLiteral("polysemy_data")))) {
+            return true;
+        }
+        if (obj.contains(QStringLiteral("senses"))
+            && jsonValueHasDisplayableText(obj.value(QStringLiteral("senses")))) {
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+bool hasDisplayablePolysemyContent(const QString &raw) {
+    const QString text = raw.trimmed();
+    if (isMissingTextValue(text)) {
+        return false;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        // 非 JSON 文本：只要不是 None/null 等占位值，就当作可展示内容。
+        return true;
+    }
+    if (doc.isObject()) {
+        return jsonValueHasDisplayableText(QJsonValue(doc.object()));
+    }
+    if (doc.isArray()) {
+        return jsonValueHasDisplayableText(QJsonValue(doc.array()));
+    }
+    return false;
+}
+
+bool isBookOwnedByTrainingType(const QString &ownerRaw, const QString &trainingType) {
+    const QString owner = normalizeTrainingTypeOrDefault(ownerRaw);
+    return owner == normalizeTrainingTypeOrDefault(trainingType);
 }
 
 QString learningEligibilityClauseForType(const QString &trainingType) {
@@ -53,7 +156,9 @@ QString learningEligibilityClauseForType(const QString &trainingType) {
     }
     if (trainingType == QString::fromLatin1(kTrainingTypePolysemy)) {
         return QStringLiteral(
-            " AND length(trim(COALESCE(w.polysemy_json, ''))) > 0 ");
+            " AND length(trim(COALESCE(w.polysemy_json, ''))) > 0 "
+            " AND lower(trim(COALESCE(w.polysemy_json, ''))) NOT IN "
+            "   ('none', 'null', 'n/a', 'na', 'nil', 'nan', '{}', '[]', '\"\"', '\"none\"', '\"null\"') ");
     }
     return QString();
 }
@@ -382,6 +487,7 @@ bool DatabaseManager::initialize() {
         "CREATE TABLE IF NOT EXISTS word_books ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "name TEXT NOT NULL UNIQUE,"
+        "owner_training_type TEXT,"
         "is_active INTEGER NOT NULL DEFAULT 0,"
         "created_at TEXT"
         ")");
@@ -397,6 +503,7 @@ bool DatabaseManager::initialize() {
     bool hasCountabilityPluralColumn = false;
     bool hasCountabilityNotesColumn = false;
     bool hasPolysemyJsonColumn = false;
+    bool hasOwnerTrainingTypeColumn = false;
     QSqlQuery tableInfo(database());
     if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(words)"))) {
         lastError_ = tableInfo.lastError().text();
@@ -423,6 +530,18 @@ bool DatabaseManager::initialize() {
         }
         if (tableInfo.value(1).toString() == QStringLiteral("polysemy_json")) {
             hasPolysemyJsonColumn = true;
+        }
+    }
+
+    QSqlQuery bookInfo(database());
+    if (!bookInfo.exec(QStringLiteral("PRAGMA table_info(word_books)"))) {
+        lastError_ = bookInfo.lastError().text();
+        return false;
+    }
+    while (bookInfo.next()) {
+        if (bookInfo.value(1).toString() == QStringLiteral("owner_training_type")) {
+            hasOwnerTrainingTypeColumn = true;
+            break;
         }
     }
 
@@ -468,6 +587,13 @@ bool DatabaseManager::initialize() {
             return false;
         }
     }
+
+    if (!hasOwnerTrainingTypeColumn) {
+        if (!query.exec(QStringLiteral("ALTER TABLE word_books ADD COLUMN owner_training_type TEXT"))) {
+            lastError_ = query.lastError().text();
+            return false;
+        }
+    }
     // 确保至少有一个活跃词书（在多词书场景下由用户切换）
     if (!query.exec(QStringLiteral(
             "UPDATE word_books "
@@ -482,6 +608,12 @@ bool DatabaseManager::initialize() {
         return false;
     }
     if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_words_polysemy ON words(polysemy_json)"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    if (!query.exec(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_word_books_owner_training_type "
+            "ON word_books(owner_training_type)"))) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -650,6 +782,23 @@ bool DatabaseManager::initialize() {
         "updated_at TEXT"
         ")");
     if (!query.exec(createAppSettingsSql)) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+
+    const QString createDefaultImportsSql = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS default_book_imports ("
+        "file_path TEXT PRIMARY KEY,"
+        "folder_name TEXT,"
+        "training_type TEXT,"
+        "file_mtime INTEGER,"
+        "file_size INTEGER,"
+        "status TEXT,"
+        "message TEXT,"
+        "imported_count INTEGER DEFAULT 0,"
+        "updated_at TEXT"
+        ")");
+    if (!query.exec(createDefaultImportsSql)) {
         lastError_ = query.lastError().text();
         return false;
     }
@@ -825,6 +974,55 @@ bool DatabaseManager::initialize() {
         }
     }
 
+    // 强制词书按训练类型归属（严格隔离模式）：
+    // 1) 历史空值先归到 spelling；
+    // 2) 若某类型当前绑定了词书，则将该词书归到该类型；
+    // 3) 清理“绑定到非本类型词书”的 active_book_id。
+    if (!query.exec(QStringLiteral(
+            "UPDATE word_books "
+            "SET owner_training_type = 'spelling' "
+            "WHERE owner_training_type IS NULL OR length(trim(owner_training_type)) = 0"))) {
+        lastError_ = query.lastError().text();
+        return false;
+    }
+    for (const char *trainingType : kDefaultTrainingTypes) {
+        const QString type = QString::fromLatin1(trainingType);
+
+        QSqlQuery tagOwned(database());
+        tagOwned.prepare(QStringLiteral(
+            "UPDATE word_books "
+            "SET owner_training_type = ? "
+            "WHERE id IN ("
+            "  SELECT active_book_id "
+            "  FROM training_configs "
+            "  WHERE training_type = ? AND active_book_id IS NOT NULL"
+            ")"));
+        tagOwned.bindValue(0, type);
+        tagOwned.bindValue(1, type);
+        if (!tagOwned.exec()) {
+            lastError_ = tagOwned.lastError().text();
+            return false;
+        }
+
+        QSqlQuery sanitizeActive(database());
+        sanitizeActive.prepare(QStringLiteral(
+            "UPDATE training_configs "
+            "SET active_book_id = NULL, updated_at = datetime('now','localtime') "
+            "WHERE training_type = ? "
+            "  AND active_book_id IS NOT NULL "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM word_books b "
+            "    WHERE b.id = training_configs.active_book_id "
+            "      AND lower(COALESCE(b.owner_training_type, 'spelling')) = ?"
+            "  )"));
+        sanitizeActive.bindValue(0, type);
+        sanitizeActive.bindValue(1, type);
+        if (!sanitizeActive.exec()) {
+            lastError_ = sanitizeActive.lastError().text();
+            return false;
+        }
+    }
+
     int legacyActiveBookId = -1;
     QSqlQuery legacyActiveQuery(database());
     if (legacyActiveQuery.exec(QStringLiteral(
@@ -864,6 +1062,310 @@ bool DatabaseManager::initialize() {
     if (!migrateSpellingProgress.exec()) {
         lastError_ = migrateSpellingProgress.lastError().text();
         return false;
+    }
+
+    // 首次/每次启动：扫描并导入 default_books 下四个功能目录中的 CSV 作为默认词书（初版自动猜列）。
+    {
+        const QString rootPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/default_books");
+        QDir rootDir(rootPath);
+        if (!rootDir.exists()) {
+            rootDir.mkpath(QStringLiteral("."));
+        }
+        rootDir.mkpath(QStringLiteral("spelling"));
+        rootDir.mkpath(QStringLiteral("countability"));
+        rootDir.mkpath(QStringLiteral("polysemy"));
+        rootDir.mkpath(QStringLiteral("phrase_cluster"));
+
+        auto normalizeHeader = [](const QString &raw) -> QString {
+            QString s = raw.trimmed().toLower();
+            s.remove(QRegularExpression(QStringLiteral("[\\s_\\-:/\\\\()\\[\\]{}]+")));
+            return s;
+        };
+
+        auto findHeaderIndex = [&normalizeHeader](const QStringList &headers,
+                                                  const QStringList &candidates) -> int {
+            if (headers.isEmpty()) {
+                return -1;
+            }
+            QStringList hnorm;
+            hnorm.reserve(headers.size());
+            for (const QString &h : headers) {
+                hnorm.push_back(normalizeHeader(h));
+            }
+            QStringList cnorm;
+            cnorm.reserve(candidates.size());
+            for (const QString &c : candidates) {
+                cnorm.push_back(normalizeHeader(c));
+            }
+
+            for (int i = 0; i < hnorm.size(); ++i) {
+                for (const QString &c : cnorm) {
+                    if (!c.isEmpty() && hnorm.at(i) == c) {
+                        return i;
+                    }
+                }
+            }
+            for (int i = 0; i < hnorm.size(); ++i) {
+                for (const QString &c : cnorm) {
+                    if (!c.isEmpty() && hnorm.at(i).contains(c)) {
+                        return i;
+                    }
+                }
+            }
+            return -1;
+        };
+
+        auto shouldSkipImportedFile = [this](const QString &absPath,
+                                             qint64 mtime,
+                                             qint64 fsize) -> bool {
+            QSqlQuery q(database());
+            q.prepare(QStringLiteral(
+                "SELECT file_mtime, file_size, status "
+                "FROM default_book_imports WHERE file_path = ?"));
+            q.bindValue(0, absPath);
+            if (!q.exec()) {
+                AppLogger::warn(QStringLiteral("DefaultBooks"),
+                                QStringLiteral("query import record failed, path=%1, error=%2")
+                                    .arg(absPath, q.lastError().text()));
+                return false;
+            }
+            if (!q.next()) {
+                return false;
+            }
+            const qint64 oldMtime = q.value(0).toLongLong();
+            const qint64 oldSize = q.value(1).toLongLong();
+            const QString oldStatus = q.value(2).toString().trimmed().toLower();
+            return oldStatus == QStringLiteral("ok") && oldMtime == mtime && oldSize == fsize;
+        };
+
+        auto recordImportResult = [this](const QString &absPath,
+                                         const QString &folderName,
+                                         const QString &trainingType,
+                                         qint64 mtime,
+                                         qint64 fsize,
+                                         const QString &status,
+                                         const QString &message,
+                                         int importedCount) {
+            QSqlQuery q(database());
+            q.prepare(QStringLiteral(
+                "INSERT INTO default_book_imports("
+                "file_path, folder_name, training_type, file_mtime, file_size, status, message, imported_count, updated_at"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime')) "
+                "ON CONFLICT(file_path) DO UPDATE SET "
+                "folder_name = excluded.folder_name, "
+                "training_type = excluded.training_type, "
+                "file_mtime = excluded.file_mtime, "
+                "file_size = excluded.file_size, "
+                "status = excluded.status, "
+                "message = excluded.message, "
+                "imported_count = excluded.imported_count, "
+                "updated_at = excluded.updated_at"));
+            q.bindValue(0, absPath);
+            q.bindValue(1, folderName);
+            q.bindValue(2, trainingType);
+            q.bindValue(3, mtime);
+            q.bindValue(4, fsize);
+            q.bindValue(5, status);
+            q.bindValue(6, message.left(500));
+            q.bindValue(7, importedCount);
+            if (!q.exec()) {
+                AppLogger::warn(QStringLiteral("DefaultBooks"),
+                                QStringLiteral("record import result failed, path=%1, error=%2")
+                                    .arg(absPath, q.lastError().text()));
+            }
+        };
+
+        auto inferWordCsvColumns = [&findHeaderIndex](const QStringList &headers,
+                                                      const QString &trainingType,
+                                                      int &wordColumn,
+                                                      int &translationColumn,
+                                                      int &phoneticColumn,
+                                                      int &countabilityColumn,
+                                                      int &pluralColumn,
+                                                      int &notesColumn,
+                                                      int &polysemyColumn,
+                                                      QString &reason) -> bool {
+            wordColumn = findHeaderIndex(headers, {
+                QStringLiteral("word"),
+                QStringLiteral("单词"),
+                QStringLiteral("英文"),
+                QStringLiteral("英语"),
+            });
+            translationColumn = findHeaderIndex(headers, {
+                QStringLiteral("translation"),
+                QStringLiteral("meaning"),
+                QStringLiteral("释义"),
+                QStringLiteral("中文"),
+                QStringLiteral("词义"),
+            });
+            phoneticColumn = findHeaderIndex(headers, {
+                QStringLiteral("phonetic"),
+                QStringLiteral("pronunciation"),
+                QStringLiteral("音标"),
+                QStringLiteral("ipa"),
+            });
+            countabilityColumn = findHeaderIndex(headers, {
+                QStringLiteral("countability"),
+                QStringLiteral("可数性"),
+                QStringLiteral("可数"),
+            });
+            pluralColumn = findHeaderIndex(headers, {
+                QStringLiteral("plural"),
+                QStringLiteral("复数"),
+            });
+            notesColumn = findHeaderIndex(headers, {
+                QStringLiteral("notes"),
+                QStringLiteral("note"),
+                QStringLiteral("remark"),
+                QStringLiteral("explanation"),
+                QStringLiteral("备注"),
+                QStringLiteral("用法"),
+            });
+            polysemyColumn = findHeaderIndex(headers, {
+                QStringLiteral("polysemyjson"),
+                QStringLiteral("polysemy"),
+                QStringLiteral("熟词生义"),
+                QStringLiteral("生义"),
+            });
+
+            if (wordColumn < 0 && !headers.isEmpty()) {
+                wordColumn = 0;
+            }
+            if (translationColumn < 0 && headers.size() > 1) {
+                translationColumn = 1;
+            }
+
+            if (wordColumn < 0 || translationColumn < 0) {
+                reason = QStringLiteral("无法识别“单词/释义”列");
+                return false;
+            }
+            if (trainingType == QString::fromLatin1(kTrainingTypeCountability) && countabilityColumn < 0) {
+                reason = QStringLiteral("countability 文件缺少“可数性”列");
+                return false;
+            }
+            if (trainingType == QString::fromLatin1(kTrainingTypePolysemy) && polysemyColumn < 0) {
+                reason = QStringLiteral("polysemy 文件缺少“熟词生义”列");
+                return false;
+            }
+            return true;
+        };
+
+        auto processWordFolder = [&](const QString &folderName, const QString &trainingType) {
+            const QString folderPath = rootDir.filePath(folderName);
+            QDir folderDir(folderPath);
+            if (!folderDir.exists()) {
+                return;
+            }
+            QFileInfoList files = folderDir.entryInfoList(
+                {QStringLiteral("*.csv"), QStringLiteral("*.CSV")},
+                QDir::Files | QDir::Readable,
+                QDir::Name);
+            for (const QFileInfo &fi : files) {
+                const QString absPath = fi.canonicalFilePath().isEmpty() ? fi.absoluteFilePath() : fi.canonicalFilePath();
+                const qint64 mtime = fi.lastModified().toSecsSinceEpoch();
+                const qint64 fsize = fi.size();
+                if (shouldSkipImportedFile(absPath, mtime, fsize)) {
+                    continue;
+                }
+
+                QStringList headers;
+                QVector<QStringList> previewRows;
+                if (!readCsvPreview(absPath, headers, previewRows, 3)) {
+                    const QString message = lastError_.isEmpty() ? QStringLiteral("读取 CSV 失败") : lastError_;
+                    recordImportResult(absPath, folderName, trainingType, mtime, fsize,
+                                       QStringLiteral("failed"), message, 0);
+                    continue;
+                }
+
+                int wordColumn = -1;
+                int translationColumn = -1;
+                int phoneticColumn = -1;
+                int countabilityColumn = -1;
+                int pluralColumn = -1;
+                int notesColumn = -1;
+                int polysemyColumn = -1;
+                QString inferReason;
+                if (!inferWordCsvColumns(headers,
+                                         trainingType,
+                                         wordColumn,
+                                         translationColumn,
+                                         phoneticColumn,
+                                         countabilityColumn,
+                                         pluralColumn,
+                                         notesColumn,
+                                         polysemyColumn,
+                                         inferReason)) {
+                    recordImportResult(absPath, folderName, trainingType, mtime, fsize,
+                                       QStringLiteral("failed"), inferReason, 0);
+                    continue;
+                }
+
+                int importedCount = 0;
+                const bool ok = importFromCsv(absPath,
+                                              wordColumn,
+                                              translationColumn,
+                                              phoneticColumn,
+                                              countabilityColumn,
+                                              pluralColumn,
+                                              polysemyColumn,
+                                              notesColumn,
+                                              trainingType,
+                                              importedCount);
+                if (!ok) {
+                    const QString message = lastError_.isEmpty() ? QStringLiteral("导入失败") : lastError_;
+                    recordImportResult(absPath, folderName, trainingType, mtime, fsize,
+                                       QStringLiteral("failed"), message, 0);
+                    continue;
+                }
+                recordImportResult(absPath, folderName, trainingType, mtime, fsize,
+                                   QStringLiteral("ok"), QStringLiteral("导入成功"), importedCount);
+                AppLogger::info(QStringLiteral("DefaultBooks"),
+                                QStringLiteral("imported default csv, type=%1, file=%2, count=%3")
+                                    .arg(trainingType)
+                                    .arg(absPath)
+                                    .arg(importedCount));
+            }
+        };
+
+        auto processPhraseFolder = [&](const QString &folderName) {
+            const QString folderPath = rootDir.filePath(folderName);
+            QDir folderDir(folderPath);
+            if (!folderDir.exists()) {
+                return;
+            }
+            QFileInfoList files = folderDir.entryInfoList(
+                {QStringLiteral("*.csv"), QStringLiteral("*.CSV")},
+                QDir::Files | QDir::Readable,
+                QDir::Name);
+            for (const QFileInfo &fi : files) {
+                const QString absPath = fi.canonicalFilePath().isEmpty() ? fi.absoluteFilePath() : fi.canonicalFilePath();
+                const qint64 mtime = fi.lastModified().toSecsSinceEpoch();
+                const qint64 fsize = fi.size();
+                if (shouldSkipImportedFile(absPath, mtime, fsize)) {
+                    continue;
+                }
+
+                int importedCount = 0;
+                const bool ok = importPhraseBookFromCsv(absPath, -1, importedCount);
+                if (!ok) {
+                    const QString message = lastError_.isEmpty() ? QStringLiteral("导入失败") : lastError_;
+                    recordImportResult(absPath, folderName, QString::fromLatin1(kTrainingTypePhraseCluster),
+                                       mtime, fsize, QStringLiteral("failed"), message, 0);
+                    continue;
+                }
+                recordImportResult(absPath, folderName, QString::fromLatin1(kTrainingTypePhraseCluster),
+                                   mtime, fsize, QStringLiteral("ok"), QStringLiteral("导入成功"), importedCount);
+                AppLogger::info(QStringLiteral("DefaultBooks"),
+                                QStringLiteral("imported default phrase csv, file=%1, count=%2")
+                                    .arg(absPath)
+                                    .arg(importedCount));
+            }
+        };
+
+        processWordFolder(QStringLiteral("spelling"), QString::fromLatin1(kTrainingTypeSpelling));
+        processWordFolder(QStringLiteral("countability"), QString::fromLatin1(kTrainingTypeCountability));
+        processWordFolder(QStringLiteral("polysemy"), QString::fromLatin1(kTrainingTypePolysemy));
+        processPhraseFolder(QStringLiteral("phrase_cluster"));
     }
 
     AppLogger::info(QStringLiteral("DB"), QStringLiteral("initialize success"));
@@ -925,12 +1427,15 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
                                     int pluralColumn,
                                     int polysemyColumn,
                                     int notesColumn,
+                                    const QString &trainingType,
                                     int &importedCount) {
     importedCount = 0;
+    const QString importType = normalizeTrainingTypeOrDefault(trainingType);
     AppLogger::step(
         QStringLiteral("Import"),
-        QStringLiteral("start csv=%1 word=%2 trans=%3 phonetic=%4 countability=%5 plural=%6 polysemy=%7 notes=%8")
+        QStringLiteral("start csv=%1 type=%2 word=%3 trans=%4 phonetic=%5 countability=%6 plural=%7 polysemy=%8 notes=%9")
             .arg(csvPath)
+            .arg(importType)
             .arg(wordColumn)
             .arg(translationColumn)
             .arg(phoneticColumn)
@@ -991,21 +1496,15 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         bookName = baseName.left(keepCount) + suffixText;
     }
 
-    int existingBookCount = 0;
-    QSqlQuery countBooksQuery(db);
-    if (!countBooksQuery.exec(QStringLiteral("SELECT COUNT(*) FROM word_books")) || !countBooksQuery.next()) {
-        db.rollback();
-        lastError_ = countBooksQuery.lastError().text();
-        return false;
-    }
-    existingBookCount = countBooksQuery.value(0).toInt();
-    const int shouldActive = existingBookCount <= 0 ? 1 : 0;
+    const int shouldActive = (activeBookIdForTraining(importType) <= 0) ? 1 : 0;
 
     QSqlQuery createBookQuery(db);
     createBookQuery.prepare(QStringLiteral(
-        "INSERT INTO word_books(name, is_active, created_at) VALUES(?, ?, datetime('now','localtime'))"));
+        "INSERT INTO word_books(name, owner_training_type, is_active, created_at) "
+        "VALUES(?, ?, ?, datetime('now','localtime'))"));
     createBookQuery.bindValue(0, bookName);
-    createBookQuery.bindValue(1, shouldActive);
+    createBookQuery.bindValue(1, importType);
+    createBookQuery.bindValue(2, shouldActive);
     if (!createBookQuery.exec()) {
         db.rollback();
         lastError_ = createBookQuery.lastError().text();
@@ -1154,7 +1653,7 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         "SET active_book_id = ?, updated_at = datetime('now','localtime') "
         "WHERE training_type = ? AND active_book_id IS NULL"));
     bindDefaultQuery.bindValue(0, bookId);
-    bindDefaultQuery.bindValue(1, QString::fromLatin1(kTrainingTypeSpelling));
+    bindDefaultQuery.bindValue(1, importType);
     if (!bindDefaultQuery.exec()) {
         db.rollback();
         lastError_ = bindDefaultQuery.lastError().text();
@@ -1176,25 +1675,37 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     return true;
 }
 
-QVector<WordBookItem> DatabaseManager::fetchWordBooks() const {
+QVector<WordBookItem> DatabaseManager::fetchWordBooks(const QString &trainingType) const {
     QVector<WordBookItem> books;
     if (!ensureDatabaseOpen()) {
         return books;
     }
+    const QString type = trainingType.trimmed().toLower();
+    const bool filterByType = isKnownTrainingType(type);
 
     QSqlQuery query(database());
-    if (!query.exec(QStringLiteral(
-            "SELECT b.id, b.name, b.is_active, "
-            "COUNT(bw.word_id) AS word_count, "
-            "SUM(CASE WHEN COALESCE(tps.correct_count, 0) > 0 THEN 1 ELSE 0 END) AS learned_count, "
-            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'spelling' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_spelling, "
-            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'countability' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_countability, "
-            "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'polysemy' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_polysemy "
-            "FROM word_books b "
-            "LEFT JOIN book_words bw ON bw.book_id = b.id "
-            "LEFT JOIN training_progress tps ON tps.word_id = bw.word_id AND tps.training_type = 'spelling' "
-            "GROUP BY b.id, b.name, b.is_active "
-            "ORDER BY b.is_active DESC, b.id ASC"))) {
+    QString sql = QStringLiteral(
+        "SELECT b.id, b.name, b.is_active, "
+        "COUNT(bw.word_id) AS word_count, "
+        "SUM(CASE WHEN COALESCE(tps.correct_count, 0) > 0 THEN 1 ELSE 0 END) AS learned_count, "
+        "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'spelling' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_spelling, "
+        "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'countability' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_countability, "
+        "CASE WHEN EXISTS(SELECT 1 FROM training_configs tc WHERE tc.training_type = 'polysemy' AND tc.active_book_id = b.id) THEN 1 ELSE 0 END AS bound_polysemy "
+        "FROM word_books b "
+        "LEFT JOIN book_words bw ON bw.book_id = b.id "
+        "LEFT JOIN training_progress tps ON tps.word_id = bw.word_id AND tps.training_type = 'spelling' ");
+    if (filterByType) {
+        sql += QStringLiteral("WHERE lower(COALESCE(b.owner_training_type, 'spelling')) = ? ");
+    }
+    sql += QStringLiteral(
+        "GROUP BY b.id, b.name, b.is_active "
+        "ORDER BY b.is_active DESC, b.id ASC");
+
+    query.prepare(sql);
+    if (filterByType) {
+        query.bindValue(0, type);
+    }
+    if (!query.exec()) {
         lastError_ = query.lastError().text();
         return books;
     }
@@ -1475,14 +1986,20 @@ bool DatabaseManager::setActiveBookIdForTraining(const QString &trainingType, in
     }
     if (bookId > 0) {
         QSqlQuery verify(database());
-        verify.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE id = ?"));
+        verify.prepare(QStringLiteral(
+            "SELECT owner_training_type FROM word_books WHERE id = ?"));
         verify.bindValue(0, bookId);
         if (!verify.exec() || !verify.next()) {
             lastError_ = verify.lastError().text();
             return false;
         }
-        if (verify.value(0).toInt() <= 0) {
+        const QVariant ownerValue = verify.value(0);
+        if (!ownerValue.isValid()) {
             lastError_ = QStringLiteral("词书不存在");
+            return false;
+        }
+        if (!isBookOwnedByTrainingType(ownerValue.toString(), type)) {
+            lastError_ = QStringLiteral("该词书不属于当前训练类型");
             return false;
         }
     }
@@ -1750,6 +2267,7 @@ QVector<WordItem> DatabaseManager::fetchLearningBatchForTraining(const QString &
         return items;
     }
 
+    const bool isPolysemy = (type == QString::fromLatin1(kTrainingTypePolysemy));
     QString sql = QStringLiteral(
         "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
         "       w.countability_label, w.countability_plural, w.countability_notes, w.polysemy_json, "
@@ -1766,19 +2284,31 @@ QVector<WordItem> DatabaseManager::fetchLearningBatchForTraining(const QString &
         "  AND w.skip_forever = 0 "
         "  AND (tp.id IS NULL OR COALESCE(tp.status, 0) = 0)");
     sql += learningEligibilityClauseForType(type);
-    sql += QStringLiteral(" ORDER BY w.id LIMIT ?");
+    sql += QStringLiteral(" ORDER BY w.id");
+    if (!isPolysemy) {
+        sql += QStringLiteral(" LIMIT ?");
+    }
 
     QSqlQuery query(database());
     query.prepare(sql);
     query.bindValue(0, type);
     query.bindValue(1, activeBookId);
-    query.bindValue(2, qMax(1, limit));
+    if (!isPolysemy) {
+        query.bindValue(2, qMax(1, limit));
+    }
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return items;
     }
     while (query.next()) {
-        items.push_back(readWordFromQuery(query));
+        WordItem item = readWordFromQuery(query);
+        if (isPolysemy && !hasDisplayablePolysemyContent(item.polysemyJson)) {
+            continue;
+        }
+        items.push_back(item);
+        if (items.size() >= qMax(1, limit)) {
+            break;
+        }
     }
     return items;
 }
@@ -1795,6 +2325,7 @@ QVector<WordItem> DatabaseManager::fetchReviewBatchForTraining(const QString &tr
         return items;
     }
 
+    const bool isPolysemy = (type == QString::fromLatin1(kTrainingTypePolysemy));
     QString sql = QStringLiteral(
         "SELECT w.id, w.word, w.phonetic, w.translation, w.part_of_speech, "
         "       w.countability_label, w.countability_plural, w.countability_notes, w.polysemy_json, "
@@ -1811,19 +2342,31 @@ QVector<WordItem> DatabaseManager::fetchReviewBatchForTraining(const QString &tr
         "  AND tp.next_review IS NOT NULL "
         "  AND date(tp.next_review) <= date(?)");
     sql += learningEligibilityClauseForType(type);
-    sql += QStringLiteral(" ORDER BY tp.next_review ASC, w.id ASC LIMIT ?");
+    sql += QStringLiteral(" ORDER BY tp.next_review ASC, w.id ASC");
+    if (!isPolysemy) {
+        sql += QStringLiteral(" LIMIT ?");
+    }
 
     QSqlQuery query(database());
     query.prepare(sql);
     query.bindValue(0, type);
     query.bindValue(1, now.toString(kDateTimeFormat));
-    query.bindValue(2, qMax(1, limit));
+    if (!isPolysemy) {
+        query.bindValue(2, qMax(1, limit));
+    }
     if (!query.exec()) {
         lastError_ = query.lastError().text();
         return items;
     }
     while (query.next()) {
-        items.push_back(readWordFromQuery(query));
+        WordItem item = readWordFromQuery(query);
+        if (isPolysemy && !hasDisplayablePolysemyContent(item.polysemyJson)) {
+            continue;
+        }
+        items.push_back(item);
+        if (items.size() >= qMax(1, limit)) {
+            break;
+        }
     }
     return items;
 }

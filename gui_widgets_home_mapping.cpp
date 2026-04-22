@@ -362,27 +362,36 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
     mappingRows->setSpacing(12);
     mappingRows->setContentsMargins(0, 4, 0, 4);
 
-    auto makeRow = [this, leftLabelWidth](const QString &text, QWidget *field) {
-        auto *row = new QHBoxLayout();
+    auto makeRowWidget = [this, leftLabelWidth](const QString &text, QWidget *field) -> QWidget * {
+        auto *rowWidget = new QWidget(this);
+        auto *row = new QHBoxLayout(rowWidget);
         row->setSpacing(10);
         row->setContentsMargins(0, 0, 0, 0);
 
-        auto *label = new QLabel(text, this);
+        auto *label = new QLabel(text, rowWidget);
         label->setFixedWidth(leftLabelWidth);
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: 700; color: #111827; padding-bottom: 4px;"));
 
         row->addWidget(label);
         row->addWidget(field, 1);
-        return row;
+        return rowWidget;
     };
-    mappingRows->addLayout(makeRow(QStringLiteral("单词列"), wordCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("释义列"), translationCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("音标列"), phoneticCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("可数性"), countabilityCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("复数形式"), pluralCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("用法备注"), notesCombo_));
-    mappingRows->addLayout(makeRow(QStringLiteral("熟词生义"), polysemyCombo_));
+    wordRow_ = makeRowWidget(QStringLiteral("单词列"), wordCombo_);
+    translationRow_ = makeRowWidget(QStringLiteral("释义列"), translationCombo_);
+    phoneticRow_ = makeRowWidget(QStringLiteral("音标列"), phoneticCombo_);
+    countabilityRow_ = makeRowWidget(QStringLiteral("可数性"), countabilityCombo_);
+    pluralRow_ = makeRowWidget(QStringLiteral("复数形式"), pluralCombo_);
+    notesRow_ = makeRowWidget(QStringLiteral("用法备注"), notesCombo_);
+    polysemyRow_ = makeRowWidget(QStringLiteral("熟词生义"), polysemyCombo_);
+
+    mappingRows->addWidget(wordRow_);
+    mappingRows->addWidget(translationRow_);
+    mappingRows->addWidget(phoneticRow_);
+    mappingRows->addWidget(countabilityRow_);
+    mappingRows->addWidget(pluralRow_);
+    mappingRows->addWidget(notesRow_);
+    mappingRows->addWidget(polysemyRow_);
 
     auto *previewTitle = new QLabel(QStringLiteral("CSV 样例预览"), this);
     previewTitle->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: #374151;"));
@@ -468,14 +477,47 @@ MappingPageWidget::MappingPageWidget(QWidget *parent)
         const int notesColumn = notesCombo_->currentData().toInt();
         const int polysemyColumn = polysemyCombo_->currentData().toInt();
 
-        emit importConfirmed(wordCombo_->currentIndex(), translationCombo_->currentIndex(), phoneticColumn,
-                             countabilityColumn, pluralColumn, notesColumn, polysemyColumn);
+        const QString type = currentTrainingType_.trimmed().toLower();
+        if (type == QStringLiteral("countability") && countabilityColumn < 0) {
+            showWarningPrompt(this, QStringLiteral("映射不完整"), QStringLiteral("可数性模式需要选择“可数性”列。"));
+            return;
+        }
+        if (type == QStringLiteral("polysemy") && polysemyColumn < 0) {
+            showWarningPrompt(this, QStringLiteral("映射不完整"), QStringLiteral("熟词生义模式需要选择“熟词生义”列。"));
+            return;
+        }
+
+        int finalPhonetic = phoneticColumn;
+        int finalCountability = countabilityColumn;
+        int finalPlural = pluralColumn;
+        int finalNotes = notesColumn;
+        int finalPolysemy = polysemyColumn;
+
+        if (type == QStringLiteral("spelling")) {
+            finalCountability = -1;
+            finalPlural = -1;
+            finalNotes = -1;
+            finalPolysemy = -1;
+        } else if (type == QStringLiteral("countability")) {
+            finalPhonetic = -1;
+            finalPolysemy = -1;
+        } else if (type == QStringLiteral("polysemy")) {
+            finalPhonetic = -1;
+            finalCountability = -1;
+            finalPlural = -1;
+            finalNotes = -1;
+        }
+
+        emit importConfirmed(wordCombo_->currentIndex(), translationCombo_->currentIndex(), finalPhonetic,
+                             finalCountability, finalPlural, finalNotes, finalPolysemy);
     });
 }
 
 void MappingPageWidget::setCsvData(const QString &csvPath,
                                    const QStringList &headers,
-                                   const QVector<QStringList> &previewRows) {
+                                   const QVector<QStringList> &previewRows,
+                                   const QString &trainingType) {
+    currentTrainingType_ = trainingType.trimmed().toLower();
     filePathLabel_->setText(csvPath);
 
     wordCombo_->clear();
@@ -583,6 +625,35 @@ void MappingPageWidget::setCsvData(const QString &csvPath,
 
     for (int col = 0; col < headers.size(); ++col) {
         previewTable_->setColumnWidth(col, 200);
+    }
+
+    applyTrainingTypeVisibility();
+}
+
+void MappingPageWidget::applyTrainingTypeVisibility() {
+    const QString type = currentTrainingType_.trimmed().toLower();
+    const bool isSpelling = (type.isEmpty() || type == QStringLiteral("spelling"));
+    const bool isCountability = (type == QStringLiteral("countability"));
+    const bool isPolysemy = (type == QStringLiteral("polysemy"));
+
+    if (wordRow_) wordRow_->setVisible(true);
+    if (translationRow_) translationRow_->setVisible(true);
+    if (phoneticRow_) phoneticRow_->setVisible(isSpelling);
+    if (countabilityRow_) countabilityRow_->setVisible(isCountability);
+    if (pluralRow_) pluralRow_->setVisible(isCountability);
+    if (notesRow_) notesRow_->setVisible(isCountability);
+    if (polysemyRow_) polysemyRow_->setVisible(isPolysemy);
+
+    if (!isSpelling && phoneticCombo_) {
+        phoneticCombo_->setCurrentIndex(0);
+    }
+    if (!isCountability) {
+        if (countabilityCombo_) countabilityCombo_->setCurrentIndex(0);
+        if (pluralCombo_) pluralCombo_->setCurrentIndex(0);
+        if (notesCombo_) notesCombo_->setCurrentIndex(0);
+    }
+    if (!isPolysemy && polysemyCombo_) {
+        polysemyCombo_->setCurrentIndex(0);
     }
 }
 

@@ -170,9 +170,10 @@ public:
                        int pluralColumn,
                        int polysemyColumn,
                        int notesColumn,
+                       const QString &trainingType,
                        int &importedCount);
 
-    QVector<WordBookItem> fetchWordBooks() const;
+    QVector<WordBookItem> fetchWordBooks(const QString &trainingType = QString()) const;
     bool setActiveWordBook(int bookId);
     bool deleteWordBook(int bookId);
     int activeWordBookId() const;

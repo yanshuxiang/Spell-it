@@ -2521,8 +2521,8 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
         "}"
         "HoverScaleButton:hover { background: #e9ebef; }"));
 
-    auto *title = new QLabel(QStringLiteral("词书"), this);
-    title->setStyleSheet(QStringLiteral("font-size: 30px; font-weight: 700; color: #0f172a; padding-bottom: 4px;"));
+    titleLabel_ = new QLabel(QStringLiteral("词书"), this);
+    titleLabel_->setStyleSheet(QStringLiteral("font-size: 22px; font-weight: 700; color: #0f172a; padding-bottom: 4px;"));
 
     metaLabel_ = new QLabel(QStringLiteral("管理词书与当前学习进度"), this);
     metaLabel_->setStyleSheet(QStringLiteral("font-size: 15px; color: #6b7280;"));
@@ -2530,7 +2530,7 @@ WordBooksPageWidget::WordBooksPageWidget(QWidget *parent)
     auto *titleCol = new QVBoxLayout();
     titleCol->setContentsMargins(0, 0, 0, 0);
     titleCol->setSpacing(4);
-    titleCol->addWidget(title);
+    titleCol->addWidget(titleLabel_);
     titleCol->addWidget(metaLabel_);
 
     audioStatusHost_ = new QWidget(this);
@@ -2682,12 +2682,15 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books,
     if (metaLabel_) {
         metaLabel_->setText(QStringLiteral("共 %1 本词书 · %2 词").arg(books_.size()).arg(totalWords));
     }
+    if (titleLabel_) {
+        titleLabel_->setText(currentTrainingDisplayName_.isEmpty() ? QStringLiteral("词书") : currentTrainingDisplayName_);
+    }
     if (currentTitleLabel_) {
         currentTitleLabel_->setVisible(!isManagementMode_);
         if (currentTrainingDisplayName_.isEmpty()) {
-            currentTitleLabel_->setText(QStringLiteral("当前学习词书"));
+            currentTitleLabel_->setText(QStringLiteral("当前绑定"));
         } else {
-            currentTitleLabel_->setText(QStringLiteral("%1 · 当前绑定词书").arg(currentTrainingDisplayName_));
+            currentTitleLabel_->setText(QStringLiteral("%1 · 当前绑定").arg(currentTrainingDisplayName_));
         }
     }
     if (currentCardHost_) {
@@ -2700,17 +2703,8 @@ void WordBooksPageWidget::setWordBooks(const QVector<WordBookItem> &books,
 }
 
 QString WordBooksPageWidget::bindingTagText(const WordBookItem &book) const {
-    QStringList tags;
-    if (book.boundSpelling) {
-        tags << QStringLiteral("[拼]");
-    }
-    if (book.boundCountability) {
-        tags << QStringLiteral("[可]");
-    }
-    if (book.boundPolysemy) {
-        tags << QStringLiteral("[生]");
-    }
-    return tags.join(QStringLiteral(" "));
+    Q_UNUSED(book);
+    return QString();
 }
 
 void WordBooksPageWidget::rebuildList() {
