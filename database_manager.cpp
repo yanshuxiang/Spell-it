@@ -1222,7 +1222,9 @@ bool DatabaseManager::initialize() {
                 QStringLiteral("用法"),
             });
             polysemyColumn = findHeaderIndex(headers, {
+                QStringLiteral("polysemy_data"),
                 QStringLiteral("polysemyjson"),
+                QStringLiteral("polysemy_json"),
                 QStringLiteral("polysemy"),
                 QStringLiteral("熟词生义"),
                 QStringLiteral("生义"),
@@ -1231,22 +1233,55 @@ bool DatabaseManager::initialize() {
             if (wordColumn < 0 && !headers.isEmpty()) {
                 wordColumn = 0;
             }
-            if (translationColumn < 0 && headers.size() > 1) {
-                translationColumn = 1;
+
+            if (wordColumn < 0) {
+                reason = QStringLiteral("无法识别“单词”列");
+                return false;
             }
 
-            if (wordColumn < 0 || translationColumn < 0) {
-                reason = QStringLiteral("无法识别“单词/释义”列");
+            if (trainingType == QString::fromLatin1(kTrainingTypePolysemy)) {
+                phoneticColumn = -1;
+                countabilityColumn = -1;
+                pluralColumn = -1;
+                notesColumn = -1;
+
+                if (polysemyColumn < 0) {
+                    reason = QStringLiteral("polysemy 文件缺少“polysemy_data/熟词生义”列");
+                    return false;
+                }
+                // polysemy 专用 CSV 常无释义列，缺失时用 word 列兜底，避免误映射到 frequency。
+                if (translationColumn < 0) {
+                    translationColumn = wordColumn;
+                }
+                return true;
+            }
+
+            if (translationColumn < 0) {
+                if (headers.size() > 2) {
+                    translationColumn = 2; // 常见: number,word,meaning
+                } else if (headers.size() > 1) {
+                    translationColumn = 1;
+                }
+            }
+            if (translationColumn < 0) {
+                reason = QStringLiteral("无法识别“释义”列");
                 return false;
             }
-            if (trainingType == QString::fromLatin1(kTrainingTypeCountability) && countabilityColumn < 0) {
-                reason = QStringLiteral("countability 文件缺少“可数性”列");
-                return false;
+
+            if (trainingType == QString::fromLatin1(kTrainingTypeCountability)) {
+                if (countabilityColumn < 0) {
+                    reason = QStringLiteral("countability 文件缺少“可数性”列");
+                    return false;
+                }
+                polysemyColumn = -1;
+                return true;
             }
-            if (trainingType == QString::fromLatin1(kTrainingTypePolysemy) && polysemyColumn < 0) {
-                reason = QStringLiteral("polysemy 文件缺少“熟词生义”列");
-                return false;
-            }
+
+            // spelling 默认忽略 countability / polysemy 字段
+            countabilityColumn = -1;
+            pluralColumn = -1;
+            notesColumn = -1;
+            polysemyColumn = -1;
             return true;
         };
 
@@ -1334,7 +1369,14 @@ bool DatabaseManager::initialize() {
                 return;
             }
             QFileInfoList files = folderDir.entryInfoList(
-                {QStringLiteral("*.csv"), QStringLiteral("*.CSV")},
+                {
+                    QStringLiteral("*.csv"),
+                    QStringLiteral("*.CSV"),
+                    QStringLiteral("*.json"),
+                    QStringLiteral("*.JSON"),
+                    QStringLiteral("*.jsonl"),
+                    QStringLiteral("*.JSONL"),
+                },
                 QDir::Files | QDir::Readable,
                 QDir::Name);
             for (const QFileInfo &fi : files) {
@@ -1346,7 +1388,13 @@ bool DatabaseManager::initialize() {
                 }
 
                 int importedCount = 0;
-                const bool ok = importPhraseBookFromCsv(absPath, -1, importedCount);
+                const QString suffix = fi.suffix().trimmed().toLower();
+                bool ok = false;
+                if (suffix == QStringLiteral("json") || suffix == QStringLiteral("jsonl")) {
+                    ok = importPhraseBookFromJson(absPath, -1, importedCount);
+                } else {
+                    ok = importPhraseBookFromCsv(absPath, -1, importedCount);
+                }
                 if (!ok) {
                     const QString message = lastError_.isEmpty() ? QStringLiteral("导入失败") : lastError_;
                     recordImportResult(absPath, folderName, QString::fromLatin1(kTrainingTypePhraseCluster),
@@ -1356,7 +1404,7 @@ bool DatabaseManager::initialize() {
                 recordImportResult(absPath, folderName, QString::fromLatin1(kTrainingTypePhraseCluster),
                                    mtime, fsize, QStringLiteral("ok"), QStringLiteral("导入成功"), importedCount);
                 AppLogger::info(QStringLiteral("DefaultBooks"),
-                                QStringLiteral("imported default phrase csv, file=%1, count=%2")
+                                QStringLiteral("imported default phrase file, file=%1, count=%2")
                                     .arg(absPath)
                                     .arg(importedCount));
             }

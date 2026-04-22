@@ -151,6 +151,22 @@ QString coverTextForBook(const QString &bookName) {
     if (text.isEmpty()) {
         text = QStringLiteral("词书");
     }
+
+    // 中文封面：6 字以内不折叠，超过 6 字才折叠成两段，适配竖排书脊视觉。
+    const bool hasCjk = text.contains(QRegularExpression(QStringLiteral("[\\u4e00-\\u9fff]")));
+    if (hasCjk) {
+        QString compact = text;
+        compact.remove(QRegularExpression(QStringLiteral("\\s+")));
+        if (compact.size() > 12) {
+            compact = compact.left(12);
+        }
+        if (compact.size() > 6) {
+            compact.insert(6, QChar('\n'));
+        }
+        return compact;
+    }
+
+    // 英文等非中文名称维持原有封面策略，避免长文本溢出。
     if (text.size() > 4) {
         text = text.left(4);
     }
