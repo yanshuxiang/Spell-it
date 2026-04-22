@@ -1,0 +1,812 @@
+{
+  "meta": {
+    "generated_at": 1776698784,
+    "input_file": "/Users/yanshuxiang/programs/Spelling/data/phrase_clusters/cet_translation_extracted_high_confidence.jsonl",
+    "candidate_file": "/Users/yanshuxiang/programs/Spelling/data/phrase_clusters/cet_phrase_cluster_candidates.jsonl",
+    "total_cards": 47,
+    "raw_cards_before_filter": 70,
+    "filtered_cards_after_ratio": 47,
+    "keep_ratio": 0.67
+  },
+  "cards": [
+    {
+      "cluster_zh": "光盘行动",
+      "keywords_en": [
+        "Clean Plate Campaign",
+        "empty plate campaign",
+        "anti-food waste campaign"
+      ],
+      "exam_labels": [
+        "2025.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "倡导“光盘行动”，减少食物浪费"
+      ],
+      "avg_confidence": 0.95,
+      "quality_score": 1.0975
+    },
+    {
+      "cluster_zh": "中国空间站",
+      "keywords_en": [
+        "China Space Station",
+        "Chinese space station",
+        "Tiangong space station"
+      ],
+      "exam_labels": [
+        "2024.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "中国空间站于2022年全面建成。"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "人口老龄化",
+      "keywords_en": [
+        "population aging",
+        "aging population",
+        "demographic aging"
+      ],
+      "exam_labels": [
+        "2023.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "中国人口结构发生了显著变化，逐渐步入老龄化社会。"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "传统美德",
+      "keywords_en": [
+        "traditional virtue",
+        "conventional virtue",
+        "moral tradition"
+      ],
+      "exam_labels": [
+        "2025.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "尊老是中华民族的传统美德"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "养老服务体系建设",
+      "keywords_en": [
+        "elderly care service system construction",
+        "construction of elderly care service system",
+        "elderly care service system development"
+      ],
+      "exam_labels": [
+        "2023.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "推进养老服务体系建设"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "婚礼习俗",
+      "keywords_en": [
+        "wedding customs",
+        "marriage traditions",
+        "nuptial practices"
+      ],
+      "exam_labels": [
+        "2024.06 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "中国的传统婚礼习俗历史悠久"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "节约型社会",
+      "keywords_en": [
+        "conservation-minded society",
+        "resource-saving society",
+        "frugal society"
+      ],
+      "exam_labels": [
+        "2025.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "中国政府持续加强节约型社会的建设"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "革命圣地",
+      "keywords_en": [
+        "sacred place of revolution",
+        "revolutionary holy land",
+        "revolutionary sacred site"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "延安位于陕西省北部，地处黄河中叶，是中国革命的圣地。"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "革命根据地",
+      "keywords_en": [
+        "revolutionary base area",
+        "revolutionary base",
+        "revolutionary stronghold"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "创建了第一个农村革命根据地"
+      ],
+      "avg_confidence": 0.92,
+      "quality_score": 1.084
+    },
+    {
+      "cluster_zh": "信息技术",
+      "keywords_en": [
+        "information technology",
+        "IT sector",
+        "digital technology"
+      ],
+      "exam_labels": [
+        "2025.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "在信息技术、人工智能、航天工程等领域不断取得新突破"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "养老模式",
+      "keywords_en": [
+        "pension model",
+        "elderly care model",
+        "aging care model"
+      ],
+      "exam_labels": [
+        "2023.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "人们谈论最多的是应当采取什么样的养老模式。"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "出使西域",
+      "keywords_en": [
+        "mission to the Western Regions",
+        "diplomatic mission to the Western Regions",
+        "embassy to the Western Regions"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "张骞出使西域"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "卫星导航系统",
+      "keywords_en": [
+        "satellite navigation system",
+        "global navigation satellite system",
+        "GNSS"
+      ],
+      "exam_labels": [
+        "2024.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "北斗（Beidou）卫星导航系统的成功研制是中国自改革开放以来取得的一项重大科技成就。"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "居家和社区养老",
+      "keywords_en": [
+        "home and community-based elderly care",
+        "aging in place and community care",
+        "home-based and community elderly care"
+      ],
+      "exam_labels": [
+        "2023.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "积极探索居家和社区养老等其他养老模式"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "桥梁建筑",
+      "keywords_en": [
+        "bridge construction",
+        "bridge architecture",
+        "bridge building"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "赵州桥是世界桥梁建筑史上的一次创举"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "消暑纳凉",
+      "keywords_en": [
+        "cooling off in summer",
+        "relieving summer heat",
+        "beating the heat"
+      ],
+      "exam_labels": [
+        "2024.06 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "扇子自古以来就深受中国人喜爱，但现在已不只是消暑纳凉的工具"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "电子支付",
+      "keywords_en": [
+        "electronic payment",
+        "digital payment",
+        "e-payment"
+      ],
+      "exam_labels": [
+        "2025.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "电子支付的使用全球领先"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "航海家",
+      "keywords_en": [
+        "navigator",
+        "mariner",
+        "explorer"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "郑和是中国历史上最杰出的航海家"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "资源循环利用",
+      "keywords_en": [
+        "resource recycling",
+        "circular use of resources",
+        "resource reuse"
+      ],
+      "exam_labels": [
+        "2025.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "推进资源循环利用"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "遨游太空",
+      "keywords_en": [
+        "travel in space",
+        "space exploration",
+        "space travel"
+      ],
+      "exam_labels": [
+        "2024.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "遨游太空历来是中华民族的梦想。"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "长者食堂",
+      "keywords_en": [
+        "senior canteens",
+        "elderly dining halls",
+        "cafeterias for the aged"
+      ],
+      "exam_labels": [
+        "2025.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "社区专门开设长者食堂"
+      ],
+      "avg_confidence": 0.9,
+      "quality_score": 1.075
+    },
+    {
+      "cluster_zh": "远程医疗",
+      "keywords_en": [
+        "telemedicine",
+        "remote healthcare",
+        "telehealth services"
+      ],
+      "exam_labels": [
+        "2025.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "远程医疗发展迅速"
+      ],
+      "avg_confidence": 0.89,
+      "quality_score": 1.0705
+    },
+    {
+      "cluster_zh": "全球覆盖",
+      "keywords_en": [
+        "global coverage",
+        "worldwide coverage",
+        "global reach"
+      ],
+      "exam_labels": [
+        "2024.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "北斗系统最终实现了全球覆盖和高精度定位，使中国成为世界上少数几个独立拥有全球卫星导航系统的国家之一。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "养老机构监管",
+      "keywords_en": [
+        "supervision of elderly care institutions",
+        "regulation of nursing homes",
+        "oversight of elderly care facilities"
+      ],
+      "exam_labels": [
+        "2023.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "加强对养老机构的监管"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "农村包围城市",
+      "keywords_en": [
+        "encircle the cities from the countryside",
+        "besiege the cities from the rural areas",
+        "rural areas encircling cities"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "开辟了“农村包围城市，武装夺取政权”"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "太空行走",
+      "keywords_en": [
+        "spacewalk",
+        "extravehicular activity",
+        "EVA"
+      ],
+      "exam_labels": [
+        "2024.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "翟志刚成为中国历史上首位进行太空行走的宇航员。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "婚礼仪式",
+      "keywords_en": [
+        "wedding ceremony",
+        "nuptial rites",
+        "marriage rituals"
+      ],
+      "exam_labels": [
+        "2024.06 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "逐渐形成了一套完整的婚礼仪式"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "实地调查",
+      "keywords_en": [
+        "field investigation",
+        "on-site survey",
+        "field research"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "他通过对许多河流的实地调查，纠正了文献中关于水源的错误。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "居家自助养老",
+      "keywords_en": [
+        "home-based self-care for the elderly",
+        "aging in place with self-support",
+        "independent living at home"
+      ],
+      "exam_labels": [
+        "2023.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "鼓励居家自助养老，还可以推行家庭养老与社会养老相结合的模式。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "敬老助老",
+      "keywords_en": [
+        "respect and assist the elderly",
+        "honor and help the aged",
+        "care for seniors"
+      ],
+      "exam_labels": [
+        "2025.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "社会各界积极营造敬老助老的社会氛围"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "文化交流",
+      "keywords_en": [
+        "cultural exchange",
+        "cultural interaction",
+        "cultural communication"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "汉朝同西域或欧洲的文化交流"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "率领船队远航",
+      "keywords_en": [
+        "lead a fleet on voyages",
+        "command a fleet to sail",
+        "head a fleet on expeditions"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "他曾七次率领庞大的船队远航"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "社会保障制度",
+      "keywords_en": [
+        "social security system",
+        "social security scheme",
+        "social welfare system"
+      ],
+      "exam_labels": [
+        "2023.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "通过改革社会保障制度，政府不断增加社会保障经费"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "科研投入",
+      "keywords_en": [
+        "scientific research investment",
+        "R&D investment",
+        "research funding"
+      ],
+      "exam_labels": [
+        "2025.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "持续加大科研投入"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "竹资源开发利用",
+      "keywords_en": [
+        "bamboo resource development and utilization",
+        "exploitation of bamboo resources",
+        "utilization of bamboo resources"
+      ],
+      "exam_labels": [
+        "2024.06 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "是最早开发利用竹资源的国家"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "简约低碳的生活方式",
+      "keywords_en": [
+        "simple and low-carbon lifestyle",
+        "frugal and low-carbon way of life",
+        "minimalist low-carbon living"
+      ],
+      "exam_labels": [
+        "2025.12 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "提倡简约低碳的生活方式"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "结构设计",
+      "keywords_en": [
+        "structural design",
+        "architectural structure",
+        "novel structure"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "赵州桥结构新颖、造型优美"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "艺术价值",
+      "keywords_en": [
+        "artistic value",
+        "artistic merit",
+        "aesthetic value"
+      ],
+      "exam_labels": [
+        "2024.06 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "许多扇子造型优美、做工精良，并绘有山水、花鸟、人物等精美图案，具有很高的艺术价值。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "革命旧址",
+      "keywords_en": [
+        "revolutionary sites",
+        "revolutionary relics",
+        "historic revolutionary sites"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "延安的革命旧址全国数量最大、分布最广、级别最高。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "高度自动化",
+      "keywords_en": [
+        "highly automated",
+        "high degree of automation",
+        "full automation"
+      ],
+      "exam_labels": [
+        "2024.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "经过近20年的发展，洋山港已实现高度自动化。"
+      ],
+      "avg_confidence": 0.88,
+      "quality_score": 1.066
+    },
+    {
+      "cluster_zh": "优先座位",
+      "keywords_en": [
+        "priority seats",
+        "preferential seating",
+        "reserved seats"
+      ],
+      "exam_labels": [
+        "2025.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "公共场所配置优先座位"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "养老服务事业",
+      "keywords_en": [
+        "elderly care services",
+        "aging care services",
+        "pension service industry"
+      ],
+      "exam_labels": [
+        "2023.12 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "随着政府和社会对养老服务事业投入的持续增加，养老设施将不断升级，服务质量逐步改进。"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "婚礼场地",
+      "keywords_en": [
+        "wedding venue",
+        "ceremony site",
+        "nuptial location"
+      ],
+      "exam_labels": [
+        "2024.06 第1套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "婚礼场地经过精心装饰"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "文化符号",
+      "keywords_en": [
+        "cultural symbol",
+        "cultural icon",
+        "symbol of culture"
+      ],
+      "exam_labels": [
+        "2024.06 第3套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "但作为一种文化符号和艺术形式，扇子仍然在中国传统文化中扮演着重要角色。"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "武装夺取政权",
+      "keywords_en": [
+        "seize political power by armed force",
+        "armed seizure of political power",
+        "take power by armed struggle"
+      ],
+      "exam_labels": [
+        "2018-2022.06 汇编"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "开辟了“农村包围城市，武装夺取政权”"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "经济和文化交流",
+      "keywords_en": [
+        "economic and cultural exchanges",
+        "trade and cultural interactions",
+        "economic and cultural communication"
+      ],
+      "exam_labels": [
+        "2023.03"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "郑和下西洋对中外的经济和文化交流起到了十分积极的推进作用"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    },
+    {
+      "cluster_zh": "航天工程",
+      "keywords_en": [
+        "aerospace engineering",
+        "space program",
+        "space exploration"
+      ],
+      "exam_labels": [
+        "2025.12 第2套"
+      ],
+      "source_count": 1,
+      "examples_cn": [
+        "嫦娥探月工程展现了航天领域引人注目的发展"
+      ],
+      "avg_confidence": 0.87,
+      "quality_score": 1.0615
+    }
+  ]
+}

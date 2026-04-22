@@ -1692,13 +1692,13 @@ void VibeSpellerWindow::refreshHomeCounts() {
 
     QVector<DashboardCardState> cards;
     cards.reserve(4);
-    cards.push_back(buildCard(QStringLiteral("spelling"), QStringLiteral("拼写"), QStringLiteral("#0f172a")));
-    cards.push_back(buildCard(QStringLiteral("countability"), QStringLiteral("可数性辨析"), QStringLiteral("#0ea5a4")));
-    cards.push_back(buildCard(QStringLiteral("polysemy"), QStringLiteral("熟词生义"), QStringLiteral("#f59e0b")));
+    cards.push_back(buildCard(QStringLiteral("spelling"), QStringLiteral("拼写"), QStringLiteral("#4B6491")));
+    cards.push_back(buildCard(QStringLiteral("countability"), QStringLiteral("可数性辨析"), QStringLiteral("#4D7E78")));
+    cards.push_back(buildCard(QStringLiteral("polysemy"), QStringLiteral("熟词生义"), QStringLiteral("#9A7454")));
     DashboardCardState phraseCard;
     phraseCard.trainingType = QStringLiteral("phrase_cluster");
     phraseCard.modeTitle = QStringLiteral("词群翻译");
-    phraseCard.themeColor = QStringLiteral("#6366f1");
+    phraseCard.themeColor = QStringLiteral("#6F63A2");
     phraseCard.bookName = QStringLiteral("四六级翻译词群");
     phraseCard.coverName = QStringLiteral("PHRASE");
     const PhraseDashboardStats phraseStats = db_.phraseDashboardStats();
