@@ -1267,6 +1267,10 @@ void PhraseClusterPageWidget::refreshBooks() {
         return;
     }
     const QVector<PhraseBookItem> books = db_->fetchPhraseBooks();
+    QStringList phraseBookNames;
+    for (const PhraseBookItem &book : books) {
+        phraseBookNames.push_back(book.name.trimmed());
+    }
     const int activeBookId = db_->activePhraseBookId();
     rebuildPhraseBookManagement(books, activeBookId);
     {
@@ -1274,7 +1278,8 @@ void PhraseClusterPageWidget::refreshBooks() {
         bookCombo_->clear();
         int currentIndex = -1;
         for (const PhraseBookItem &book : books) {
-            const QString text = QStringLiteral("%1（%2）").arg(book.name).arg(book.itemCount);
+            const QString displayName = displayBookName(book.name, phraseBookNames);
+            const QString text = QStringLiteral("%1（%2）").arg(displayName).arg(book.itemCount);
             bookCombo_->addItem(text, book.id);
             if (book.id == activeBookId) {
                 currentIndex = bookCombo_->count() - 1;
@@ -1295,8 +1300,10 @@ void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBo
         return;
     }
     int totalItems = 0;
+    QStringList phraseBookNames;
     for (const PhraseBookItem &book : books) {
         totalItems += book.itemCount;
+        phraseBookNames.push_back(book.name.trimmed());
     }
     if (titleMetaLabel_ != nullptr) {
         titleMetaLabel_->setText(QStringLiteral("共 %1 本词群词书 · %2 词群").arg(books.size()).arg(totalItems));
@@ -1310,7 +1317,7 @@ void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBo
     }
     manageOtherList_->clear();
 
-    const auto createBookRow = [this](QWidget *parent, const PhraseBookItem &book, bool current) -> QWidget * {
+    const auto createBookRow = [this, phraseBookNames](QWidget *parent, const PhraseBookItem &book, bool current) -> QWidget * {
         auto *row = new QWidget(parent);
         row->setObjectName(QStringLiteral("phraseBookRow"));
         row->setStyleSheet(QStringLiteral(
@@ -1328,7 +1335,8 @@ void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBo
         const QColor baseColor(coverColorForBook(book.id));
         const QString coverTop = baseColor.lighter(106).name();
         const QString coverBottom = baseColor.darker(102).name();
-        auto *cover = new QLabel(coverTextForBook(book.name), row);
+        const QString displayName = displayBookName(book.name, phraseBookNames);
+        auto *cover = new QLabel(coverTextForBook(displayName), row);
         cover->setAlignment(Qt::AlignCenter);
         cover->setFixedSize(68, 84);
         cover->setWordWrap(true);
@@ -1339,7 +1347,7 @@ void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBo
                                  .arg(coverTop, coverBottom));
         layout->addWidget(cover);
 
-        auto *title = new QLabel(book.name, row);
+        auto *title = new QLabel(displayName, row);
         title->setStyleSheet(QStringLiteral(
             "font-size: 20px; font-weight: 700; color: #0f172a; background: transparent; border: none;"));
         title->setWordWrap(true);
@@ -1396,12 +1404,12 @@ void PhraseClusterPageWidget::rebuildPhraseBookManagement(const QVector<PhraseBo
             "  background: transparent; font-size: 12px; color: #64748b;"
             "}"
             "#phraseBookDeleteEmojiButton:hover { background: rgba(148,163,184,0.12); color: #475569; }"));
-        connect(deleteBtn, &HoverScaleButton::clicked, this, [this, book]() {
+        connect(deleteBtn, &HoverScaleButton::clicked, this, [this, book, displayName]() {
             if (db_ == nullptr) {
                 return;
             }
             const bool confirmed = showQuestionPrompt(
-                this, QStringLiteral("删除词群词书"), QStringLiteral("确认删除“%1”吗？").arg(book.name));
+                this, QStringLiteral("删除词群词书"), QStringLiteral("确认删除“%1”吗？").arg(displayName));
             if (!confirmed) {
                 return;
             }
@@ -2392,11 +2400,16 @@ void WordDetailPageWidget::renderDetailHtml() {
     }
 
     if (!detail.books.isEmpty()) {
+        QStringList detailBookNames;
+        for (const WordBookItem &book : detail.books) {
+            detailBookNames.push_back(book.name.trimmed());
+        }
         QString booksSection = QStringLiteral("<div class='section-card'><div class='section-title'>所属词书</div>");
         booksSection += QStringLiteral("<ul class='list'>");
         for (const WordBookItem &book : detail.books) {
+            const QString displayName = displayBookName(book.name, detailBookNames);
             booksSection += QStringLiteral("<li>%1 <span class='muted'>（当前绑定：%2）</span></li>")
-                .arg(esc(hasValue(book.name) ? cleanedValue(book.name) : QStringLiteral("未命名词书")),
+                .arg(esc(hasValue(displayName) ? cleanedValue(displayName) : QStringLiteral("未命名词书")),
                      esc(book.isActive ? QStringLiteral("是") : QStringLiteral("否")));
         }
         booksSection += QStringLiteral("</ul>");
@@ -2742,6 +2755,10 @@ void WordBooksPageWidget::rebuildList() {
 
     WordBookItem activeBook;
     bool hasActiveBook = false;
+    QStringList allBookNames;
+    for (const WordBookItem &book : books_) {
+        allBookNames.push_back(book.name.trimmed());
+    }
     if (!isManagementMode_) {
         for (const WordBookItem &book : books_) {
             if (book.id == activeBookId_) {
@@ -2752,7 +2769,7 @@ void WordBooksPageWidget::rebuildList() {
         }
     }
 
-    const auto makeBookCard = [this](QWidget *parent, const WordBookItem &book, bool isCurrent) -> QWidget * {
+    const auto makeBookCard = [this, allBookNames](QWidget *parent, const WordBookItem &book, bool isCurrent) -> QWidget * {
         auto *row = new QWidget(parent);
         row->setObjectName(QStringLiteral("bookRow"));
         row->setStyleSheet(QStringLiteral(
@@ -2770,8 +2787,9 @@ void WordBooksPageWidget::rebuildList() {
         const QColor baseColor(coverColorForBook(book.id));
         const QString coverTop = baseColor.lighter(106).name();
         const QString coverBottom = baseColor.darker(102).name();
+        const QString displayName = displayBookName(book.name, allBookNames);
 
-        auto *cover = new QLabel(coverTextForBook(book.name), row);
+        auto *cover = new QLabel(coverTextForBook(displayName), row);
         cover->setAlignment(Qt::AlignCenter);
         cover->setFixedSize(68, 84);
         cover->setWordWrap(true);
@@ -2781,7 +2799,7 @@ void WordBooksPageWidget::rebuildList() {
             "background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 %1, stop:1 %2);")
                                  .arg(coverTop, coverBottom));
 
-        auto *title = new QLabel(book.name, row);
+        auto *title = new QLabel(displayName, row);
         title->setMargin(6);
         title->setStyleSheet(QStringLiteral(
             "font-size: 20px; font-weight: 700; color: #0f172a;"

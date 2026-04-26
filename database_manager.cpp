@@ -1512,8 +1512,166 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         return false;
     }
 
-    // 跳过首行表头
-    parseCsvLine(readCsvRecord(in));
+    // 读取并保留首行表头：用于 polysemy 自动识别来源/语境列（可选）。
+    QStringList headers = parseCsvLine(readCsvRecord(in));
+    if (!headers.isEmpty()) {
+        headers[0].remove(QChar(0xFEFF));
+    }
+
+    auto normalizeHeader = [](const QString &raw) -> QString {
+        QString s = raw.trimmed().toLower();
+        s.remove(QRegularExpression(QStringLiteral("[\\s_\\-:/\\\\()\\[\\]{}]+")));
+        return s;
+    };
+    auto findHeaderIndex = [&normalizeHeader](const QStringList &allHeaders,
+                                              const QStringList &candidates) -> int {
+        if (allHeaders.isEmpty()) {
+            return -1;
+        }
+        QStringList hnorm;
+        hnorm.reserve(allHeaders.size());
+        for (const QString &h : allHeaders) {
+            hnorm.push_back(normalizeHeader(h));
+        }
+        QStringList cnorm;
+        cnorm.reserve(candidates.size());
+        for (const QString &c : candidates) {
+            cnorm.push_back(normalizeHeader(c));
+        }
+
+        for (int i = 0; i < hnorm.size(); ++i) {
+            for (const QString &c : cnorm) {
+                if (!c.isEmpty() && hnorm.at(i) == c) {
+                    return i;
+                }
+            }
+        }
+        for (int i = 0; i < hnorm.size(); ++i) {
+            for (const QString &c : cnorm) {
+                if (!c.isEmpty() && hnorm.at(i).contains(c)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    };
+
+    int sourceColumn = -1;
+    int contextColumn = -1;
+    int bookColumn = -1;
+    int testColumn = -1;
+    int passageColumn = -1;
+    int titleColumn = -1;
+    if (importType == QString::fromLatin1(kTrainingTypePolysemy)) {
+        sourceColumn = findHeaderIndex(headers, {
+            QStringLiteral("source"),
+            QStringLiteral("sources"),
+            QStringLiteral("来源"),
+            QStringLiteral("出处"),
+            QStringLiteral("source_ref"),
+        });
+        contextColumn = findHeaderIndex(headers, {
+            QStringLiteral("context"),
+            QStringLiteral("contexts"),
+            QStringLiteral("语境"),
+            QStringLiteral("例句"),
+            QStringLiteral("source_sentence"),
+            QStringLiteral("sentence"),
+            QStringLiteral("example"),
+        });
+        bookColumn = findHeaderIndex(headers, {
+            QStringLiteral("book"),
+            QStringLiteral("cambridge"),
+            QStringLiteral("剑雅"),
+        });
+        testColumn = findHeaderIndex(headers, {
+            QStringLiteral("test"),
+            QStringLiteral("test_id"),
+            QStringLiteral("套题"),
+            QStringLiteral("套卷"),
+        });
+        passageColumn = findHeaderIndex(headers, {
+            QStringLiteral("passage"),
+            QStringLiteral("passage_id"),
+            QStringLiteral("篇章"),
+            QStringLiteral("文章"),
+        });
+        titleColumn = findHeaderIndex(headers, {
+            QStringLiteral("title"),
+            QStringLiteral("topic"),
+            QStringLiteral("文章标题"),
+            QStringLiteral("标题"),
+        });
+    }
+
+    auto mergePolysemyMeta = [](const QString &rawPolysemy,
+                                const QString &sourceText,
+                                const QString &contextText,
+                                const QString &bookText,
+                                const QString &testText,
+                                const QString &passageText,
+                                const QString &titleText) -> QString {
+        QString source = sourceText.trimmed();
+        const QString context = contextText.trimmed();
+        const QString book = bookText.trimmed();
+        const QString test = testText.trimmed();
+        const QString passage = passageText.trimmed();
+        const QString title = titleText.trimmed();
+
+        if (source.isEmpty()) {
+            QStringList sourceParts;
+            if (!book.isEmpty()) sourceParts.push_back(book);
+            if (!test.isEmpty()) sourceParts.push_back(test);
+            if (!passage.isEmpty()) sourceParts.push_back(passage);
+            if (!title.isEmpty()) sourceParts.push_back(title);
+            if (!sourceParts.isEmpty()) {
+                source = sourceParts.join(QStringLiteral(" | "));
+            }
+        }
+
+        const QString polysemy = rawPolysemy.trimmed();
+        if (source.isEmpty() && context.isEmpty() && book.isEmpty()
+            && test.isEmpty() && passage.isEmpty() && title.isEmpty()) {
+            return polysemy;
+        }
+
+        QJsonObject merged;
+        if (!polysemy.isEmpty()) {
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(polysemy.toUtf8(), &parseError);
+            if (parseError.error == QJsonParseError::NoError) {
+                if (doc.isObject()) {
+                    merged = doc.object();
+                } else if (doc.isArray()) {
+                    merged.insert(QStringLiteral("senses"), doc.array());
+                }
+            } else {
+                merged.insert(QStringLiteral("value"), polysemy);
+            }
+        }
+
+        auto putIfMissing = [&merged](const QString &key, const QString &value) {
+            if (value.trimmed().isEmpty()) {
+                return;
+            }
+            if (merged.contains(key)) {
+                return;
+            }
+            merged.insert(key, value.trimmed());
+        };
+
+        putIfMissing(QStringLiteral("source"), source);
+        putIfMissing(QStringLiteral("context"), context);
+        putIfMissing(QStringLiteral("book"), book);
+        putIfMissing(QStringLiteral("test"), test);
+        putIfMissing(QStringLiteral("passage"), passage);
+        putIfMissing(QStringLiteral("title"), title);
+        if (!context.isEmpty() && !merged.contains(QStringLiteral("example"))) {
+            merged.insert(QStringLiteral("example"), context);
+        }
+
+        return QString::fromUtf8(QJsonDocument(merged).toJson(QJsonDocument::Compact));
+    };
 
     QSqlDatabase db = database();
     if (!db.transaction()) {
@@ -1638,6 +1796,21 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         QString polysemyJson;
         if (polysemyColumn >= 0 && polysemyColumn < columns.size()) {
             polysemyJson = columns[polysemyColumn].trimmed();
+        }
+        if (importType == QString::fromLatin1(kTrainingTypePolysemy)) {
+            const auto valueAt = [&columns](int idx) -> QString {
+                if (idx >= 0 && idx < columns.size()) {
+                    return columns[idx].trimmed();
+                }
+                return QString();
+            };
+            polysemyJson = mergePolysemyMeta(polysemyJson,
+                                             valueAt(sourceColumn),
+                                             valueAt(contextColumn),
+                                             valueAt(bookColumn),
+                                             valueAt(testColumn),
+                                             valueAt(passageColumn),
+                                             valueAt(titleColumn));
         }
 
         insertQuery.bindValue(0, word);

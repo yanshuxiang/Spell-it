@@ -264,6 +264,7 @@ public:
     explicit PolysemyPageWidget(QWidget *parent = nullptr);
 
     void setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode);
+    void showDetail(const WordItem &word, SpellingResult selectedResult);
     void setOptionsEnabled(bool enabled);
     void resetRevealState();
 
@@ -275,14 +276,20 @@ signals:
     void userActivity();
 
 private:
-    QString buildPolysemyText(const WordItem &word) const;
+    QString buildPolysemyDetailHtml(const WordItem &word) const;
+    QString ratingText(SpellingResult result) const;
 
     QLabel *modeLabel_ = nullptr;
     QLabel *progressLabel_ = nullptr;
-    QLabel *wordLabel_ = nullptr;
-    QLabel *meaningLabel_ = nullptr;
+    QStackedWidget *stageStack_ = nullptr;
+    QWidget *quizPage_ = nullptr;
+    QWidget *detailPage_ = nullptr;
+    QLabel *translationLabel_ = nullptr;
+    QLabel *detailWordLabel_ = nullptr;
+    QLabel *detailRatingLabel_ = nullptr;
+    QTextBrowser *detailBrowser_ = nullptr;
+    HoverScaleButton *continueButton_ = nullptr;
     HoverScaleButton *exitButton_ = nullptr;
-    HoverScaleButton *revealButton_ = nullptr;
     HoverScaleButton *masteredButton_ = nullptr;
     HoverScaleButton *blurryButton_ = nullptr;
     HoverScaleButton *unfamiliarButton_ = nullptr;

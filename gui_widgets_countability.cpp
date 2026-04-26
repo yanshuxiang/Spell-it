@@ -10,12 +10,15 @@
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSizePolicy>
 #include <QSpacerItem>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QTextBrowser>
 
 using namespace GuiWidgetsInternal;
 
@@ -30,6 +33,7 @@ CountabilityPageWidget::CountabilityPageWidget(QWidget *parent)
     header->setSpacing(10);
 
     exitButton_ = new HoverScaleButton(QStringLiteral("退出"), this);
+    exitButton_->setHoverScaleEnabled(false);
     exitButton_->setFixedSize(96, 42);
     exitButton_->setStyleSheet(QStringLiteral(
         "HoverScaleButton {"
@@ -545,6 +549,361 @@ void CountabilityPageWidget::refreshBasePositions() {
     rootLayout_->activate();
 }
 
+namespace {
+QString compactText(const QString &value) {
+    QString out = value;
+    out = out.simplified();
+    return out.trimmed();
+}
+
+void appendUniqueLimited(QStringList &out, const QString &value, int maxCount) {
+    if (out.size() >= maxCount) {
+        return;
+    }
+    const QString text = compactText(value);
+    if (text.isEmpty()) {
+        return;
+    }
+    if (!out.contains(text)) {
+        out.push_back(text);
+    }
+}
+
+QString jsonScalarToText(const QJsonValue &value) {
+    if (value.isString()) {
+        return compactText(value.toString());
+    }
+    if (value.isDouble()) {
+        return QString::number(value.toDouble());
+    }
+    if (value.isBool()) {
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    }
+    return QString();
+}
+
+QString jsonValueToText(const QJsonValue &value, int depth = 0) {
+    if (depth > 5) {
+        return QString();
+    }
+    const QString scalar = jsonScalarToText(value);
+    if (!scalar.isEmpty()) {
+        return scalar;
+    }
+    if (value.isArray()) {
+        QStringList parts;
+        for (const QJsonValue &item : value.toArray()) {
+            const QString t = jsonValueToText(item, depth + 1);
+            if (!t.isEmpty()) {
+                parts.push_back(t);
+            }
+            if (parts.size() >= 6) {
+                break;
+            }
+        }
+        return compactText(parts.join(QStringLiteral("；")));
+    }
+    if (value.isObject()) {
+        const QJsonObject obj = value.toObject();
+        static const QStringList preferredKeys = {
+            QStringLiteral("definition"),
+            QStringLiteral("meaning"),
+            QStringLiteral("note"),
+            QStringLiteral("example"),
+            QStringLiteral("sentence"),
+            QStringLiteral("context"),
+            QStringLiteral("source"),
+            QStringLiteral("text"),
+            QStringLiteral("content"),
+            QStringLiteral("value")
+        };
+        QStringList parts;
+        for (const QString &key : preferredKeys) {
+            if (!obj.contains(key)) {
+                continue;
+            }
+            const QString t = jsonValueToText(obj.value(key), depth + 1);
+            if (!t.isEmpty()) {
+                parts.push_back(t);
+            }
+        }
+        if (parts.isEmpty()) {
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                const QString t = jsonValueToText(it.value(), depth + 1);
+                if (!t.isEmpty()) {
+                    parts.push_back(t);
+                }
+                if (parts.size() >= 6) {
+                    break;
+                }
+            }
+        }
+        return compactText(parts.join(QStringLiteral("；")));
+    }
+    return QString();
+}
+
+bool keyMatches(const QString &keyLower, const QStringList &keywords) {
+    for (const QString &kw : keywords) {
+        if (keyLower.contains(kw)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void collectByKeys(const QJsonValue &value,
+                   const QStringList &keywords,
+                   QStringList &out,
+                   int depth = 0,
+                   int maxCount = 8) {
+    if (depth > 6 || out.size() >= maxCount) {
+        return;
+    }
+    if (value.isArray()) {
+        for (const QJsonValue &item : value.toArray()) {
+            collectByKeys(item, keywords, out, depth + 1, maxCount);
+            if (out.size() >= maxCount) {
+                return;
+            }
+        }
+        return;
+    }
+    if (!value.isObject()) {
+        return;
+    }
+    const QJsonObject obj = value.toObject();
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const QString keyLower = it.key().toLower();
+        if (keyMatches(keyLower, keywords)) {
+            appendUniqueLimited(out, jsonValueToText(it.value()), maxCount);
+        }
+        collectByKeys(it.value(), keywords, out, depth + 1, maxCount);
+        if (out.size() >= maxCount) {
+            return;
+        }
+    }
+}
+
+QString renderSectionHtml(const QString &title, const QStringList &items) {
+    if (items.isEmpty()) {
+        return QString();
+    }
+    QString html = QStringLiteral(
+        "<div style='margin-top:10px;'>"
+        "<div style='font-size:14px;font-weight:800;color:#1e293b;margin-bottom:6px;'>%1</div>"
+        "<ul style='margin:0 0 0 18px;padding:0;color:#334155;'>")
+        .arg(title.toHtmlEscaped());
+    for (const QString &item : items) {
+        html += QStringLiteral("<li style='margin:4px 0;'>%1</li>").arg(item.toHtmlEscaped());
+    }
+    html += QStringLiteral("</ul></div>");
+    return html;
+}
+
+struct PolysemySenseRow {
+    QString meaning;
+    QString example;
+    QString source;
+};
+
+QStringList textsFromRawString(const QString &raw);
+
+QStringList textsFromJsonValue(const QJsonValue &value) {
+    if (value.isUndefined() || value.isNull()) {
+        return {};
+    }
+    if (value.isString()) {
+        return textsFromRawString(value.toString());
+    }
+    if (value.isDouble()) {
+        return {QString::number(value.toDouble())};
+    }
+    if (value.isBool()) {
+        return {value.toBool() ? QStringLiteral("true") : QStringLiteral("false")};
+    }
+    if (value.isArray()) {
+        QStringList out;
+        for (const QJsonValue &item : value.toArray()) {
+            const QStringList sub = textsFromJsonValue(item);
+            for (const QString &s : sub) {
+                appendUniqueLimited(out, s, 64);
+            }
+        }
+        return out;
+    }
+    if (value.isObject()) {
+        QStringList out;
+        appendUniqueLimited(out, jsonValueToText(value), 64);
+        return out;
+    }
+    return {};
+}
+
+QStringList textsFromRawString(const QString &raw) {
+    const QString text = compactText(raw);
+    if (text.isEmpty()) {
+        return {};
+    }
+
+    if ((text.startsWith(QLatin1Char('[')) && text.endsWith(QLatin1Char(']')))
+        || (text.startsWith(QLatin1Char('{')) && text.endsWith(QLatin1Char('}')))) {
+        QJsonParseError err;
+        const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
+        if (err.error == QJsonParseError::NoError) {
+            if (doc.isArray()) {
+                return textsFromJsonValue(QJsonValue(doc.array()));
+            }
+            if (doc.isObject()) {
+                return textsFromJsonValue(QJsonValue(doc.object()));
+            }
+        }
+    }
+    return {text};
+}
+
+void appendFromKeys(const QJsonObject &obj,
+                    const QStringList &keys,
+                    QStringList &out,
+                    int maxCount = 16) {
+    for (const QString &key : keys) {
+        if (!obj.contains(key)) {
+            continue;
+        }
+        const QStringList values = textsFromJsonValue(obj.value(key));
+        for (const QString &v : values) {
+            appendUniqueLimited(out, v, maxCount);
+        }
+    }
+}
+
+QString sourceTextFromObject(const QJsonObject &obj) {
+    QStringList parts;
+    const auto appendIf = [&parts, &obj](const QString &key) {
+        const QString value = compactText(jsonValueToText(obj.value(key)));
+        if (!value.isEmpty()) {
+            parts.push_back(value);
+        }
+    };
+    appendIf(QStringLiteral("book"));
+    appendIf(QStringLiteral("test"));
+    appendIf(QStringLiteral("passage"));
+    appendIf(QStringLiteral("title"));
+    appendIf(QStringLiteral("source_id"));
+    if (parts.isEmpty()) {
+        return QString();
+    }
+    return parts.join(QStringLiteral(" | "));
+}
+
+QString pickByIndex(const QStringList &values, int idx) {
+    if (values.isEmpty()) {
+        return QString();
+    }
+    if (idx >= 0 && idx < values.size()) {
+        return values.at(idx);
+    }
+    if (values.size() == 1) {
+        return values.first();
+    }
+    return QString();
+}
+
+void appendRowsFromObject(const QJsonObject &obj,
+                          QVector<PolysemySenseRow> &rows,
+                          int maxRows = 12) {
+    if (rows.size() >= maxRows) {
+        return;
+    }
+
+    QStringList meanings;
+    QStringList examples;
+    QStringList sources;
+    appendFromKeys(obj,
+                   {QStringLiteral("definition"),
+                    QStringLiteral("meaning"),
+                    QStringLiteral("note"),
+                    QStringLiteral("gloss"),
+                    QStringLiteral("explain"),
+                    QStringLiteral("value"),
+                    QStringLiteral("gem_meaning"),
+                    QStringLiteral("exam_value")},
+                   meanings);
+    appendFromKeys(obj,
+                   {QStringLiteral("example"),
+                    QStringLiteral("examples"),
+                    QStringLiteral("sentence"),
+                    QStringLiteral("sentences"),
+                    QStringLiteral("context"),
+                    QStringLiteral("contexts"),
+                    QStringLiteral("source_sentence")},
+                   examples);
+    appendFromKeys(obj,
+                   {QStringLiteral("source"),
+                    QStringLiteral("sources")},
+                   sources);
+
+    const QString composedSource = sourceTextFromObject(obj);
+    if (!composedSource.isEmpty()) {
+        appendUniqueLimited(sources, composedSource, 16);
+    }
+
+    const int rowCount = qMax(1, qMax(meanings.size(), qMax(examples.size(), sources.size())));
+    for (int i = 0; i < rowCount && rows.size() < maxRows; ++i) {
+        PolysemySenseRow row;
+        row.meaning = pickByIndex(meanings, i);
+        row.example = pickByIndex(examples, i);
+        row.source = pickByIndex(sources, i);
+        if (row.meaning.isEmpty() && row.example.isEmpty() && row.source.isEmpty()) {
+            continue;
+        }
+
+        bool duplicated = false;
+        for (const PolysemySenseRow &existing : rows) {
+            if (existing.meaning == row.meaning
+                && existing.example == row.example
+                && existing.source == row.source) {
+                duplicated = true;
+                break;
+            }
+        }
+        if (!duplicated) {
+            rows.push_back(row);
+        }
+    }
+}
+
+void appendRowsFromValue(const QJsonValue &value,
+                         QVector<PolysemySenseRow> &rows,
+                         int depth = 0,
+                         int maxRows = 12) {
+    if (depth > 6 || rows.size() >= maxRows) {
+        return;
+    }
+    if (value.isArray()) {
+        for (const QJsonValue &item : value.toArray()) {
+            appendRowsFromValue(item, rows, depth + 1, maxRows);
+            if (rows.size() >= maxRows) {
+                return;
+            }
+        }
+        return;
+    }
+    if (!value.isObject()) {
+        return;
+    }
+
+    const QJsonObject obj = value.toObject();
+    if (obj.contains(QStringLiteral("senses"))) {
+        appendRowsFromValue(obj.value(QStringLiteral("senses")), rows, depth + 1, maxRows);
+    }
+    if (obj.contains(QStringLiteral("polysemy_data"))) {
+        appendRowsFromValue(obj.value(QStringLiteral("polysemy_data")), rows, depth + 1, maxRows);
+    }
+    appendRowsFromObject(obj, rows, maxRows);
+}
+} // namespace
+
 PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     : QWidget(parent) {
     auto *root = new QVBoxLayout(this);
@@ -556,6 +915,7 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     header->setSpacing(10);
 
     exitButton_ = new HoverScaleButton(QStringLiteral("退出"), this);
+    exitButton_->setHoverScaleEnabled(false);
     exitButton_->setFixedSize(96, 42);
     exitButton_->setStyleSheet(QStringLiteral(
         "HoverScaleButton {"
@@ -581,82 +941,131 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     header->addStretch(1);
     header->addWidget(progressLabel_, 0, Qt::AlignRight);
 
-    wordLabel_ = new QLabel(QStringLiteral("word"), this);
-    wordLabel_->setAlignment(Qt::AlignCenter);
-    wordLabel_->setWordWrap(true);
-    wordLabel_->setStyleSheet(QStringLiteral("font-size: 44px; font-weight: 800; color: #0f172a;"));
-    wordLabel_->setMinimumHeight(120);
-
-    revealButton_ = new HoverScaleButton(QStringLiteral("揭晓释义"), this);
-    revealButton_->setFixedSize(220, 48);
-    revealButton_->setStyleSheet(QStringLiteral(
-        "HoverScaleButton {"
-        "  background: #e2e8f0;"
-        "  color: #0f172a;"
-        "  border-radius: 14px;"
-        "  font-size: 15px;"
-        "  font-weight: 700;"
-        "}"
-        "HoverScaleButton:hover { background: #d7dee7; }"));
-
-    meaningLabel_ = new QLabel(this);
-    meaningLabel_->setWordWrap(true);
-    meaningLabel_->setTextFormat(Qt::PlainText);
-    meaningLabel_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    meaningLabel_->setStyleSheet(QStringLiteral(
-        "font-size: 16px;"
-        "font-weight: 600;"
-        "color: #334155;"
-        "line-height: 1.4;"
-        "padding: 12px;"
-        "background: #f8fafc;"
-        "border: 1px solid #e2e8f0;"
-        "border-radius: 12px;"));
-    meaningLabel_->hide();
-
     masteredButton_ = new HoverScaleButton(QStringLiteral("已掌握"), this);
     blurryButton_ = new HoverScaleButton(QStringLiteral("模糊"), this);
     unfamiliarButton_ = new HoverScaleButton(QStringLiteral("不熟悉"), this);
+    masteredButton_->setHoverScaleEnabled(false);
+    blurryButton_->setHoverScaleEnabled(false);
+    unfamiliarButton_->setHoverScaleEnabled(false);
     const QString answerButtonStyle = QStringLiteral(
         "HoverScaleButton {"
-        "  background: #f8fafc;"
+        "  background: #edf3f9;"
         "  border: 1px solid #cbd5e1;"
         "  border-radius: 16px;"
         "  font-size: 18px;"
         "  font-weight: 700;"
         "  color: #0f172a;"
-        "  min-height: 58px;"
+        "  min-height: 62px;"
+        "  padding: 0 10px;"
         "}"
-        "HoverScaleButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
+        "HoverScaleButton:hover { background: #dfe8f3; border-color: #94a3b8; }"
         "HoverScaleButton:disabled { color: #94a3b8; background: #f8fafc; border-color: #e2e8f0; }");
     masteredButton_->setStyleSheet(answerButtonStyle);
     blurryButton_->setStyleSheet(answerButtonStyle);
     unfamiliarButton_->setStyleSheet(answerButtonStyle);
+    masteredButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    blurryButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    unfamiliarButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    auto *answerRow = new QHBoxLayout();
+    answerRow->setContentsMargins(0, 0, 0, 0);
+    answerRow->setSpacing(12);
+    answerRow->addWidget(masteredButton_, 1);
+    answerRow->addWidget(blurryButton_, 1);
+    answerRow->addWidget(unfamiliarButton_, 1);
+
+    stageStack_ = new QStackedWidget(this);
+
+    quizPage_ = new QWidget(this);
+    auto *quizLayout = new QVBoxLayout(quizPage_);
+    quizLayout->setContentsMargins(0, 0, 0, 0);
+    quizLayout->setSpacing(12);
+
+    translationLabel_ = new QLabel(QStringLiteral("-"), quizPage_);
+    translationLabel_->setAlignment(Qt::AlignCenter);
+    translationLabel_->setWordWrap(true);
+    translationLabel_->setMinimumHeight(120);
+    translationLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 29px;"
+        "font-weight: 800;"
+        "color: #0f172a;"
+        "background: transparent;"
+        "border: none;"
+        "padding: 0;"));
+
+    quizLayout->addStretch(2);
+    quizLayout->addWidget(translationLabel_);
+    quizLayout->addStretch(3);
+    quizLayout->addLayout(answerRow);
+
+    detailPage_ = new QWidget(this);
+    auto *detailLayout = new QVBoxLayout(detailPage_);
+    detailLayout->setContentsMargins(0, 0, 0, 0);
+    detailLayout->setSpacing(10);
+
+    detailWordLabel_ = new QLabel(QStringLiteral("-"), detailPage_);
+    detailWordLabel_->setAlignment(Qt::AlignCenter);
+    detailWordLabel_->setWordWrap(true);
+    detailWordLabel_->setStyleSheet(QStringLiteral("font-size: 40px; font-weight: 800; color: #0f172a;"));
+
+    detailRatingLabel_ = new QLabel(QString(), detailPage_);
+    detailRatingLabel_->setAlignment(Qt::AlignCenter);
+    detailRatingLabel_->setStyleSheet(QStringLiteral(
+        "font-size: 15px;"
+        "font-weight: 700;"
+        "color: #475569;"
+        "padding: 10px 16px;"
+        "border-radius: 12px;"
+        "background: #f8fafc;"
+        "border: 1px solid #e2e8f0;"));
+
+    detailBrowser_ = new QTextBrowser(detailPage_);
+    detailBrowser_->setOpenExternalLinks(false);
+    detailBrowser_->setFrameShape(QFrame::NoFrame);
+    detailBrowser_->setStyleSheet(QStringLiteral(
+        "QTextBrowser {"
+        "  background: #f8fafc;"
+        "  border: 1px solid #e2e8f0;"
+        "  border-radius: 14px;"
+        "  color: #334155;"
+        "  font-size: 15px;"
+        "  line-height: 1.45;"
+        "  padding: 10px;"
+        "}"
+        "QScrollBar:vertical { width: 6px; background: transparent; }"
+        "QScrollBar::handle:vertical { background: #cbd5e1; border-radius: 3px; }"));
+
+    continueButton_ = new HoverScaleButton(QStringLiteral("下一个单词"), detailPage_);
+    continueButton_->setHoverScaleEnabled(false);
+    continueButton_->setFixedSize(220, 54);
+    continueButton_->setStyleSheet(QStringLiteral(
+        "HoverScaleButton {"
+        "  background: #0f172a;"
+        "  color: #ffffff;"
+        "  border-radius: 14px;"
+        "  font-size: 17px;"
+        "  font-weight: 700;"
+        "}"
+        "HoverScaleButton:hover { background: #1e293b; }"));
+
+    detailLayout->addWidget(detailWordLabel_);
+    detailLayout->addWidget(detailRatingLabel_);
+    detailLayout->addWidget(detailBrowser_, 1);
+    detailLayout->addWidget(continueButton_, 0, Qt::AlignHCenter);
+
+    stageStack_->addWidget(quizPage_);
+    stageStack_->addWidget(detailPage_);
 
     root->addLayout(header);
-    root->addStretch(2);
-    root->addWidget(wordLabel_);
-    root->addWidget(revealButton_, 0, Qt::AlignHCenter);
-    root->addWidget(meaningLabel_);
-    root->addStretch(3);
-    root->addWidget(masteredButton_);
-    root->addSpacing(10);
-    root->addWidget(blurryButton_);
-    root->addSpacing(10);
-    root->addWidget(unfamiliarButton_);
+    root->addWidget(stageStack_, 1);
 
     connect(exitButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
         emit exitRequested();
     });
-    connect(revealButton_, &HoverScaleButton::clicked, this, [this]() {
+    connect(continueButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
-        revealed_ = true;
-        meaningLabel_->show();
-        revealButton_->setEnabled(false);
-        revealButton_->setText(QStringLiteral("已揭晓"));
-        setOptionsEnabled(true);
-        emit revealRequested();
+        emit continueRequested();
     });
     connect(masteredButton_, &HoverScaleButton::clicked, this, [this]() {
         emit userActivity();
@@ -672,85 +1081,133 @@ PolysemyPageWidget::PolysemyPageWidget(QWidget *parent)
     });
 }
 
-QString PolysemyPageWidget::buildPolysemyText(const WordItem &word) const {
-    QStringList lines;
-    if (!word.translation.trimmed().isEmpty()) {
-        lines << QStringLiteral("基础释义：%1").arg(word.translation.trimmed());
+QString PolysemyPageWidget::ratingText(SpellingResult result) const {
+    switch (result) {
+    case SpellingResult::Mastered:
+        return QStringLiteral("已掌握");
+    case SpellingResult::Blurry:
+        return QStringLiteral("模糊");
+    case SpellingResult::Unfamiliar:
+        return QStringLiteral("不熟悉");
     }
+    return QStringLiteral("不熟悉");
+}
+
+QString PolysemyPageWidget::buildPolysemyDetailHtml(const WordItem &word) const {
+    QString html = QStringLiteral("<div style='font-size:15px;color:#334155;'>");
+    if (!word.translation.trimmed().isEmpty()) {
+        html += QStringLiteral(
+            "<div style='margin-bottom:8px;'>"
+            "<span style='font-weight:800;color:#1e293b;'>基础释义（词典）：</span>%1"
+            "</div>")
+            .arg(word.translation.trimmed().toHtmlEscaped());
+    }
+    if (!word.partOfSpeech.trimmed().isEmpty()) {
+        html += QStringLiteral(
+            "<div style='margin-bottom:8px;'>"
+            "<span style='font-weight:800;color:#1e293b;'>词性：</span>%1"
+            "</div>")
+            .arg(word.partOfSpeech.trimmed().toHtmlEscaped());
+    }
+
+    QVector<PolysemySenseRow> rows;
+    QString fallbackRaw;
 
     const QString raw = word.polysemyJson.trimmed();
-    if (raw.isEmpty()) {
-        if (lines.isEmpty()) {
-            lines << QStringLiteral("暂无熟词生义数据");
-        }
-        return lines.join(QChar('\n'));
-    }
-
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError) {
-        lines << QStringLiteral("生义数据：%1").arg(raw.left(300));
-        return lines.join(QChar('\n'));
-    }
-
-    auto appendSense = [&lines](const QJsonObject &senseObj) {
-        const QString def = senseObj.value(QStringLiteral("definition")).toString().trimmed();
-        const QString meaning = senseObj.value(QStringLiteral("meaning")).toString().trimmed();
-        const QString note = senseObj.value(QStringLiteral("note")).toString().trimmed();
-        const QString example = senseObj.value(QStringLiteral("example")).toString().trimmed();
-
-        QString line = def;
-        if (line.isEmpty()) {
-            line = meaning;
-        }
-        if (!note.isEmpty()) {
-            if (!line.isEmpty()) {
-                line += QStringLiteral("；");
-            }
-            line += note;
-        }
-        if (!line.isEmpty()) {
-            lines << QStringLiteral("• %1").arg(line);
-        }
-        if (!example.isEmpty()) {
-            lines << QStringLiteral("  例：%1").arg(example);
-        }
-    };
-
-    if (doc.isArray()) {
-        const QJsonArray arr = doc.array();
-        for (const QJsonValue &value : arr) {
-            if (value.isObject()) {
-                appendSense(value.toObject());
-            }
-        }
-    } else if (doc.isObject()) {
-        const QJsonObject rootObj = doc.object();
-        const QJsonArray senses = rootObj.value(QStringLiteral("senses")).toArray();
-        if (!senses.isEmpty()) {
-            for (const QJsonValue &value : senses) {
-                if (value.isObject()) {
-                    appendSense(value.toObject());
-                }
-            }
+    if (!raw.isEmpty()) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &parseError);
+        if (parseError.error == QJsonParseError::NoError) {
+            const QJsonValue root = doc.isObject()
+                                        ? QJsonValue(doc.object())
+                                        : QJsonValue(doc.array());
+            appendRowsFromValue(root, rows, 0, 12);
         } else {
-            appendSense(rootObj);
+            fallbackRaw = raw.left(420);
         }
     }
 
-    if (lines.isEmpty()) {
-        lines << QStringLiteral("暂无可展示的熟词生义内容");
+    if (!rows.isEmpty()) {
+        html += QStringLiteral(
+            "<div style='margin-top:10px;margin-bottom:6px;font-size:14px;font-weight:800;color:#1e293b;'>"
+            "生义与例句对应"
+            "</div>");
+        for (int i = 0; i < rows.size(); ++i) {
+            const PolysemySenseRow &row = rows.at(i);
+            html += QStringLiteral(
+                "<div style='margin:8px 0;padding:10px 12px;background:#ffffff;border:1px solid #e2e8f0;"
+                "border-radius:10px;'>"
+                "<div style='font-size:12px;color:#64748b;font-weight:700;margin-bottom:6px;'>条目 %1</div>")
+                .arg(i + 1);
+            if (!row.meaning.isEmpty()) {
+                html += QStringLiteral(
+                    "<div style='margin-bottom:6px;'><span style='font-weight:800;color:#1e293b;'>生义：</span>%1</div>")
+                    .arg(row.meaning.toHtmlEscaped());
+            }
+            if (!row.example.isEmpty()) {
+                html += QStringLiteral(
+                    "<div style='margin-bottom:6px;'><span style='font-weight:800;color:#1e293b;'>例句：</span>%1</div>")
+                    .arg(row.example.toHtmlEscaped());
+            }
+            if (!row.source.isEmpty()) {
+                html += QStringLiteral(
+                    "<div><span style='font-weight:800;color:#1e293b;'>来源：</span>%1</div>")
+                    .arg(row.source.toHtmlEscaped());
+            }
+            html += QStringLiteral("</div>");
+        }
+    } else {
+        if (!fallbackRaw.isEmpty()) {
+            html += QStringLiteral(
+                "<div style='margin-top:10px;'>"
+                "<div style='font-size:14px;font-weight:800;color:#1e293b;margin-bottom:6px;'>原始数据</div>"
+                "<div style='background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:10px;"
+                "white-space:pre-wrap;'>%1</div></div>")
+                .arg(fallbackRaw.toHtmlEscaped());
+        } else {
+            html += QStringLiteral(
+                "<div style='margin-top:10px;color:#64748b;'>暂无来源与例句数据</div>");
+        }
     }
-    return lines.join(QChar('\n'));
+
+    html += QStringLiteral("</div>");
+    return html;
 }
 
 void PolysemyPageWidget::setWord(const WordItem &word, int currentIndex, int totalCount, bool isReviewMode) {
     modeLabel_->setText(isReviewMode ? QStringLiteral("熟词生义复习") : QStringLiteral("熟词生义学习"));
     progressLabel_->setText(QStringLiteral("%1 / %2").arg(currentIndex).arg(qMax(1, totalCount)));
-    wordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
-    meaningLabel_->setText(buildPolysemyText(word));
+    const QString englishWord = word.word.trimmed().isEmpty()
+                                    ? QStringLiteral("-")
+                                    : word.word.trimmed();
+    translationLabel_->setText(englishWord);
+    detailWordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
+    detailRatingLabel_->clear();
+    detailBrowser_->clear();
     resetRevealState();
-    setOptionsEnabled(false);
+    setOptionsEnabled(true);
+}
+
+void PolysemyPageWidget::showDetail(const WordItem &word, SpellingResult selectedResult) {
+    detailWordLabel_->setText(word.word.trimmed().isEmpty() ? QStringLiteral("-") : word.word.trimmed());
+    detailRatingLabel_->setText(QStringLiteral("你的选择：%1").arg(ratingText(selectedResult)));
+    QString ratingStyle = QStringLiteral(
+        "font-size: 16px;"
+        "font-weight: 800;"
+        "padding: 10px 16px;"
+        "border-radius: 12px;");
+    if (selectedResult == SpellingResult::Mastered) {
+        ratingStyle += QStringLiteral("color: #166534; background-color: #f0fdf4; border: 1px solid #bcf0da;");
+    } else if (selectedResult == SpellingResult::Blurry) {
+        ratingStyle += QStringLiteral("color: #9a3412; background-color: #fff7ed; border: 1px solid #fed7aa;");
+    } else {
+        ratingStyle += QStringLiteral("color: #991b1b; background-color: #fef2f2; border: 1px solid #fecaca;");
+    }
+    detailRatingLabel_->setStyleSheet(ratingStyle);
+    detailBrowser_->setHtml(buildPolysemyDetailHtml(word));
+    detailBrowser_->verticalScrollBar()->setValue(0);
+    stageStack_->setCurrentWidget(detailPage_);
+    revealed_ = true;
 }
 
 void PolysemyPageWidget::setOptionsEnabled(bool enabled) {
@@ -761,7 +1218,7 @@ void PolysemyPageWidget::setOptionsEnabled(bool enabled) {
 
 void PolysemyPageWidget::resetRevealState() {
     revealed_ = false;
-    meaningLabel_->hide();
-    revealButton_->setEnabled(true);
-    revealButton_->setText(QStringLiteral("揭晓释义"));
+    if (stageStack_ != nullptr && quizPage_ != nullptr) {
+        stageStack_->setCurrentWidget(quizPage_);
+    }
 }

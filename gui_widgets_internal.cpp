@@ -146,6 +146,30 @@ QString coverColorForBook(int bookId) {
     return QColor::fromHsl(hue, saturation, lightness).name();
 }
 
+QString displayBookName(const QString &rawName, const QStringList &allBookNames) {
+    QString name = rawName.trimmed();
+    if (name.isEmpty()) {
+        return QStringLiteral("词书");
+    }
+
+    // If the name looks like an auto-generated duplicate suffix ("xxx2", "xxx3"...),
+    // and the base name exists, hide the suffix in UI while keeping internal ids intact.
+    static const QRegularExpression kAutoSuffixPattern(QStringLiteral("^(.*?)([2-9]\\d*)$"));
+    const QRegularExpressionMatch match = kAutoSuffixPattern.match(name);
+    if (!match.hasMatch()) {
+        return name;
+    }
+
+    const QString base = match.captured(1).trimmed();
+    if (base.isEmpty()) {
+        return name;
+    }
+    if (allBookNames.contains(base)) {
+        return base;
+    }
+    return name;
+}
+
 QString coverTextForBook(const QString &bookName) {
     QString text = bookName.trimmed();
     if (text.isEmpty()) {
@@ -489,6 +513,10 @@ HoverScaleButton::HoverScaleButton(QWidget *parent)
 
 void HoverScaleButton::enterEvent(QEnterEvent *event) {
     QPushButton::enterEvent(event);
+    if (!hoverScaleEnabled_) {
+        setScale(1.0);
+        return;
+    }
     auto *anim = new QPropertyAnimation(this, "scale");
     anim->setDuration(150);
     anim->setEndValue(1.06);
@@ -498,6 +526,10 @@ void HoverScaleButton::enterEvent(QEnterEvent *event) {
 
 void HoverScaleButton::leaveEvent(QEvent *event) {
     QPushButton::leaveEvent(event);
+    if (!hoverScaleEnabled_) {
+        setScale(1.0);
+        return;
+    }
     auto *anim = new QPropertyAnimation(this, "scale");
     anim->setDuration(120);
     anim->setEndValue(1.0);

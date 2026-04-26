@@ -38,6 +38,7 @@ int nextReviewDaysForSummary(const PracticeRecord &record);
 QString summaryRightText(const PracticeRecord &record, bool reviewMode);
 QColor summaryRightColor(const PracticeRecord &record, bool reviewMode);
 QString coverColorForBook(int bookId);
+QString displayBookName(const QString &rawName, const QStringList &allBookNames = {});
 QString coverTextForBook(const QString &bookName);
 QIcon createBackLineIcon();
 QIcon createBooksLineIcon();
@@ -76,6 +77,13 @@ public:
         scale_ = s;
         update();
     }
+    void setHoverScaleEnabled(bool enabled) {
+        hoverScaleEnabled_ = enabled;
+        if (!hoverScaleEnabled_) {
+            setScale(1.0);
+        }
+    }
+    bool hoverScaleEnabled() const { return hoverScaleEnabled_; }
 
 protected:
     void enterEvent(QEnterEvent *event) override;
@@ -84,6 +92,7 @@ protected:
 
 private:
     qreal scale_ = 1.0;
+    bool hoverScaleEnabled_ = true;
 };
 
 #endif // GUI_WIDGETS_INTERNAL_H

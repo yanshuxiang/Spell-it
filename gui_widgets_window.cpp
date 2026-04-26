@@ -381,6 +381,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(polysemyPage_, &PolysemyPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
     connect(polysemyPage_, &PolysemyPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(polysemyPage_, &PolysemyPageWidget::ratingSubmitted, this, &VibeSpellerWindow::onPolysemyRated);
+    connect(polysemyPage_, &PolysemyPageWidget::continueRequested, this, &VibeSpellerWindow::moveToNextWord);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -1053,13 +1054,9 @@ void VibeSpellerWindow::onPolysemyRated(SpellingResult result) {
     records_.push_back(record);
     persistCurrentSession();
 
-    QPointer<VibeSpellerWindow> guard(this);
-    QTimer::singleShot(180, this, [guard]() {
-        if (!guard) {
-            return;
-        }
-        guard->moveToNextWord();
-    });
+    if (polysemyPage_ != nullptr) {
+        polysemyPage_->showDetail(current, result);
+    }
 }
 
 void VibeSpellerWindow::onProceedAfterFeedback() {
@@ -1308,9 +1305,11 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     }
 
     QString bookName;
+    QStringList allBookNames;
     int wordCount = 0;
     const QVector<WordBookItem> books = db_.fetchWordBooks();
     for (const WordBookItem &book : books) {
+        allBookNames.push_back(book.name.trimmed());
         if (book.id == bookId) {
             bookName = book.name;
             wordCount = book.wordCount;
@@ -1320,11 +1319,12 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     if (bookName.isEmpty()) {
         return;
     }
+    const QString displayName = displayBookName(bookName, allBookNames);
 
     const bool firstConfirm = showQuestionPrompt(
         this,
         QStringLiteral("删除词书"),
-        QStringLiteral("将删除词书“%1”（%2 词）。是否继续？").arg(bookName).arg(wordCount));
+        QStringLiteral("将删除词书“%1”（%2 词）。是否继续？").arg(displayName).arg(wordCount));
     if (!firstConfirm) {
         return;
     }
@@ -1332,7 +1332,7 @@ void VibeSpellerWindow::onDeleteWordBook(int bookId) {
     const bool secondConfirm = showQuestionPrompt(
         this,
         QStringLiteral("再次确认"),
-        QStringLiteral("删除后无法恢复，确定删除“%1”吗？").arg(bookName));
+        QStringLiteral("删除后无法恢复，确定删除“%1”吗？").arg(displayName));
     if (!secondConfirm) {
         return;
     }
@@ -1663,8 +1663,10 @@ void VibeSpellerWindow::refreshHomeCounts() {
     db_.reconcileFirstDayDailyLog();
     const QVector<WordBookItem> books = db_.fetchWordBooks();
     QHash<int, WordBookItem> booksById;
+    QStringList allBookNames;
     for (const WordBookItem &book : books) {
         booksById.insert(book.id, book);
+        allBookNames.push_back(book.name.trimmed());
     }
 
     const auto buildCard = [&](const QString &trainingType,
@@ -1677,7 +1679,7 @@ void VibeSpellerWindow::refreshHomeCounts() {
         card.activeBookId = db_.activeBookIdForTraining(trainingType);
         card.hasActiveBook = card.activeBookId > 0;
         if (card.hasActiveBook && booksById.contains(card.activeBookId)) {
-            card.bookName = booksById.value(card.activeBookId).name;
+            card.bookName = displayBookName(booksById.value(card.activeBookId).name, allBookNames);
         }
         card.coverName = coverTextForBook(card.bookName);
         card.totalWords = db_.totalWordCountForTraining(trainingType);
@@ -1695,6 +1697,11 @@ void VibeSpellerWindow::refreshHomeCounts() {
     cards.push_back(buildCard(QStringLiteral("spelling"), QStringLiteral("拼写"), QStringLiteral("#4B6491")));
     cards.push_back(buildCard(QStringLiteral("countability"), QStringLiteral("可数性辨析"), QStringLiteral("#4D7E78")));
     cards.push_back(buildCard(QStringLiteral("polysemy"), QStringLiteral("熟词生义"), QStringLiteral("#9A7454")));
+    const QVector<PhraseBookItem> phraseBooks = db_.fetchPhraseBooks();
+    QStringList phraseBookNames;
+    for (const PhraseBookItem &book : phraseBooks) {
+        phraseBookNames.push_back(book.name.trimmed());
+    }
     DashboardCardState phraseCard;
     phraseCard.trainingType = QStringLiteral("phrase_cluster");
     phraseCard.modeTitle = QStringLiteral("词群翻译");
@@ -1708,7 +1715,7 @@ void VibeSpellerWindow::refreshHomeCounts() {
     phraseCard.dueReviewCount = phraseStats.dueReviewCount;
     phraseCard.hasActiveBook = true;
     phraseCard.bookName = phraseStats.hasActiveBook
-                              ? phraseStats.activeBookName
+                              ? displayBookName(phraseStats.activeBookName, phraseBookNames)
                               : QStringLiteral("未绑定词群词书（点底部书库）");
     phraseCard.learningEnabled = phraseStats.hasActiveBook && phraseStats.unlearnedCount > 0;
     phraseCard.reviewEnabled = phraseStats.hasActiveBook && phraseStats.dueReviewCount > 0;
