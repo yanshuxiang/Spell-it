@@ -727,11 +727,9 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         "QComboBox { min-height: 36px; padding: 0 10px; border: 1px solid #d1d9e5; border-radius: 10px; background: #ffffff; font-size: 14px; }"));
 
     sessionSizeCombo_ = new QComboBox(controlPanel_);
-    sessionSizeCombo_->addItem(QStringLiteral("每组 5 题"), 5);
-    sessionSizeCombo_->addItem(QStringLiteral("每组 10 题"), 10);
-    sessionSizeCombo_->addItem(QStringLiteral("每组 15 题"), 15);
-    sessionSizeCombo_->addItem(QStringLiteral("每组 20 题"), 20);
+    sessionSizeCombo_->addItem(QStringLiteral("每组 10 题（固定）"), 10);
     sessionSizeCombo_->setCurrentIndex(0);
+    sessionSizeCombo_->setEnabled(false);
     sessionSizeCombo_->setStyleSheet(QStringLiteral(
         "QComboBox { min-height: 36px; padding: 0 10px; border: 1px solid #d1d9e5; border-radius: 10px; background: #ffffff; font-size: 14px; }"));
 
@@ -950,7 +948,7 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         Q_UNUSED(idx);
         sessionSize_ = sessionSizeCombo_->currentData().toInt();
         if (sessionSize_ <= 0) {
-            sessionSize_ = 5;
+            sessionSize_ = 10;
         }
         reloadSession();
     });
@@ -1238,7 +1236,7 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         nextButton_->setEnabled(true);
     });
 
-    sessionSize_ = 5;
+    sessionSize_ = 10;
     nextButton_->setEnabled(false);
     refreshBooks();
     reloadSession();
@@ -1578,7 +1576,7 @@ void PhraseClusterPageWidget::reloadSession() {
     }
 
     if (sessionSize_ <= 0) {
-        sessionSize_ = 5;
+        sessionSize_ = 10;
     }
     if (reviewMode_) {
         currentBatch_ = db_->fetchPhraseReviewBatch(QDateTime::currentDateTime(), sessionSize_);

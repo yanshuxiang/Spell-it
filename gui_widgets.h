@@ -376,7 +376,7 @@ private:
     bool managementOnlyView_ = false;
     bool currentAnswered_ = false;
     int currentIndex_ = -1;
-    int sessionSize_ = 5;
+    int sessionSize_ = 10;
     int correctCount_ = 0;
     int wrongCount_ = 0;
     QVector<PhraseItem> currentBatch_;

@@ -18,7 +18,7 @@ enum class PromptType {
 };
 
 inline constexpr int kStudyIdleCutoffSeconds = 120;
-inline constexpr int kSessionBatchSize = 5;
+inline constexpr int kSessionBatchSize = 10;
 inline constexpr int kCorrectTransitionMs = 300;
 inline constexpr int kWrongShakeMs = 200;
 inline constexpr int kTransitionShiftPx = 300;
