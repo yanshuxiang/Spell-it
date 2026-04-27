@@ -1,5 +1,6 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
+#include "app_logger.h"
 
 #include <QBrush>
 #include <QBuffer>
@@ -1152,7 +1153,15 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         event.skipped = false;
         event.userInput = userInput;
         event.matchedAnswer = matched;
-        db_->recordPhraseLearningEvent(event);
+        if (!db_->recordPhraseLearningEvent(event)) {
+            AppLogger::warn(QStringLiteral("PhraseEvent"),
+                            QStringLiteral("record failed, phraseId=%1, error=%2")
+                                .arg(item.id)
+                                .arg(db_->lastError()));
+            showWarningPrompt(this,
+                              QStringLiteral("保存失败"),
+                              QStringLiteral("保存词群作答记录失败：%1").arg(db_->lastError()));
+        }
 
         if (correct) {
             ++correctCount_;
@@ -1211,7 +1220,15 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         event.skipped = true;
         event.userInput = answerEdit_->text().trimmed();
         event.matchedAnswer = QString();
-        db_->recordPhraseLearningEvent(event);
+        if (!db_->recordPhraseLearningEvent(event)) {
+            AppLogger::warn(QStringLiteral("PhraseEvent"),
+                            QStringLiteral("record skipped failed, phraseId=%1, error=%2")
+                                .arg(item.id)
+                                .arg(db_->lastError()));
+            showWarningPrompt(this,
+                              QStringLiteral("保存失败"),
+                              QStringLiteral("保存词群作答记录失败：%1").arg(db_->lastError()));
+        }
         ++wrongCount_;
         feedbackLabel_->setText(
             QStringLiteral("已跳过\n标准表达：%1").arg(item.keywordsEn.join(QStringLiteral(" / "))));
@@ -1903,13 +1920,15 @@ void CalendarPageWidget::setDailySummaries(const QDate &date,
 
         auto *wordLabel = new QLabel(summary.word, row);
         wordLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        wordLabel->setMinimumWidth(0);
         wordLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        wordLabel->setToolTip(summary.word);
         wordLabel->setStyleSheet(QStringLiteral(
             "font-size: 19px; font-weight: 700; color: #0f172a;"));
 
         auto *statusLabel = new QLabel(statusText, row);
         statusLabel->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
-        statusLabel->setMinimumWidth(84);
+        statusLabel->setFixedWidth(84);
         statusLabel->setStyleSheet(summary.lastResult == SpellingResult::Mastered
                                        ? QStringLiteral("font-size: 17px; font-weight: 700; color: #16a34a;")
                                        : summary.lastResult == SpellingResult::Blurry

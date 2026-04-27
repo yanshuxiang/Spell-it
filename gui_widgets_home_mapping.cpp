@@ -1,6 +1,7 @@
 #include "gui_widgets.h"
 #include "gui_widgets_internal.h"
 #include "app_logger.h"
+#include "app_paths.h"
 
 #include <QComboBox>
 #include <QHeaderView>
@@ -102,7 +103,7 @@ HomePageWidget::HomePageWidget(QWidget *parent)
     auto *bridge = new DashboardBridge(this);
     dashboardBridge_ = bridge;
     dashboardView_->rootContext()->setContextProperty(QStringLiteral("bridge"), bridge);
-    const QString qmlPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/qml/MainDashboard.qml");
+    const QString qmlPath = AppPaths::bundledFile(QStringLiteral("qml"), QStringLiteral("MainDashboard.qml"));
     dashboardView_->setSource(QUrl::fromLocalFile(qmlPath));
 
     root->addWidget(dashboardView_, 1);

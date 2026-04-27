@@ -2,6 +2,7 @@
 #include "gui_widgets_internal.h"
 #include "audio_downloader.h"
 #include "app_logger.h"
+#include "app_paths.h"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -16,6 +17,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLayout>
+#include <QList>
 #include <QPainter>
 #include <QPainterPath>
 #include <QParallelAnimationGroup>
@@ -1477,19 +1479,27 @@ void VibeSpellerWindow::playPronunciationForWord(const QString &word) {
         return;
     }
 
-    const QDir audioDir(QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/assets/audio"));
     const QString rawName = word.trimmed();
     const QStringList candidates = {
         safeAudioFileName(rawName) + QStringLiteral(".mp3"),
         rawName + QStringLiteral(".mp3"),
         rawName.toLower() + QStringLiteral(".mp3")
     };
+    const QList<QDir> audioDirs = {
+        QDir(AppPaths::audioDir()),
+        QDir(AppPaths::bundledDir(QStringLiteral("assets/audio")))
+    };
 
     QString audioPath;
-    for (const QString &fileName : candidates) {
-        const QString path = audioDir.filePath(fileName);
-        if (QFileInfo::exists(path) && QFileInfo(path).size() > 0) {
-            audioPath = path;
+    for (const QDir &audioDir : audioDirs) {
+        for (const QString &fileName : candidates) {
+            const QString path = audioDir.filePath(fileName);
+            if (QFileInfo::exists(path) && QFileInfo(path).size() > 0) {
+                audioPath = path;
+                break;
+            }
+        }
+        if (!audioPath.isEmpty()) {
             break;
         }
     }
@@ -1660,7 +1670,7 @@ void VibeSpellerWindow::accumulateStudyDuration(const QDateTime &start, const QD
 }
 
 void VibeSpellerWindow::initializeDatabase() {
-    const QString dbPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/vibespeller.db");
+    const QString dbPath = AppPaths::databasePath();
     AppLogger::step(QStringLiteral("DB"), QStringLiteral("initialize database, path=%1").arg(dbPath));
 
     if (!db_.open(dbPath)) {

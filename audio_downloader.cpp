@@ -1,4 +1,5 @@
 #include "audio_downloader.h"
+#include "app_paths.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -278,12 +279,11 @@ AudioDownloader::Result AudioDownloader::downloadBookAudio(const QVector<WordIte
 }
 
 QString AudioDownloader::audioDirPath() const {
-    return QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/assets/audio");
+    return AppPaths::audioDir();
 }
 
 QString AudioDownloader::hashManifestPath() const {
-    return QStringLiteral(VIBESPELLER_SOURCE_DIR)
-           + QStringLiteral("/assets/audio/.hash_manifest.json");
+    return AppPaths::audioManifestPath();
 }
 
 QString AudioDownloader::safeAudioFileName(const QString &word) {

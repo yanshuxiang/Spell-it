@@ -18,6 +18,8 @@ add_executable(VibeSpeller
     audio_downloader.cpp
     app_logger.h
     app_logger.cpp
+    app_paths.h
+    app_paths.cpp
     gui_widgets.h
     gui_widgets_internal.h
     gui_widgets.cpp

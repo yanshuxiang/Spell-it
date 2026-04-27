@@ -1,5 +1,6 @@
 #include "database_manager.h"
 #include "app_logger.h"
+#include "app_paths.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -720,12 +721,18 @@ bool DatabaseManager::initialize() {
     for (const QString &col : needed) {
         bool exists = false;
         QSqlQuery ci(database());
-        ci.exec(QStringLiteral("PRAGMA table_info(learning_logs)"));
+        if (!ci.exec(QStringLiteral("PRAGMA table_info(learning_logs)"))) {
+            lastError_ = ci.lastError().text();
+            return false;
+        }
         while (ci.next()) {
             if (ci.value(1).toString() == col) { exists = true; break; }
         }
         if (!exists) {
-            query.exec(QStringLiteral("ALTER TABLE learning_logs ADD COLUMN %1 INTEGER DEFAULT 0").arg(col));
+            if (!query.exec(QStringLiteral("ALTER TABLE learning_logs ADD COLUMN %1 INTEGER DEFAULT 0").arg(col))) {
+                lastError_ = query.lastError().text();
+                return false;
+            }
         }
     }
 
@@ -1070,7 +1077,7 @@ bool DatabaseManager::initialize() {
 
     // 首次/每次启动：扫描并导入 default_books 下四个功能目录中的 CSV 作为默认词书（初版自动猜列）。
     {
-        const QString rootPath = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/default_books");
+        const QString rootPath = AppPaths::defaultBooksDir();
         QDir rootDir(rootPath);
         if (!rootDir.exists()) {
             rootDir.mkpath(QStringLiteral("."));

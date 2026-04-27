@@ -2,15 +2,17 @@
 #include <QFont>
 
 #include "app_logger.h"
+#include "app_paths.h"
 #include "gui_widgets.h"
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    app.setOrganizationName(QStringLiteral("VibeSpeller"));
+    app.setApplicationName(QStringLiteral("VibeSpeller"));
     const bool kDebugMode = false;
     app.setProperty("vibespeller_debug", kDebugMode);
 
-    const QString logsRoot = QStringLiteral(VIBESPELLER_SOURCE_DIR) + QStringLiteral("/runtime_logs");
-    AppLogger::initialize(logsRoot);
+    AppLogger::initialize(AppPaths::logsDir());
     AppLogger::info(QStringLiteral("Main"),
                     QStringLiteral("Application started, debug=%1, logs=%2")
                         .arg(kDebugMode ? QStringLiteral("true") : QStringLiteral("false"),
