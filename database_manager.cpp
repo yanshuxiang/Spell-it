@@ -711,7 +711,9 @@ bool DatabaseManager::initialize() {
         QStringLiteral("cb_learning_count"),
         QStringLiteral("cb_review_count"),
         QStringLiteral("spelling_seconds"),
-        QStringLiteral("cb_seconds")
+        QStringLiteral("cb_seconds"),
+        QStringLiteral("polysemy_seconds"),
+        QStringLiteral("phrase_seconds")
     };
     for (const QString &col : needed) {
         bool exists = false;
@@ -1120,7 +1122,7 @@ bool DatabaseManager::initialize() {
                                              qint64 fsize) -> bool {
             QSqlQuery q(database());
             q.prepare(QStringLiteral(
-                "SELECT file_mtime, file_size, status "
+                "SELECT file_mtime, file_size, status, message "
                 "FROM default_book_imports WHERE file_path = ?"));
             q.bindValue(0, absPath);
             if (!q.exec()) {
@@ -1135,7 +1137,11 @@ bool DatabaseManager::initialize() {
             const qint64 oldMtime = q.value(0).toLongLong();
             const qint64 oldSize = q.value(1).toLongLong();
             const QString oldStatus = q.value(2).toString().trimmed().toLower();
-            return oldStatus == QStringLiteral("ok") && oldMtime == mtime && oldSize == fsize;
+            const QString oldMessage = q.value(3).toString();
+            return oldStatus == QStringLiteral("ok")
+                   && oldMtime == mtime
+                   && oldSize == fsize
+                   && oldMessage.contains(QStringLiteral("replace-v2"));
         };
 
         auto recordImportResult = [this](const QString &absPath,
@@ -1353,7 +1359,7 @@ bool DatabaseManager::initialize() {
                     continue;
                 }
                 recordImportResult(absPath, folderName, trainingType, mtime, fsize,
-                                   QStringLiteral("ok"), QStringLiteral("导入成功"), importedCount);
+                                   QStringLiteral("ok"), QStringLiteral("导入成功 replace-v2"), importedCount);
                 AppLogger::info(QStringLiteral("DefaultBooks"),
                                 QStringLiteral("imported default csv, type=%1, file=%2, count=%3")
                                     .arg(trainingType)
@@ -1402,7 +1408,7 @@ bool DatabaseManager::initialize() {
                     continue;
                 }
                 recordImportResult(absPath, folderName, QString::fromLatin1(kTrainingTypePhraseCluster),
-                                   mtime, fsize, QStringLiteral("ok"), QStringLiteral("导入成功"), importedCount);
+                                   mtime, fsize, QStringLiteral("ok"), QStringLiteral("导入成功 replace-v2"), importedCount);
                 AppLogger::info(QStringLiteral("DefaultBooks"),
                                 QStringLiteral("imported default phrase file, file=%1, count=%2")
                                     .arg(absPath)
@@ -1681,19 +1687,29 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
 
     const QString baseName = trimmedBookNameFromFilePath(csvPath);
     QString bookName = baseName;
+    int bookId = -1;
     int suffix = 2;
     while (true) {
-        QSqlQuery existsQuery(db);
-        existsQuery.prepare(QStringLiteral("SELECT COUNT(*) FROM word_books WHERE name = ?"));
-        existsQuery.bindValue(0, bookName);
-        if (!existsQuery.exec() || !existsQuery.next()) {
+        QSqlQuery existingBookQuery(db);
+        existingBookQuery.prepare(QStringLiteral(
+            "SELECT id, owner_training_type FROM word_books WHERE name = ?"));
+        existingBookQuery.bindValue(0, bookName);
+        if (!existingBookQuery.exec()) {
             db.rollback();
-            lastError_ = existsQuery.lastError().text();
+            lastError_ = existingBookQuery.lastError().text();
             return false;
         }
-        if (existsQuery.value(0).toInt() == 0) {
+        if (!existingBookQuery.next()) {
             break;
         }
+
+        const int existingBookId = existingBookQuery.value(0).toInt();
+        const QString existingOwner = existingBookQuery.value(1).toString();
+        if (existingBookId > 0 && isBookOwnedByTrainingType(existingOwner, importType)) {
+            bookId = existingBookId;
+            break;
+        }
+
         const QString suffixText = QString::number(suffix++);
         int keepCount = 8 - suffixText.size();
         if (keepCount < 1) {
@@ -1702,21 +1718,32 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
         bookName = baseName.left(keepCount) + suffixText;
     }
 
-    const int shouldActive = (activeBookIdForTraining(importType) <= 0) ? 1 : 0;
+    if (bookId > 0) {
+        QSqlQuery clearBookWordsQuery(db);
+        clearBookWordsQuery.prepare(QStringLiteral("DELETE FROM book_words WHERE book_id = ?"));
+        clearBookWordsQuery.bindValue(0, bookId);
+        if (!clearBookWordsQuery.exec()) {
+            db.rollback();
+            lastError_ = clearBookWordsQuery.lastError().text();
+            return false;
+        }
+    } else {
+        const int shouldActive = (activeBookIdForTraining(importType) <= 0) ? 1 : 0;
 
-    QSqlQuery createBookQuery(db);
-    createBookQuery.prepare(QStringLiteral(
-        "INSERT INTO word_books(name, owner_training_type, is_active, created_at) "
-        "VALUES(?, ?, ?, datetime('now','localtime'))"));
-    createBookQuery.bindValue(0, bookName);
-    createBookQuery.bindValue(1, importType);
-    createBookQuery.bindValue(2, shouldActive);
-    if (!createBookQuery.exec()) {
-        db.rollback();
-        lastError_ = createBookQuery.lastError().text();
-        return false;
+        QSqlQuery createBookQuery(db);
+        createBookQuery.prepare(QStringLiteral(
+            "INSERT INTO word_books(name, owner_training_type, is_active, created_at) "
+            "VALUES(?, ?, ?, datetime('now','localtime'))"));
+        createBookQuery.bindValue(0, bookName);
+        createBookQuery.bindValue(1, importType);
+        createBookQuery.bindValue(2, shouldActive);
+        if (!createBookQuery.exec()) {
+            db.rollback();
+            lastError_ = createBookQuery.lastError().text();
+            return false;
+        }
+        bookId = createBookQuery.lastInsertId().toInt();
     }
-    const int bookId = createBookQuery.lastInsertId().toInt();
 
     QSqlQuery findWordQuery(db);
     findWordQuery.prepare(QStringLiteral("SELECT id FROM words WHERE word = ?"));
@@ -1730,11 +1757,12 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
     QSqlQuery updateExistingWordQuery(db);
     updateExistingWordQuery.prepare(QStringLiteral(
         "UPDATE words SET "
-        "phonetic = CASE WHEN length(trim(COALESCE(phonetic, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE phonetic END, "
-        "countability_label = CASE WHEN length(trim(COALESCE(countability_label, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_label END, "
-        "countability_plural = CASE WHEN length(trim(COALESCE(countability_plural, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_plural END, "
-        "countability_notes = CASE WHEN length(trim(COALESCE(countability_notes, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE countability_notes END, "
-        "polysemy_json = CASE WHEN length(trim(COALESCE(polysemy_json, ''))) = 0 AND length(trim(?)) > 0 THEN ? ELSE polysemy_json END "
+        "translation = CASE WHEN ? THEN ? ELSE translation END, "
+        "phonetic = CASE WHEN ? THEN ? ELSE phonetic END, "
+        "countability_label = CASE WHEN ? THEN ? ELSE countability_label END, "
+        "countability_plural = CASE WHEN ? THEN ? ELSE countability_plural END, "
+        "countability_notes = CASE WHEN ? THEN ? ELSE countability_notes END, "
+        "polysemy_json = CASE WHEN ? THEN ? ELSE polysemy_json END "
         "WHERE id = ?"));
 
     QSqlQuery linkWordQuery(db);
@@ -1839,17 +1867,30 @@ bool DatabaseManager::importFromCsv(const QString &csvPath,
 
         if (wordId > 0) {
             if (insertQuery.numRowsAffected() == 0) {
-                updateExistingWordQuery.bindValue(0, phonetic);
-                updateExistingWordQuery.bindValue(1, phonetic);
-                updateExistingWordQuery.bindValue(2, countabilityLabel);
-                updateExistingWordQuery.bindValue(3, countabilityLabel);
-                updateExistingWordQuery.bindValue(4, countabilityPlural);
-                updateExistingWordQuery.bindValue(5, countabilityPlural);
-                updateExistingWordQuery.bindValue(6, countabilityNotes);
-                updateExistingWordQuery.bindValue(7, countabilityNotes);
-                updateExistingWordQuery.bindValue(8, polysemyJson);
-                updateExistingWordQuery.bindValue(9, polysemyJson);
-                updateExistingWordQuery.bindValue(10, wordId);
+                const bool shouldUpdateTranslation =
+                    importType != QString::fromLatin1(kTrainingTypePolysemy)
+                    || translationColumn != wordColumn;
+                const bool shouldUpdatePhonetic = phoneticColumn >= 0;
+                const bool shouldUpdateCountability =
+                    importType == QString::fromLatin1(kTrainingTypeCountability);
+                const bool shouldUpdatePlural = shouldUpdateCountability && pluralColumn >= 0;
+                const bool shouldUpdateNotes = shouldUpdateCountability && notesColumn >= 0;
+                const bool shouldUpdatePolysemy =
+                    importType == QString::fromLatin1(kTrainingTypePolysemy);
+
+                updateExistingWordQuery.bindValue(0, shouldUpdateTranslation ? 1 : 0);
+                updateExistingWordQuery.bindValue(1, translation);
+                updateExistingWordQuery.bindValue(2, shouldUpdatePhonetic ? 1 : 0);
+                updateExistingWordQuery.bindValue(3, phonetic);
+                updateExistingWordQuery.bindValue(4, shouldUpdateCountability ? 1 : 0);
+                updateExistingWordQuery.bindValue(5, countabilityLabel);
+                updateExistingWordQuery.bindValue(6, shouldUpdatePlural ? 1 : 0);
+                updateExistingWordQuery.bindValue(7, countabilityPlural);
+                updateExistingWordQuery.bindValue(8, shouldUpdateNotes ? 1 : 0);
+                updateExistingWordQuery.bindValue(9, countabilityNotes);
+                updateExistingWordQuery.bindValue(10, shouldUpdatePolysemy ? 1 : 0);
+                updateExistingWordQuery.bindValue(11, polysemyJson);
+                updateExistingWordQuery.bindValue(12, wordId);
                 if (!updateExistingWordQuery.exec()) {
                     db.rollback();
                     lastError_ = updateExistingWordQuery.lastError().text();
@@ -3363,10 +3404,18 @@ bool DatabaseManager::incrementDailyCount(bool isLearning, bool isCountability, 
     return upd.exec();
 }
 
-bool DatabaseManager::addDailyStudySeconds(int seconds, bool isCountability, const QDate &date) {
+bool DatabaseManager::addDailyStudySeconds(int seconds, const QString &trainingType, const QDate &date) {
     if (!ensureDatabaseOpen() || seconds <= 0) return false;
     const QString dateStr = date.toString(Qt::ISODate);
-    const QString specificCol = isCountability ? "cb_seconds" : "spelling_seconds";
+    const QString type = trainingType.trimmed().toLower();
+    QString specificCol = QStringLiteral("spelling_seconds");
+    if (type == QString::fromLatin1(kTrainingTypeCountability)) {
+        specificCol = QStringLiteral("cb_seconds");
+    } else if (type == QString::fromLatin1(kTrainingTypePolysemy)) {
+        specificCol = QStringLiteral("polysemy_seconds");
+    } else if (type == QString::fromLatin1(kTrainingTypePhraseCluster)) {
+        specificCol = QStringLiteral("phrase_seconds");
+    }
 
     QSqlQuery check(database());
     check.prepare(QStringLiteral("SELECT 1 FROM learning_logs WHERE log_date = ?"));
@@ -3399,7 +3448,7 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
     query.prepare(QStringLiteral(
         "SELECT log_date, learning_count, review_count, "
         "       cb_learning_count, cb_review_count, study_seconds, "
-        "       spelling_seconds, cb_seconds "
+        "       spelling_seconds, cb_seconds, polysemy_seconds, phrase_seconds "
         "FROM learning_logs "
         "WHERE log_date >= ? AND log_date <= ? "
         "ORDER BY log_date ASC"));
@@ -3424,6 +3473,8 @@ QVector<DatabaseManager::DailyLog> DatabaseManager::fetchWeeklyLogs(const QDate 
         log.studyMinutes = totalSeconds > 0 ? (totalSeconds + 59) / 60 : 0;
         log.spellingSeconds = query.value(6).toInt();
         log.countabilitySeconds = query.value(7).toInt();
+        log.polysemySeconds = query.value(8).toInt();
+        log.phraseSeconds = query.value(9).toInt();
         
         logMap.insert(log.date, log);
     }

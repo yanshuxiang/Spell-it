@@ -222,6 +222,12 @@ void HomePageWidget::handleStartRequest(int modeIndex, bool isReview, const QRec
     case SessionMode::PolysemyReview:
         emit startPolysemyReviewClicked();
         break;
+    case SessionMode::PhraseClusterLearning:
+        emit startPhraseClusterLearningClicked();
+        break;
+    case SessionMode::PhraseClusterReview:
+        emit startPhraseClusterReviewClicked();
+        break;
     }
 }
 

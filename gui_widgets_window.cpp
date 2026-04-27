@@ -76,6 +76,10 @@ QString sessionModeName(SessionMode mode) {
         return QStringLiteral("polysemy_learning");
     case SessionMode::PolysemyReview:
         return QStringLiteral("polysemy_review");
+    case SessionMode::PhraseClusterLearning:
+        return QStringLiteral("phrase_cluster_learning");
+    case SessionMode::PhraseClusterReview:
+        return QStringLiteral("phrase_cluster_review");
     }
     return QStringLiteral("unknown");
 }
@@ -88,6 +92,9 @@ int dashboardIndexForMode(SessionMode mode) {
     case SessionMode::PolysemyLearning:
     case SessionMode::PolysemyReview:
         return 2;
+    case SessionMode::PhraseClusterLearning:
+    case SessionMode::PhraseClusterReview:
+        return 3;
     case SessionMode::Learning:
     case SessionMode::Review:
     default:
@@ -382,6 +389,7 @@ VibeSpellerWindow::VibeSpellerWindow(QWidget *parent)
     connect(polysemyPage_, &PolysemyPageWidget::exitRequested, this, &VibeSpellerWindow::onExitSession);
     connect(polysemyPage_, &PolysemyPageWidget::ratingSubmitted, this, &VibeSpellerWindow::onPolysemyRated);
     connect(polysemyPage_, &PolysemyPageWidget::continueRequested, this, &VibeSpellerWindow::moveToNextWord);
+    connect(phraseClusterPage_, &PhraseClusterPageWidget::userActivity, this, &VibeSpellerWindow::markStudyUserActivity);
 
     connect(summaryPage_, &SummaryPageWidget::backHomeClicked, this, [this]() {
         refreshHomeCounts();
@@ -634,8 +642,10 @@ void VibeSpellerWindow::onStartPhraseClusterLearning() {
     if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
         return;
     }
+    currentMode_ = SessionMode::PhraseClusterLearning;
     phraseClusterPage_->openMode(false);
     stack_->setCurrentWidget(phraseClusterPage_);
+    markStudyUserActivity();
 }
 
 void VibeSpellerWindow::onStartPhraseClusterReview() {
@@ -645,8 +655,10 @@ void VibeSpellerWindow::onStartPhraseClusterReview() {
     if (stack_ == nullptr || phraseClusterPage_ == nullptr) {
         return;
     }
+    currentMode_ = SessionMode::PhraseClusterReview;
     phraseClusterPage_->openMode(true);
     stack_->setCurrentWidget(phraseClusterPage_);
+    markStudyUserActivity();
 }
 
 void VibeSpellerWindow::onSubmitAnswer(const QString &text) {
@@ -1143,6 +1155,8 @@ void VibeSpellerWindow::onOpenWordBooks() {
     }
     const int index = homePage_ != nullptr ? homePage_->currentCardIndex() : 0;
     if (index == 3 && phraseClusterPage_ != nullptr && stack_ != nullptr) {
+        flushStudyTimeTracking();
+        currentMode_ = SessionMode::Learning;
         phraseClusterPage_->openMode(false);
         stack_->setCurrentWidget(phraseClusterPage_);
         phraseClusterPage_->openManagementPanel();
@@ -1224,6 +1238,7 @@ void VibeSpellerWindow::onPhraseClusterBack() {
     if (stack_ == nullptr || homePage_ == nullptr) {
         return;
     }
+    flushStudyTimeTracking();
     refreshHomeCounts();
     stack_->setCurrentWidget(homePage_);
 }
@@ -1234,6 +1249,8 @@ void VibeSpellerWindow::onChangeBookForTraining(const QString &trainingType) {
     const QString type = trainingType.trimmed().toLower();
     if (type == QStringLiteral("phrase_cluster")) {
         if (phraseClusterPage_ != nullptr && stack_ != nullptr) {
+            flushStudyTimeTracking();
+            currentMode_ = SessionMode::Learning;
             phraseClusterPage_->openMode(false);
             stack_->setCurrentWidget(phraseClusterPage_);
             phraseClusterPage_->openManagementPanel();
@@ -1542,10 +1559,13 @@ qreal VibeSpellerWindow::computeNormalizedVolume(const QString &audioFilePath) {
 }
 
 void VibeSpellerWindow::updateStudyTimeTracking() {
+    const bool isPhraseTrainingMode = (currentMode_ == SessionMode::PhraseClusterLearning
+                                      || currentMode_ == SessionMode::PhraseClusterReview);
     const bool shouldTrack = stack_ != nullptr
                              && (stack_->currentWidget() == spellingPage_
                                  || stack_->currentWidget() == countabilityPage_
-                                 || stack_->currentWidget() == polysemyPage_)
+                                 || stack_->currentWidget() == polysemyPage_
+                                 || (isPhraseTrainingMode && stack_->currentWidget() == phraseClusterPage_))
                              && isActiveWindow();
     const QDateTime now = QDateTime::currentDateTime();
 
@@ -1589,10 +1609,13 @@ void VibeSpellerWindow::markStudyUserActivity() {
     const QDateTime now = QDateTime::currentDateTime();
     lastStudyUserActionTime_ = now;
 
+    const bool isPhraseTrainingMode = (currentMode_ == SessionMode::PhraseClusterLearning
+                                      || currentMode_ == SessionMode::PhraseClusterReview);
     const bool canTrack = stack_ != nullptr
                           && (stack_->currentWidget() == spellingPage_
                               || stack_->currentWidget() == countabilityPage_
-                              || stack_->currentWidget() == polysemyPage_)
+                              || stack_->currentWidget() == polysemyPage_
+                              || (isPhraseTrainingMode && stack_->currentWidget() == phraseClusterPage_))
                           && isActiveWindow();
     if (canTrack && !isStudyTrackingActive_) {
         isStudyTrackingActive_ = true;
@@ -1618,22 +1641,21 @@ void VibeSpellerWindow::accumulateStudyDuration(const QDateTime &start, const QD
         return;
     }
 
-    const bool isCountability = (currentMode_ == SessionMode::CountabilityLearning
-                                || currentMode_ == SessionMode::CountabilityReview);
+    const QString trainingType = trainingTypeForMode(currentMode_);
 
     QDateTime cursor = start;
     while (cursor.date() < end.date()) {
         const QDateTime endOfDay(cursor.date(), QTime(23, 59, 59));
         const int seconds = static_cast<int>(cursor.secsTo(endOfDay) + 1);
         if (seconds > 0) {
-            db_.addDailyStudySeconds(seconds, isCountability, cursor.date());
+            db_.addDailyStudySeconds(seconds, trainingType, cursor.date());
         }
         cursor = endOfDay.addSecs(1);
     }
 
     const int finalSeconds = static_cast<int>(cursor.secsTo(end));
     if (finalSeconds > 0) {
-        db_.addDailyStudySeconds(finalSeconds, isCountability, cursor.date());
+        db_.addDailyStudySeconds(finalSeconds, trainingType, cursor.date());
     }
 }
 
@@ -1975,6 +1997,9 @@ void VibeSpellerWindow::startSession(SessionMode mode, QVector<WordItem> words, 
             candidates = db_.fetchReviewBatchForTraining(QStringLiteral("polysemy"),
                                                          QDateTime::currentDateTime(),
                                                          fetchLimit);
+            break;
+        case SessionMode::PhraseClusterLearning:
+        case SessionMode::PhraseClusterReview:
             break;
         }
         for (const WordItem &candidate : candidates) {
@@ -3059,6 +3084,10 @@ QString VibeSpellerWindow::modeKey(SessionMode mode) const {
         return QStringLiteral("polysemy_learning");
     case SessionMode::PolysemyReview:
         return QStringLiteral("polysemy_review");
+    case SessionMode::PhraseClusterLearning:
+        return QStringLiteral("phrase_cluster_learning");
+    case SessionMode::PhraseClusterReview:
+        return QStringLiteral("phrase_cluster_review");
     }
     return QStringLiteral("learning");
 }
@@ -3074,6 +3103,9 @@ QString VibeSpellerWindow::trainingTypeForMode(SessionMode mode) const {
     case SessionMode::PolysemyLearning:
     case SessionMode::PolysemyReview:
         return QStringLiteral("polysemy");
+    case SessionMode::PhraseClusterLearning:
+    case SessionMode::PhraseClusterReview:
+        return QStringLiteral("phrase_cluster");
     }
     return QStringLiteral("spelling");
 }

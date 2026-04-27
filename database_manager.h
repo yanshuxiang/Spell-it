@@ -260,7 +260,9 @@ public:
                                                   int limit) const;
 
     bool incrementDailyCount(bool isLearning, bool isCountability = false, const QDate &date = QDate::currentDate());
-    bool addDailyStudySeconds(int seconds, bool isCountability = false, const QDate &date = QDate::currentDate());
+    bool addDailyStudySeconds(int seconds,
+                              const QString &trainingType = QStringLiteral("spelling"),
+                              const QDate &date = QDate::currentDate());
 
     struct DailyLog {
         QString date;
@@ -271,6 +273,8 @@ public:
         int studyMinutes = 0;
         int spellingSeconds = 0;
         int countabilitySeconds = 0;
+        int polysemySeconds = 0;
+        int phraseSeconds = 0;
     };
     QVector<DailyLog> fetchWeeklyLogs(const QDate &endDate = QDate::currentDate()) const;
     bool reconcileFirstDayDailyLog(const QDate &date = QDate::currentDate());

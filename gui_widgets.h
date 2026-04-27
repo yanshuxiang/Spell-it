@@ -42,6 +42,8 @@ enum class SessionMode {
     CountabilityReview,
     PolysemyLearning,
     PolysemyReview,
+    PhraseClusterLearning,
+    PhraseClusterReview,
 };
 
 struct PracticeRecord {
@@ -357,6 +359,7 @@ public:
 
 signals:
     void backClicked();
+    void userActivity();
 
 private:
     void setManagementOnlyView(bool managementOnly);

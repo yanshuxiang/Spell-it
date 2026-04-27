@@ -312,6 +312,8 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     const QColor spellingReviewColor("#93c5fd");   // Blue 300
     const QColor cbLearnColor("#10b981");          // Emerald 500
     const QColor cbReviewColor("#a7f3d0");         // Emerald 200
+    const QColor polysemyTimeColor("#f59e0b");     // Amber 500
+    const QColor phraseTimeColor("#8b5cf6");       // Violet 500
     const QColor totalLineColor("#94a3b8");        // Slate 400 (Grey)
     const QColor textPrimary("#111827");
     const QColor textMuted("#64748b");
@@ -431,17 +433,28 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     const QRect linePlot = bottomCard.adjusted(12, 108, -12, -66);
     int maxSecs = 600;
     for (const auto &log : logs_) {
-        maxSecs = qMax(maxSecs, log.spellingSeconds + log.countabilitySeconds);
+        maxSecs = qMax(maxSecs,
+                       log.spellingSeconds
+                       + log.countabilitySeconds
+                       + log.polysemySeconds
+                       + log.phraseSeconds);
     }
     maxSecs = (maxSecs * 11) / 10;
 
-    auto getPoints = [&](int type) { // 0:total, 1:spelling, 2:cb
+    auto getPoints = [&](int type) { // 0:total, 1:spelling, 2:cb, 3:polysemy, 4:phrase
         QVector<QPointF> pts;
         for (int i = 0; i < logs_.size(); ++i) {
             int s = 0;
-            if (type == 0) s = logs_[i].spellingSeconds + logs_[i].countabilitySeconds;
+            if (type == 0) {
+                s = logs_[i].spellingSeconds
+                    + logs_[i].countabilitySeconds
+                    + logs_[i].polysemySeconds
+                    + logs_[i].phraseSeconds;
+            }
             else if (type == 1) s = logs_[i].spellingSeconds;
-            else s = logs_[i].countabilitySeconds;
+            else if (type == 2) s = logs_[i].countabilitySeconds;
+            else if (type == 3) s = logs_[i].polysemySeconds;
+            else s = logs_[i].phraseSeconds;
             double xr = (i + 0.5) / static_cast<double>(logs_.size());
             int x = linePlot.left() + static_cast<int>(xr * linePlot.width());
             int y = linePlot.bottom() - static_cast<int>(static_cast<double>(s) / maxSecs * linePlot.height());
@@ -472,6 +485,22 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
         if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
         for (auto &pt : pts) { painter.setBrush(cbReviewColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 4, 4); }
     }
+    // Always Polysemy
+    {
+        QPen p(polysemyTimeColor, 1.5);
+        painter.setPen(p);
+        QVector<QPointF> pts = getPoints(3);
+        if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
+        for (auto &pt : pts) { painter.setBrush(polysemyTimeColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 4, 4); }
+    }
+    // Always Phrase Cluster
+    {
+        QPen p(phraseTimeColor, 1.5);
+        painter.setPen(p);
+        QVector<QPointF> pts = getPoints(4);
+        if (pts.size() >= 2) painter.drawPolyline(pts.data(), pts.size());
+        for (auto &pt : pts) { painter.setBrush(phraseTimeColor); painter.setPen(Qt::NoPen); painter.drawEllipse(pt, 4, 4); }
+    }
     // Always Total
     {
         QPen p(totalLineColor, 1.5);
@@ -494,20 +523,31 @@ void StatisticsPageWidget::paintEvent(QPaintEvent *event) {
     drawTimeLegend(tLegX, tLegY, totalLineColor, QStringLiteral("总时长"));
     drawTimeLegend(tLegX, tLegY + 20, spellingReviewColor, QStringLiteral("拼写时长"));
     drawTimeLegend(tLegX, tLegY + 40, cbReviewColor, QStringLiteral("可数性时长"));
+    drawTimeLegend(tLegX, tLegY + 60, polysemyTimeColor, QStringLiteral("熟词生义"));
+    drawTimeLegend(tLegX, tLegY + 80, phraseTimeColor, QStringLiteral("词群翻译"));
 
     // Quick stats at bottom
     const auto &today = logs_.last();
     int todaySp = today.spellingSeconds / 60;
     int todayCb = today.countabilitySeconds / 60;
-    int totalSp = 0, totalCb = 0;
-    for(auto &l : logs_) { totalSp += l.spellingSeconds; totalCb += l.countabilitySeconds; }
+    int todayPoly = today.polysemySeconds / 60;
+    int todayPhrase = today.phraseSeconds / 60;
+    int totalSp = 0, totalCb = 0, totalPoly = 0, totalPhrase = 0;
+    for(auto &l : logs_) {
+        totalSp += l.spellingSeconds;
+        totalCb += l.countabilitySeconds;
+        totalPoly += l.polysemySeconds;
+        totalPhrase += l.phraseSeconds;
+    }
 
     painter.setPen(textMuted); painter.setFont(QFont(font().family(), 10, QFont::DemiBold));
-    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("今日时长 (拼写|可数)"));
-    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("7天汇总 (拼写|可数)"));
-    painter.setPen(textPrimary); painter.setFont(QFont(font().family(), 16, QFont::Bold));
-    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter, QStringLiteral("%1 | %2 min").arg(todaySp).arg(todayCb));
-    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter, QStringLiteral("%1 | %2 min").arg(totalSp/60).arg(totalCb/60));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("今日时长 (拼|可|熟|词)"));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 32, bottomCard.width() / 2, 16), Qt::AlignCenter, QStringLiteral("7天汇总 (拼|可|熟|词)"));
+    painter.setPen(textPrimary); painter.setFont(QFont(font().family(), 14, QFont::Bold));
+    painter.drawText(QRect(bottomCard.left(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter,
+                     QStringLiteral("%1 | %2 | %3 | %4 min").arg(todaySp).arg(todayCb).arg(todayPoly).arg(todayPhrase));
+    painter.drawText(QRect(bottomCard.center().x(), bottomCard.bottom() - 14, bottomCard.width() / 2, 20), Qt::AlignCenter,
+                     QStringLiteral("%1 | %2 | %3 | %4 min").arg(totalSp/60).arg(totalCb/60).arg(totalPoly/60).arg(totalPhrase/60));
 }
 
 void StatisticsPageWidget::mouseMoveEvent(QMouseEvent *event) {
@@ -879,7 +919,10 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
     root->addWidget(bookManageView_, 1);
     bookManageView_->setVisible(false);
 
-    connect(backButton_, &HoverScaleButton::clicked, this, &PhraseClusterPageWidget::backClicked);
+    connect(backButton_, &HoverScaleButton::clicked, this, [this]() {
+        emit userActivity();
+        emit backClicked();
+    });
     connect(manageButton_, &HoverScaleButton::clicked, this, [this]() {
         setManagementOnlyView(true);
     });
@@ -1127,9 +1170,19 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
         currentAnswered_ = true;
         nextButton_->setEnabled(true);
     };
-    connect(submitButton_, &HoverScaleButton::clicked, this, submitCurrent);
-    connect(nextButton_, &HoverScaleButton::clicked, this, goNext);
+    connect(submitButton_, &HoverScaleButton::clicked, this, [this, submitCurrent]() {
+        emit userActivity();
+        submitCurrent();
+    });
+    connect(nextButton_, &HoverScaleButton::clicked, this, [this, goNext]() {
+        emit userActivity();
+        goNext();
+    });
+    connect(answerEdit_, &QLineEdit::textEdited, this, [this]() {
+        emit userActivity();
+    });
     connect(answerEdit_, &QLineEdit::returnPressed, this, [this, submitCurrent, goNext]() {
+        emit userActivity();
         if (currentAnswered_) {
             goNext();
             return;
@@ -1138,6 +1191,7 @@ PhraseClusterPageWidget::PhraseClusterPageWidget(QWidget *parent)
     });
 
     connect(skipButton_, &HoverScaleButton::clicked, this, [this]() {
+        emit userActivity();
         if (db_ == nullptr || currentIndex_ < 0 || currentIndex_ >= currentBatch_.size()) {
             return;
         }
