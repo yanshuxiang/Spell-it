@@ -164,7 +164,7 @@ def main() -> None:
         "pdf",
         type=Path,
         nargs="?",
-        default=Path("/Users/yanshuxiang/Downloads/words.pdf"),
+        default=Path("/Users/yanshuxiang/Downloads/CET4.pdf"),
         help="Input PDF path",
     )
     parser.add_argument(

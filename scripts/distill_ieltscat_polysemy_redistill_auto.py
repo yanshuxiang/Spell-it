@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """
-自动重蒸馏入口：
-1) 若检测到“已蒸馏 CSV”（含 polysemy_data 列），则仅保留 polysemy_data != None 的词重蒸馏；
-2) 否则回退到“纯原文（manifest + all.txt）抽词后重蒸馏”。
+IELTS 熟词生义统一蒸馏入口：
+1) 从原文（manifest + all.txt）抽词；
+2) 使用 redistill 的一遍式严格提示词直接产出最终结果；
+3) 不生成中间蒸馏产物。
 """
 
 from __future__ import annotations
 
-import ast
 import csv
 import json
 import os
 import re
 import sys
+import threading
+import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+
+from tqdm import tqdm
+
+try:
+    from openai import OpenAI
+except Exception:  # noqa: BLE001
+    OpenAI = None  # type: ignore[assignment]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from polysemy_redistill_core import run_redistillation  # noqa: E402
-
 
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-DISTILLED_CSV_PATH = os.path.join(PROJECT_ROOT, "default_books", "polysemy", "雅思熟词生义.csv")
 MANIFEST_PATH = os.path.join(PROJECT_ROOT, "data", "ieltscat_reading_20_to_5_manifest.json")
 ALL_TEXT_PATH = os.path.join(PROJECT_ROOT, "data", "ieltscat_reading_20_to_5_all.txt")
 OUTPUT_CSV_PATH = os.path.join(PROJECT_ROOT, "data", "ieltscat_polysemy_redistilled_auto.csv")
@@ -39,6 +46,32 @@ TOP_N = 0  # 0 = 全量
 MAX_CONTEXTS_PER_WORD = 6
 MIN_WORD_LEN = 3
 MIN_FREQUENCY = 1
+
+MODEL_CONFIGS = {
+    "3": {
+        "name": "DeepSeek-Chat (句中生义一遍式蒸馏)",
+        "api_keys": [
+            "sk-dae1bc4b18034ecdbd5365c1348234ad",
+            "sk-31b092afea204db4b07f1570e7042fff",
+            "sk-9df1e5bc83d64142916751dee3c7b7cd",
+            "sk-af0218aef6944fe6ae23e2962074470a",
+            "sk-bb44ce68cdcb426da287685fe432f869",
+            "sk-c7dab615130548559426796b3984cae6",
+            "sk-3a2c0a5540a048ea98a6058421ce6d19",
+            "sk-a701d45a2c4a46e1a38ef1b5605815e8",
+            "sk-a365304d6a204fe38f969d46ee65d64d",
+        ],
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+    }
+}
+
+ENABLE_MULTI_THREAD = True
+FALLBACK_TO_SINGLE_THREAD = True
+FORCE_SINGLE_THREAD_ONLY = False
+
+_csv_lock = threading.Lock()
+_cjk_re = re.compile(r"[\u4e00-\u9fff]")
 
 HEADER_RE = re.compile(
     r"^===== (?P<book>.+?) \| (?P<test>.+?) \| (?P<passage>.+?) =====\s*\n"
@@ -174,103 +207,199 @@ def _clean_text(v: Any) -> str:
     return str(v).strip()
 
 
-def _to_int(v: Any, default: int = 0) -> int:
-    s = _clean_text(v)
-    if s.isdigit():
-        return int(s)
-    return default
+def get_sentence_polysemy_prompt() -> str:
+    return (
+        "You are a World-Class Lexicographer and Elite IELTS/TOEFL Examiner.\n"
+        "Task: From the given IELTS reading sentences, output ONLY words whose PROVIDED CONTEXT uses a "
+        "non-default, exam-tricky secondary meaning (熟词生义 / 金蝉脱壳).\n\n"
+        "NON-NEGOTIABLE FILTERS:\n"
+        "1) Context first. A word qualifies ONLY if one of the numbered sentences actually uses the non-default meaning.\n"
+        "2) Surprise threshold. Keep meanings that can genuinely trap a strong learner; skip normal meanings, mild nuances, "
+        "transparent metaphor, and routine part-of-speech changes.\n"
+        "3) No dictionary expansion. Do not include a word just because it has rare meanings in general.\n"
+        "4) Aggressive negation. When uncertain, omit the word completely.\n"
+        "5) Evidence required. Every kept sense must cite hit_context_index and an exact evidence_quote copied from that sentence.\n"
+        "6) Chinese only for meaning. The meaning must be a short Chinese gloss, not an English definition.\n"
+        "7) Keep it sparse. Most input words should be omitted from results.\n\n"
+        "BAD KEEP EXAMPLES:\n"
+        "- common noun-to-verb changes such as 'book' = reserve, unless the sentence meaning is truly exam-tricky.\n"
+        "- broad explanations like 'has multiple meanings' or any note not tied to a numbered sentence.\n\n"
+        "Output schema:\n"
+        "{\n"
+        "  'results': [\n"
+        "    {\n"
+        "      'word': 'str',\n"
+        "      'sense_items': [\n"
+        "        {\n"
+        "          'hit_context_index': 1,\n"
+        "          'meaning': '中文短释义',\n"
+        "          'evidence_quote': '短证据原文片段'\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    )
 
 
-def _parse_list_field(v: Any) -> list[str]:
+def _normalize_match(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _to_positive_int(v: Any) -> int | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v > 0 else None
     s = _clean_text(v)
-    if not s or s.lower() == "none":
-        return []
-    for parser in (json.loads, ast.literal_eval):
+    if not s.isdigit():
+        return None
+    n = int(s)
+    return n if n > 0 else None
+
+
+def _contains_cjk(s: str) -> bool:
+    return bool(_cjk_re.search(s))
+
+
+def read_processed_words(output_csv: str) -> set[str]:
+    done: set[str] = set()
+    if not os.path.exists(output_csv):
+        return done
+    try:
+        with open(output_csv, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                w = _clean_text(row.get("word")).lower()
+                if w:
+                    done.add(w)
+    except Exception:  # noqa: BLE001
+        return done
+    return done
+
+
+def write_rows(output_csv: str, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    fieldnames = [
+        "word",
+        "frequency",
+        "source_count",
+        "sources",
+        "contexts",
+        "has_gem",
+        "polysemy_data",
+    ]
+    with _csv_lock:
+        exists = os.path.exists(output_csv)
+        with open(output_csv, "a", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not exists:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+
+
+def call_api(
+    client: Any,
+    model_name: str,
+    content: str,
+    max_retries: int,
+    max_output_tokens: int,
+) -> list[dict[str, Any]]:
+    for attempt in range(max_retries):
         try:
-            parsed = parser(s)
-            if isinstance(parsed, list):
-                out = []
-                for item in parsed:
-                    t = _clean_text(item)
-                    if t:
-                        out.append(t)
-                return out
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": get_sentence_polysemy_prompt()},
+                    {"role": "user", "content": content},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_tokens=max_output_tokens,
+            )
+            data = json.loads(response.choices[0].message.content)
+            results = data.get("results", [])
+            if isinstance(results, list):
+                return [x for x in results if isinstance(x, dict)]
+            return []
         except Exception:  # noqa: BLE001
-            pass
+            if attempt < max_retries - 1:
+                time.sleep(1 + attempt)
     return []
 
 
-def detect_distilled_file(path: str) -> bool:
-    if not os.path.exists(path):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            headers = reader.fieldnames or []
-            if "polysemy_data" not in headers:
-                return False
-            for _ in reader:
-                return True
-            return False
-    except Exception:  # noqa: BLE001
-        return False
+def _extract_sense_items(
+    result: dict[str, Any],
+    contexts: list[str],
+    context_sources: list[str],
+) -> list[dict[str, str]]:
+    if result.get("has_gem") is False:
+        return []
+
+    raw_items = result.get("sense_items")
+    if not isinstance(raw_items, list):
+        raw_items = result.get("senses")
+    if not isinstance(raw_items, list):
+        raw_poly = result.get("polysemy_data")
+        if isinstance(raw_poly, dict):
+            raw_items = [raw_poly]
+        else:
+            raw_items = []
+
+    kept: list[dict[str, str]] = []
+    seen_meanings: set[str] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        idx = _to_positive_int(raw.get("hit_context_index"))
+        if idx is None or idx > len(contexts):
+            continue
+
+        meaning = _clean_text(raw.get("meaning"))
+        if not meaning or meaning.lower() == "none":
+            continue
+        if not _contains_cjk(meaning):
+            continue
+
+        norm_meaning = _normalize_match(meaning)
+        if norm_meaning in seen_meanings:
+            continue
+
+        context_text = _clean_text(contexts[idx - 1])
+        if not context_text:
+            continue
+        evidence_quote = _clean_text(raw.get("evidence_quote"))
+        if evidence_quote and _normalize_match(evidence_quote) not in _normalize_match(context_text):
+            continue
+
+        source = ""
+        if idx - 1 < len(context_sources):
+            source = _clean_text(context_sources[idx - 1])
+
+        kept.append(
+            {
+                "meaning": meaning,
+                "example": context_text,
+                "source": source,
+                "context_index": str(idx),
+                "evidence_quote": evidence_quote,
+            }
+        )
+        seen_meanings.add(norm_meaning)
+    return kept
 
 
-def load_non_none_words(path: str) -> set[str]:
-    keep: set[str] = set()
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            word = _clean_text(row.get("word")).lower()
-            pdata = _clean_text(row.get("polysemy_data"))
-            if not word:
-                continue
-            if pdata and pdata.lower() != "none":
-                keep.add(word)
-    return keep
-
-
-def load_candidates_from_existing_csv(path: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            word = _clean_text(row.get("word")).lower()
-            if not word:
-                continue
-            contexts = _parse_list_field(row.get("contexts"))[:MAX_CONTEXTS_PER_WORD]
-            if not contexts:
-                continue
-            sources = _parse_list_field(row.get("sources"))
-
-            context_sources: list[str] = []
-            if len(sources) >= len(contexts):
-                context_sources = sources[: len(contexts)]
-            elif len(sources) == 1:
-                context_sources = [sources[0]] * len(contexts)
-            elif 1 < len(sources) < len(contexts):
-                context_sources = sources + [sources[-1]] * (len(contexts) - len(sources))
-            else:
-                context_sources = [""] * len(contexts)
-
-            frequency = _to_int(row.get("frequency"), 1)
-            source_count = _to_int(row.get("source_count"), 0)
-            if source_count <= 0:
-                source_count = len(set([s for s in sources if s]))
-
-            rows.append(
-                {
-                    "word": word,
-                    "frequency": frequency,
-                    "source_count": source_count,
-                    "sources": sources,
-                    "contexts": contexts,
-                    "context_sources": context_sources,
-                }
-            )
-
-    rows.sort(key=lambda x: (-int(x["frequency"]), x["word"]))
-    return rows
+def _build_polysemy_json(sense_items: list[dict[str, str]]) -> str:
+    first = sense_items[0]
+    payload = {
+        "meaning": first["meaning"],
+        "value": first["meaning"],
+        "example": first["example"],
+        "sense_items": sense_items,
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def parse_labeled_text_blocks(path: str) -> dict[str, dict[str, Any]]:
@@ -397,49 +526,201 @@ def collect_candidates_from_raw(passages: list[dict[str, Any]]) -> list[dict[str
     return rows
 
 
-def build_candidates_auto() -> tuple[list[dict[str, Any]], str]:
-    if detect_distilled_file(DISTILLED_CSV_PATH):
-        all_candidates = load_candidates_from_existing_csv(DISTILLED_CSV_PATH)
-        keep_words = load_non_none_words(DISTILLED_CSV_PATH)
-        candidates = [x for x in all_candidates if _clean_text(x.get("word")).lower() in keep_words]
-        return candidates, "distilled_csv_non_none"
-
+def build_candidates_from_raw() -> list[dict[str, Any]]:
     manifest_items = load_manifest(MANIFEST_PATH)
     text_blocks = parse_labeled_text_blocks(ALL_TEXT_PATH)
     passages = build_passages(manifest_items, text_blocks)
-    candidates = collect_candidates_from_raw(passages)
-    return candidates, "raw_articles"
+    return collect_candidates_from_raw(passages)
+
+
+def process_batch(
+    batch: list[dict[str, Any]],
+    pbar: Any,
+    client: Any,
+    model_name: str,
+    max_retries: int,
+    max_output_tokens: int,
+    output_csv: str,
+) -> None:
+    lines: list[str] = []
+    for item in batch:
+        ctxs: list[str] = item.get("contexts", [])
+        if not isinstance(ctxs, list):
+            ctxs = []
+        lines.append(
+            f"Word: {item['word']}\n"
+            "Contexts:\n"
+            + "\n".join([f"[{i+1}] {c}" for i, c in enumerate(ctxs)])
+        )
+
+    user_content = (
+        "Find context-true polysemy from these words.\n"
+        "Return ONLY words that are true '熟词生义' in given contexts.\n\n"
+        + "\n\n---\n\n".join(lines)
+    )
+    results = call_api(
+        client=client,
+        model_name=model_name,
+        content=user_content,
+        max_retries=max_retries,
+        max_output_tokens=max_output_tokens,
+    )
+    result_map: dict[str, dict[str, Any]] = {}
+    for result in results:
+        word = _clean_text(result.get("word")).lower()
+        if word:
+            result_map[word] = result
+
+    out_rows: list[dict[str, Any]] = []
+    for item in batch:
+        word = _clean_text(item.get("word")).lower()
+        contexts: list[str] = item.get("contexts", [])
+        sources: list[str] = item.get("sources", [])
+        context_sources: list[str] = item.get("context_sources", [])
+        if not isinstance(contexts, list):
+            contexts = []
+        if not isinstance(sources, list):
+            sources = []
+        if not isinstance(context_sources, list):
+            context_sources = []
+
+        result = result_map.get(word, {})
+        sense_items = _extract_sense_items(result, contexts, context_sources) if result else []
+        has_gem = len(sense_items) > 0
+        polysemy_data = _build_polysemy_json(sense_items) if has_gem else "None"
+
+        out_rows.append(
+            {
+                "word": item["word"],
+                "frequency": int(item.get("frequency", 0)),
+                "source_count": int(item.get("source_count", 0)),
+                "sources": json.dumps(sources, ensure_ascii=False),
+                "contexts": json.dumps(contexts, ensure_ascii=False),
+                "has_gem": has_gem,
+                "polysemy_data": polysemy_data,
+            }
+        )
+
+    write_rows(output_csv, out_rows)
+    pbar.update(len(batch))
+
+
+def run_multithread(
+    items: list[dict[str, Any]],
+    clients: list[Any],
+    model_name: str,
+    output_csv: str,
+) -> None:
+    batches = [items[i : i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+    with tqdm(total=len(items), desc="句中生义一遍式蒸馏[多线程]") as pbar:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = []
+            for i, batch in enumerate(batches):
+                futures.append(
+                    executor.submit(
+                        process_batch,
+                        batch,
+                        pbar,
+                        clients[i % len(clients)],
+                        model_name,
+                        MAX_RETRIES,
+                        MAX_OUTPUT_TOKENS,
+                        output_csv,
+                    )
+                )
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    pass
+
+
+def run_singlethread(
+    items: list[dict[str, Any]],
+    client: Any,
+    model_name: str,
+    output_csv: str,
+) -> None:
+    batches = [items[i : i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+    with tqdm(total=len(items), desc="句中生义一遍式蒸馏[单线程]") as pbar:
+        for batch in batches:
+            try:
+                process_batch(
+                    batch=batch,
+                    pbar=pbar,
+                    client=client,
+                    model_name=model_name,
+                    max_retries=MAX_RETRIES,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    output_csv=output_csv,
+                )
+            except Exception:
+                pbar.update(len(batch))
+
+
+def run_distillation(candidates: list[dict[str, Any]], output_csv: str) -> None:
+    if OpenAI is None:
+        raise RuntimeError("缺少 openai 依赖，请先安装: pip install openai")
+    if MODEL_CONFIG_KEY not in MODEL_CONFIGS:
+        raise ValueError(f"未知 MODEL_CONFIG_KEY: {MODEL_CONFIG_KEY}")
+
+    config = MODEL_CONFIGS[MODEL_CONFIG_KEY]
+    done_words = read_processed_words(output_csv)
+    to_process = [x for x in candidates if _clean_text(x.get("word")).lower() not in done_words]
+
+    print(f"🧠 候选词数: {len(candidates)}")
+    print(f"🔄 已处理词数: {len(done_words)}")
+    print(f"🆕 本轮待处理: {len(to_process)}")
+    if not to_process:
+        print("🎉 没有需要处理的新词。")
+        return
+
+    clients = [OpenAI(api_key=k, base_url=config["base_url"]) for k in config["api_keys"]]
+    if FORCE_SINGLE_THREAD_ONLY or not ENABLE_MULTI_THREAD:
+        run_singlethread(
+            items=to_process,
+            client=clients[0],
+            model_name=config["model"],
+            output_csv=output_csv,
+        )
+        return
+
+    try:
+        run_multithread(
+            items=to_process,
+            clients=clients,
+            model_name=config["model"],
+            output_csv=output_csv,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if not FALLBACK_TO_SINGLE_THREAD:
+            raise
+        print(f"⚠️ 多线程异常，回退单线程: {exc}")
+        run_singlethread(
+            items=to_process,
+            client=clients[0],
+            model_name=config["model"],
+            output_csv=output_csv,
+        )
 
 
 def main() -> None:
     print("\n" + "=" * 64)
-    print("   IELTS 熟词生义重蒸馏器（自动模式）")
+    print("   IELTS 熟词生义一遍式蒸馏器（无中间产物）")
     print("=" * 64)
 
-    candidates, mode = build_candidates_auto()
+    candidates = build_candidates_from_raw()
     if TOP_N > 0:
         candidates = candidates[:TOP_N]
     if not candidates:
-        print("❌ 没有候选词可重蒸馏。")
+        print("❌ 没有候选词可蒸馏。")
         return
 
-    if mode == "distilled_csv_non_none":
-        print("📌 检测到已蒸馏 CSV：仅重蒸馏 polysemy_data != None 的词")
-        print(f"📥 输入: {DISTILLED_CSV_PATH}")
-    else:
-        print("📌 未检测到可用已蒸馏 CSV：回退为纯原文抽词重蒸馏")
-        print(f"📥 输入: {MANIFEST_PATH} + {ALL_TEXT_PATH}")
-
+    print("📌 使用 redistill 严格提示词，一遍输出最终结果")
+    print(f"📥 输入: {MANIFEST_PATH} + {ALL_TEXT_PATH}")
+    print(f"🧠 原文候选词数: {len(candidates)}")
     print(f"📤 输出: {OUTPUT_CSV_PATH}")
-    run_redistillation(
-        candidates=candidates,
-        output_csv=OUTPUT_CSV_PATH,
-        model_config_key=MODEL_CONFIG_KEY,
-        batch_size=BATCH_SIZE,
-        max_workers=MAX_WORKERS,
-        max_retries=MAX_RETRIES,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-    )
+    run_distillation(candidates=candidates, output_csv=OUTPUT_CSV_PATH)
     print(f"\n✅ 完成: {OUTPUT_CSV_PATH}")
 
 

@@ -30,8 +30,8 @@ MODEL_CONFIGS = {
 }
 
 # --- 全局设定 ---
-INPUT_FILE = "../data/雅思词汇大纲.csv"
-OUTPUT_FILE = "../data/IELTS_Vocabulary.csv"
+INPUT_FILE = "../data/csv/CET4.csv"
+OUTPUT_FILE = "../data/CET4_distilled.csv"
 BATCH_SIZE = 15
 MAX_WORKERS = 20 # 增加线程数以充分利用多 Key
 MAX_RETRIES = 3
