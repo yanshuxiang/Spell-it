@@ -19,6 +19,8 @@
 #include <QUuid>
 #include <QtGlobal>
 
+#include <algorithm>
+
 namespace {
 constexpr const char *kDateTimeFormat = "yyyy-MM-dd HH:mm:ss";
 constexpr const char *kTrainingTypeSpelling = "spelling";
@@ -2891,53 +2893,92 @@ QVector<DailyWordSummary> DatabaseManager::fetchDailyWordSummaries(const QDate &
     }
     const QString type = trainingType.trimmed().toLower();
     const bool allTypes = type.isEmpty() || type == QStringLiteral("all");
-    if (!allTypes && !isValidTrainingType(type)) {
+    const bool phraseOnly = type == QString::fromLatin1(kTrainingTypePhraseCluster);
+    if (!allTypes && !phraseOnly && !isValidTrainingType(type)) {
         return summaries;
     }
 
-    QSqlQuery query(database());
-    QString sql = QStringLiteral(
-        "SELECT e.word_id, w.word, "
-        "       GROUP_CONCAT(DISTINCT e.training_type) AS training_types, "
-        "       COUNT(*) AS attempts, "
-        "       (SELECT ee.result FROM learning_events ee "
-        "        WHERE ee.word_id = e.word_id AND ee.event_date = e.event_date");
-    if (!allTypes) {
-        sql += QStringLiteral(" AND ee.training_type = :type");
-    }
-    sql += QStringLiteral(
-        "        ORDER BY ee.event_time DESC, ee.id DESC LIMIT 1) AS last_result, "
-        "       MAX(e.event_time) AS last_time "
-        "FROM learning_events e "
-        "JOIN words w ON w.id = e.word_id "
-        "WHERE e.event_date = :date");
-    if (!allTypes) {
-        sql += QStringLiteral(" AND e.training_type = :type");
-    }
-    sql += QStringLiteral(
-        " GROUP BY e.word_id, w.word "
-        "ORDER BY MAX(e.event_time) DESC");
+    if (!phraseOnly) {
+        QSqlQuery query(database());
+        QString sql = QStringLiteral(
+            "SELECT e.word_id, w.word, "
+            "       GROUP_CONCAT(DISTINCT e.training_type) AS training_types, "
+            "       COUNT(*) AS attempts, "
+            "       (SELECT ee.result FROM learning_events ee "
+            "        WHERE ee.word_id = e.word_id AND ee.event_date = e.event_date");
+        if (!allTypes) {
+            sql += QStringLiteral(" AND ee.training_type = :type");
+        }
+        sql += QStringLiteral(
+            "        ORDER BY ee.event_time DESC, ee.id DESC LIMIT 1) AS last_result, "
+            "       MAX(e.event_time) AS last_time "
+            "FROM learning_events e "
+            "JOIN words w ON w.id = e.word_id "
+            "WHERE e.event_date = :date");
+        if (!allTypes) {
+            sql += QStringLiteral(" AND e.training_type = :type");
+        }
+        sql += QStringLiteral(
+            " GROUP BY e.word_id, w.word "
+            "ORDER BY MAX(e.event_time) DESC");
 
-    query.prepare(sql);
-    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
-    if (!allTypes) {
-        query.bindValue(QStringLiteral(":type"), type);
-    }
-    if (!query.exec()) {
-        lastError_ = query.lastError().text();
-        return summaries;
+        query.prepare(sql);
+        query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+        if (!allTypes) {
+            query.bindValue(QStringLiteral(":type"), type);
+        }
+        if (!query.exec()) {
+            lastError_ = query.lastError().text();
+            return summaries;
+        }
+
+        while (query.next()) {
+            DailyWordSummary summary;
+            summary.wordId = query.value(0).toInt();
+            summary.word = query.value(1).toString();
+            summary.trainingType = query.value(2).toString();
+            summary.attempts = query.value(3).toInt();
+            summary.lastResult = resultFromCode(query.value(4).toString());
+            summary.lastTime = parseLocalDateTime(query.value(5).toString());
+            summaries.push_back(summary);
+        }
     }
 
-    while (query.next()) {
-        DailyWordSummary summary;
-        summary.wordId = query.value(0).toInt();
-        summary.word = query.value(1).toString();
-        summary.trainingType = query.value(2).toString();
-        summary.attempts = query.value(3).toInt();
-        summary.lastResult = resultFromCode(query.value(4).toString());
-        summary.lastTime = parseLocalDateTime(query.value(5).toString());
-        summaries.push_back(summary);
+    if (allTypes || phraseOnly) {
+        QSqlQuery phraseQuery(database());
+        phraseQuery.prepare(QStringLiteral(
+            "SELECT e.phrase_id, p.cluster_zh, COUNT(*) AS attempts, "
+            "       (SELECT ee.result FROM phrase_learning_events ee "
+            "        WHERE ee.phrase_id = e.phrase_id AND ee.event_date = e.event_date "
+            "        ORDER BY ee.event_time DESC, ee.id DESC LIMIT 1) AS last_result, "
+            "       MAX(e.event_time) AS last_time "
+            "FROM phrase_learning_events e "
+            "JOIN phrase_items p ON p.id = e.phrase_id "
+            "WHERE e.event_date = :date "
+            "GROUP BY e.phrase_id, p.cluster_zh "
+            "ORDER BY MAX(e.event_time) DESC"));
+        phraseQuery.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+        if (!phraseQuery.exec()) {
+            lastError_ = phraseQuery.lastError().text();
+            return summaries;
+        }
+        while (phraseQuery.next()) {
+            DailyWordSummary summary;
+            summary.wordId = -phraseQuery.value(0).toInt();
+            summary.word = phraseQuery.value(1).toString();
+            summary.trainingType = QString::fromLatin1(kTrainingTypePhraseCluster);
+            summary.attempts = phraseQuery.value(2).toInt();
+            const QString phraseResult = phraseQuery.value(3).toString().trimmed().toLower();
+            summary.lastResult = phraseResult == QStringLiteral("correct")
+                                     ? SpellingResult::Mastered
+                                     : SpellingResult::Unfamiliar;
+            summary.lastTime = parseLocalDateTime(phraseQuery.value(4).toString());
+            summaries.push_back(summary);
+        }
     }
+    std::sort(summaries.begin(), summaries.end(), [](const DailyWordSummary &a, const DailyWordSummary &b) {
+        return a.lastTime > b.lastTime;
+    });
     return summaries;
 }
 
@@ -2947,14 +2988,22 @@ int DatabaseManager::fetchDailyEventCount(const QDate &date, const QString &trai
     }
     const QString type = trainingType.trimmed().toLower();
     const bool allTypes = type.isEmpty() || type == QStringLiteral("all");
-    if (!allTypes && !isValidTrainingType(type)) {
+    const bool phraseOnly = type == QString::fromLatin1(kTrainingTypePhraseCluster);
+    if (!allTypes && !phraseOnly && !isValidTrainingType(type)) {
         return 0;
     }
 
     QSqlQuery query(database());
     if (allTypes) {
         query.prepare(QStringLiteral(
-            "SELECT COUNT(*) FROM learning_events WHERE event_date = ?"));
+            "SELECT "
+            "  (SELECT COUNT(*) FROM learning_events WHERE event_date = ?) + "
+            "  (SELECT COUNT(*) FROM phrase_learning_events WHERE event_date = ?)"));
+        query.bindValue(0, date.toString(Qt::ISODate));
+        query.bindValue(1, date.toString(Qt::ISODate));
+    } else if (phraseOnly) {
+        query.prepare(QStringLiteral(
+            "SELECT COUNT(*) FROM phrase_learning_events WHERE event_date = ?"));
         query.bindValue(0, date.toString(Qt::ISODate));
     } else {
         query.prepare(QStringLiteral(
@@ -3086,7 +3135,12 @@ QDate DatabaseManager::firstLearningEventDate() const {
         return QDate();
     }
     QSqlQuery query(database());
-    if (!query.exec(QStringLiteral("SELECT MIN(event_date) FROM learning_events")) || !query.next()) {
+    if (!query.exec(QStringLiteral(
+            "SELECT MIN(event_date) FROM ("
+            "  SELECT event_date FROM learning_events "
+            "  UNION ALL "
+            "  SELECT event_date FROM phrase_learning_events"
+            ")")) || !query.next()) {
         return QDate();
     }
     return QDate::fromString(query.value(0).toString(), Qt::ISODate);

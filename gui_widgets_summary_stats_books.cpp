@@ -1768,11 +1768,11 @@ CalendarPageWidget::CalendarPageWidget(QWidget *parent)
         "  border: 1px solid #cbd5e1;"
         "  border-right: none;"
         "  padding: 8px 0px;"
-        "  min-width: 96px;"
+        "  min-width: 82px;"
         "  margin: 0px;"
         "  background: #f3f6fa;"
         "  color: #64748b;"
-        "  font-size: 16px;"
+        "  font-size: 15px;"
         "  font-weight: 600;"
         "}"
         "QTabBar::tab:first {"
@@ -1799,17 +1799,19 @@ CalendarPageWidget::CalendarPageWidget(QWidget *parent)
     const int tabSpelling = trainingFilterTabs_->addTab(QStringLiteral("拼写"));
     const int tabCountability = trainingFilterTabs_->addTab(QStringLiteral("可数性"));
     const int tabPolysemy = trainingFilterTabs_->addTab(QStringLiteral("熟词生义"));
+    const int tabPhrase = trainingFilterTabs_->addTab(QStringLiteral("词群"));
     trainingFilterTabs_->setTabData(tabAll, QStringLiteral("all"));
     trainingFilterTabs_->setTabData(tabSpelling, QStringLiteral("spelling"));
     trainingFilterTabs_->setTabData(tabCountability, QStringLiteral("countability"));
     trainingFilterTabs_->setTabData(tabPolysemy, QStringLiteral("polysemy"));
+    trainingFilterTabs_->setTabData(tabPhrase, QStringLiteral("phrase_cluster"));
     trainingFilterTabs_->setCurrentIndex(tabAll);
     metaTopRow->addWidget(trainingFilterTabs_, 1);
 
     dailyList_ = new QListWidget(drawerFrame_);
     dailyList_->setStyleSheet(QStringLiteral(
         "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; }"
-        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; }"
+        "QListWidget::item { padding: 0px; border-bottom: 1px solid #f1f5f9; }"
         "QListWidget::item:selected { background: #eef2ff; color: #1f2937; }"));
     emptyLabel_ = new QLabel(QStringLiteral("该日暂无单词明细"), drawerFrame_);
     emptyLabel_->setAlignment(Qt::AlignCenter);
@@ -1881,32 +1883,42 @@ void CalendarPageWidget::setDailySummaries(const QDate &date,
         case SpellingResult::Unfamiliar: default: return QStringLiteral("不熟悉");
         }
     };
-    auto trainingTypeText = [](const QString &trainingType) -> QString {
-        const QString type = trainingType.trimmed().toLower();
-        if (type == QStringLiteral("spelling")) {
-            return QStringLiteral("拼写");
-        }
-        if (type == QStringLiteral("countability")) {
-            return QStringLiteral("可数性");
-        }
-        if (type == QStringLiteral("polysemy")) {
-            return QStringLiteral("熟词生义");
-        }
-        return trainingType;
-    };
-
     dailyList_->clear();
     for (const DailyWordSummary &summary : summaries) {
-        QStringList parts;
-        parts << summary.word
-              << QStringLiteral("次数 %1").arg(summary.attempts)
-              << QStringLiteral("类型 %1").arg(trainingTypeText(summary.trainingType))
-              << QStringLiteral("最后 %1").arg(resultText(summary.lastResult));
-        if (summary.lastTime.isValid()) {
-            parts << summary.lastTime.toString(QStringLiteral("HH:mm"));
-        }
-        auto *item = new QListWidgetItem(parts.join(QStringLiteral("  ·  ")), dailyList_);
+        const bool isPhrase = summary.trainingType.trimmed().toLower() == QStringLiteral("phrase_cluster");
+        const QString statusText = isPhrase
+                                       ? (summary.lastResult == SpellingResult::Mastered
+                                              ? QStringLiteral("正确")
+                                              : QStringLiteral("错误"))
+                                       : resultText(summary.lastResult);
+
+        auto *item = new QListWidgetItem(dailyList_);
         item->setData(Qt::UserRole, summary.wordId);
+        item->setSizeHint(QSize(0, 58));
+
+        auto *row = new QWidget(dailyList_);
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(24, 0, 24, 0);
+        rowLayout->setSpacing(16);
+
+        auto *wordLabel = new QLabel(summary.word, row);
+        wordLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+        wordLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        wordLabel->setStyleSheet(QStringLiteral(
+            "font-size: 19px; font-weight: 700; color: #0f172a;"));
+
+        auto *statusLabel = new QLabel(statusText, row);
+        statusLabel->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
+        statusLabel->setMinimumWidth(84);
+        statusLabel->setStyleSheet(summary.lastResult == SpellingResult::Mastered
+                                       ? QStringLiteral("font-size: 17px; font-weight: 700; color: #16a34a;")
+                                       : summary.lastResult == SpellingResult::Blurry
+                                             ? QStringLiteral("font-size: 17px; font-weight: 700; color: #d97706;")
+                                             : QStringLiteral("font-size: 17px; font-weight: 700; color: #ef4444;"));
+
+        rowLayout->addWidget(wordLabel);
+        rowLayout->addWidget(statusLabel);
+        dailyList_->setItemWidget(item, row);
     }
 
     const bool hasData = !summaries.isEmpty();
@@ -2094,6 +2106,9 @@ void WordDetailPageWidget::renderDetailHtml() {
         }
         if (type == QStringLiteral("polysemy")) {
             return QStringLiteral("熟词生义");
+        }
+        if (type == QStringLiteral("phrase_cluster")) {
+            return QStringLiteral("词群");
         }
         return trainingType;
     };
